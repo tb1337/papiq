@@ -4,19 +4,23 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from sqlalchemy import CursorResult, Executable, Result
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from papiq.adapters.outbound.sql.database import Database
-from papiq.core.domain.errors import ConflictError
+from papiq.core.domain.errors import ConcurrencyError, ConflictError
+
+# Postgres: deadlock_detected, serialization_failure.
+_CONCURRENCY_SQLSTATES = {"40P01", "40001"}
 
 
 class Transaction:
     """One connection, one transaction. Reads run at once; the first write starts the write
     transaction (see `Database.begin_write`).
 
-    A write that breaks a constraint raises ConflictError and leaves the transaction failed:
-    on Postgres it is aborted anyway, so on both databases only rollback remains.
+    A write that fails leaves the transaction failed: on Postgres it is aborted anyway, so on
+    both databases only rollback remains. A broken constraint raises ConflictError; a deadlock
+    or serialization failure (Postgres) raises ConcurrencyError.
     """
 
     def __init__(self, database: Database) -> None:
@@ -45,9 +49,13 @@ class Transaction:
             self._writing = True
         try:
             return await connection.execute(statement, parameters)
-        except IntegrityError as error:
+        except DBAPIError as error:
             self._failed = True
-            raise ConflictError(f"conflicting data: {error.orig}") from error
+            if isinstance(error, IntegrityError):
+                raise ConflictError(f"conflicting data: {error.orig}") from error
+            if getattr(error.orig, "sqlstate", None) in _CONCURRENCY_SQLSTATES:
+                raise ConcurrencyError(f"concurrent transaction: {error.orig}") from error
+            raise
 
     async def commit(self) -> None:
         connection = self._usable()

@@ -10,7 +10,9 @@ from sqlalchemy import select
 from papiq.adapters.outbound.sql import Database
 from papiq.adapters.outbound.sql import tables as t
 from papiq.adapters.outbound.sql.unit_of_work import SqlOutbox
+from papiq.core.domain.errors import ConcurrencyError
 from papiq.core.domain.events import DomainEvent
+from papiq.core.domain.users import User
 from papiq.core.ports import EventBus, UnitOfWorkFactory
 from tests import builders
 from tests.contracts.event_bus import EventBusContract, Recorder, publish, received
@@ -77,7 +79,8 @@ async def test_an_event_written_first_but_committed_last_is_not_skipped(
             await uow.commit()
 
     slow_task = asyncio.create_task(slow())
-    await flushed.wait()
+    async with asyncio.timeout(10):
+        await flushed.wait()
     fast_task = asyncio.create_task(publish(uow_factory, late))
     await asyncio.wait([fast_task], timeout=0.3)
     fast_waited = not fast_task.done()
@@ -96,8 +99,9 @@ async def test_an_event_written_first_but_committed_last_is_not_skipped(
 async def test_concurrent_publishers_lose_no_events(
     uow_factory: UnitOfWorkFactory, event_bus_factory: Callable[[], EventBus]
 ) -> None:
-    """Many transactions write state and events and commit in random order while a dispatcher
-    runs; every event reaches the subscriber exactly once."""
+    """End to end under load: many transactions write state and events and commit in random
+    order while a dispatcher runs; every event reaches the subscriber exactly once. (The
+    out-of-order commit itself is produced deterministically by the test above.)"""
     bus = event_bus_factory()
     delivered: list[DomainEvent] = []
 
@@ -132,3 +136,30 @@ async def test_concurrent_publishers_lose_no_events(
     while await bus.dispatch():
         pass
     assert sorted(event.id for event in delivered) == sorted(event.id for event in published)
+
+
+async def test_a_deadlock_is_a_concurrency_error(uow_factory: UnitOfWorkFactory) -> None:
+    """Two units update the same two rows in opposite order; Postgres aborts one of them."""
+    first, second = builders.user(), builders.user()
+    async with uow_factory() as uow:
+        await uow.users.add(first)
+        await uow.users.add(second)
+        await uow.commit()
+    both_updated_one = asyncio.Barrier(2)
+
+    async def rename_both(one: User, other: User) -> None:
+        async with uow_factory() as uow:
+            a, b = await uow.users.get(one.id), await uow.users.get(other.id)
+            a.username += "-a"
+            await uow.users.update(a)
+            async with asyncio.timeout(10):
+                await both_updated_one.wait()
+            b.username += "-b"
+            await uow.users.update(b)
+            await uow.commit()
+
+    results = await asyncio.gather(
+        rename_both(first, second), rename_both(second, first), return_exceptions=True
+    )
+    assert [type(result) for result in results].count(ConcurrencyError) == 1
+    assert results.count(None) == 1

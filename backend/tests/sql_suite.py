@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
-from sqlalchemy import Connection, inspect, select
+from sqlalchemy import Connection, insert, inspect, select
 
 from papiq.adapters.outbound.memory import ManualClock, MemoryObjectStore
 from papiq.adapters.outbound.sql import Database, migrate
@@ -22,6 +22,7 @@ from papiq.core.domain.attributes import AttributeDefinition, AttributeType, Mon
 from papiq.core.domain.documents import Document, DocumentChanges
 from papiq.core.domain.errors import ConflictError
 from papiq.core.domain.events import DomainEvent
+from papiq.core.domain.ids import new_id
 from papiq.core.domain.jobs import Job
 from papiq.core.domain.pipeline import PIPELINE
 from papiq.core.domain.users import User
@@ -137,7 +138,8 @@ class SqlAdapterSuite:
             document = builders.document(owner, drawer, content="same")
             async with uow_factory() as uow:
                 assert await uow.documents.find_by_sha256(owner.id, document.sha256) is None
-                await both_checked.wait()
+                async with asyncio.timeout(10):
+                    await both_checked.wait()
                 await uow.documents.add(document)
                 await uow.commit()
             return document
@@ -202,6 +204,35 @@ class SqlAdapterSuite:
         async with uow_factory() as uow:
             assert await uow.jobs.claim(now=NOW, lease=LEASE, kinds=["index"]) is not None
 
+    async def test_events_of_unknown_type_are_skipped(
+        self,
+        uow_factory: UnitOfWorkFactory,
+        event_bus_factory: Callable[[], EventBus],
+        database: Database,
+    ) -> None:
+        """An event type written by a newer version is skipped, not retried forever."""
+        bus = event_bus_factory()
+        recorder = Recorder()
+        bus.subscribe("test", recorder)
+        await bus.dispatch()  # creates the subscription
+        async with database.writing() as connection:
+            await connection.execute(
+                insert(t.outbox).values(
+                    event_id=new_id(),
+                    type="document.from_the_future",
+                    occurred_at=NOW,
+                    payload={},
+                    recorded_at=datetime.now(UTC),
+                )
+            )
+        known = received(1)
+        await publish(uow_factory, known)
+        assert await bus.dispatch() == 1
+        assert await bus.dispatch() == 0
+        assert recorder.received == [known]
+        async with database.reading() as connection:
+            assert (await connection.execute(select(t.event_retries))).all() == []
+
     async def test_failed_deliveries_are_kept_per_subscriber(
         self,
         uow_factory: UnitOfWorkFactory,
@@ -221,6 +252,9 @@ class SqlAdapterSuite:
 
 
 class MigrationSuite:
+    """Needs the fixtures `empty_database` and `model_database`: two databases without
+    schema."""
+
     async def test_upgrade_creates_the_schema_on_an_empty_database(
         self, empty_database: Database
     ) -> None:
@@ -230,16 +264,68 @@ class MigrationSuite:
             names = await connection.run_sync(lambda sync: inspect(sync).get_table_names())
         assert set(names) == {*t.metadata.tables, "alembic_version"}
 
-    async def test_migrations_match_the_table_definitions(self, empty_database: Database) -> None:
+    async def test_migrations_match_the_table_definitions(
+        self, empty_database: Database, model_database: Database
+    ) -> None:
+        """Alembic's comparison, plus the DDL as the database reports it: Alembic does not
+        compare partial-index predicates or SQLite's AUTOINCREMENT."""
         await migrate(empty_database)
         async with empty_database.reading() as connection:
             differences = await connection.run_sync(_compare)
+            migrated = await connection.run_sync(_schema)
         assert differences == []
+        async with model_database.writing() as connection:
+            await connection.run_sync(t.metadata.create_all)
+        async with model_database.reading() as connection:
+            modelled = await connection.run_sync(_schema)
+        assert migrated == modelled
 
 
 def _compare(connection: Connection) -> list[Any]:
     context = MigrationContext.configure(connection, opts={"compare_type": True})
     return list(compare_metadata(context, t.metadata))
+
+
+def _schema(connection: Connection) -> set[tuple[Any, ...]]:
+    """Tables, columns, constraints and indexes as the database describes them."""
+    if connection.dialect.name == "sqlite":
+        query = (
+            "SELECT type, name, sql FROM sqlite_master "
+            "WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE '%alembic_version%'"
+        )
+        return {
+            (kind, name, _table_clauses(sql) if kind == "table" else " ".join(sql.split()))
+            for kind, name, sql in connection.exec_driver_sql(query)
+        }
+    queries = [
+        "SELECT 'index', indexname, indexdef FROM pg_indexes WHERE schemaname = 'public'",
+        "SELECT 'constraint', conname, pg_get_constraintdef(oid) FROM pg_constraint "
+        "WHERE connamespace = 'public'::regnamespace",
+        "SELECT 'column', table_name || '.' || column_name, "
+        "concat_ws(' ', data_type, numeric_precision, numeric_scale, character_maximum_length, "
+        "is_nullable, column_default) FROM information_schema.columns "
+        "WHERE table_schema = 'public'",
+    ]
+    return {
+        tuple(row)
+        for query in queries
+        for row in connection.exec_driver_sql(query)
+        if "alembic_version" not in row[1]
+    }
+
+
+def _table_clauses(sql: str) -> tuple[str, frozenset[str]]:
+    """CREATE TABLE as its head and its clauses (split at top-level commas), order ignored."""
+    head, body = " ".join(sql.split()).split("(", 1)
+    clauses, depth, current = [], 0, ""
+    for char in body.rsplit(")", 1)[0]:
+        depth += {"(": 1, ")": -1}.get(char, 0)
+        if char == "," and depth == 0:
+            clauses.append(current.strip())
+            current = ""
+        else:
+            current += char
+    return head.strip(), frozenset([*clauses, current.strip()])
 
 
 async def _seed_user(uow_factory: UnitOfWorkFactory, user: User) -> None:

@@ -40,7 +40,11 @@ class UtcDateTime(TypeDecorator[datetime]):
 
 class ExactDecimal(TypeDecorator[Decimal]):
     """Exact decimals with their scale. Postgres: unconstrained `numeric`; SQLite: text, because
-    SQLite's numeric affinity would turn them into binary floating point."""
+    SQLite's numeric affinity would turn them into binary floating point.
+
+    Values in exponent notation keep their value but not their notation on Postgres
+    (`Decimal("1E+2")` reads back as `Decimal("100")`, which compares equal).
+    """
 
     impl = Numeric
     cache_ok = True

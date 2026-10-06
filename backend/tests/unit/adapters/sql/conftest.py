@@ -52,3 +52,10 @@ async def empty_database(tmp_path: Path) -> AsyncIterator[Database]:
     database = Database.sqlite(tmp_path / "empty.db")
     yield database
     await database.dispose()
+
+
+@pytest.fixture
+async def model_database(tmp_path: Path) -> AsyncIterator[Database]:
+    database = Database.sqlite(tmp_path / "model.db")
+    yield database
+    await database.dispose()

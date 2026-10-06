@@ -57,11 +57,17 @@ def postgres_settings(settings: Settings) -> Settings:
 
 
 @pytest.fixture
-def new_database_name(postgres_settings: Settings) -> Iterator[str]:
-    """The name of a database that does not exist yet; dropped after the test."""
-    name = f"{postgres_settings.db_name}_test_{secrets.token_hex(4)}"
-    yield name
-    asyncio.run(drop_database(postgres_settings, name))
+def new_database_names(postgres_settings: Settings) -> Iterator[Callable[[], str]]:
+    """Names of databases that do not exist yet; they are dropped after the test."""
+    names: list[str] = []
+
+    def new_name() -> str:
+        names.append(f"{postgres_settings.db_name}_test_{secrets.token_hex(4)}")
+        return names[-1]
+
+    yield new_name
+    for name in names:
+        asyncio.run(drop_database(postgres_settings, name))
 
 
 @pytest.fixture(scope="session")
@@ -103,9 +109,21 @@ def event_bus_factory(database: Database) -> Callable[[], EventBus]:
 
 @pytest.fixture
 async def empty_database(
-    postgres_settings: Settings, new_database_name: str
+    postgres_settings: Settings, new_database_names: Callable[[], str]
 ) -> AsyncIterator[Database]:
-    await create_database(postgres_settings, new_database_name)
-    database = postgres(postgres_settings, new_database_name)
+    name = new_database_names()
+    await create_database(postgres_settings, name)
+    database = postgres(postgres_settings, name)
+    yield database
+    await database.dispose()
+
+
+@pytest.fixture
+async def model_database(
+    postgres_settings: Settings, new_database_names: Callable[[], str]
+) -> AsyncIterator[Database]:
+    name = new_database_names()
+    await create_database(postgres_settings, name)
+    database = postgres(postgres_settings, name)
     yield database
     await database.dispose()
