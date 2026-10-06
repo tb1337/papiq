@@ -1,1 +1,2 @@
-"""Entities and value objects: document, contact, document type, tag, attribute, drawer, lane."""
+"""Entities, value objects and domain rules: users, drawers, master data, attributes, documents,
+pipeline, lanes, events and permissions. Plain Python, no I/O."""
