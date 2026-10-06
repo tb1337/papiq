@@ -67,6 +67,22 @@ Migrations are one Alembic chain for both databases (batch mode on SQLite), in
 creates a missing SQLite file. A schema change needs both an edit of `tables.py` and a new
 revision; a test compares the migrated schema with the table definitions.
 
+## Object store
+
+`PAPIQ_STORAGE_TYPE` selects `adapters/outbound/filesystem` or `adapters/outbound/s3`; both pass
+the same contract suite. Keys are relative paths (`originals/<sha256>`, `documents/<id>/...`)
+checked by `core.ports.object_store.check_key`. `put`/`get` hold an object in memory and suit
+small objects; files of any size go through `upload`/`download`, which work on local files.
+
+- Filesystem: one file per key below `PAPIQ_STORAGE_PATH`. Writes go to a hidden temporary file
+  next to the target, are flushed to disk and renamed over it, so readers never see a partial
+  object.
+- S3 (aioboto3): files above 8 MiB are transferred in parts. Checksums are only sent where S3
+  requires them, for compatibility with servers such as Garage. Path-style addressing is the
+  default (`PAPIQ_S3_PATH_STYLE`).
+
+`Container.aclose()` closes the database engine and the S3 client.
+
 ## Configuration
 
 Environment variables with the prefix `PAPIQ_` only; there is no configuration file. Invalid or

@@ -1,13 +1,17 @@
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from papiq.adapters.outbound.filesystem import FilesystemObjectStore
 from papiq.adapters.outbound.memory import ManualClock
+from papiq.adapters.outbound.s3 import S3ObjectStore
 from papiq.adapters.outbound.sql import SqlEventBus, SqlUnitOfWorkFactory
 from papiq.adapters.outbound.system import SystemClock
 from papiq.composition import container
 from papiq.composition.container import (
+    Closer,
     Persistence,
     build_container,
     build_memory_container,
@@ -26,14 +30,19 @@ def settings(**values: Any) -> Settings:
     return Settings(**values)
 
 
+async def _no_op() -> None:
+    pass
+
+
 def fake_persistence(_: Settings) -> Persistence:
-    return Persistence(unit_of_work=object, event_bus=object())  # type: ignore[arg-type]
+    return Persistence(unit_of_work=object, event_bus=object(), close=_no_op)  # type: ignore[arg-type]
 
 
 def test_missing_adapter_is_reported_with_port_and_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setitem(container.PERSISTENCE, "sqlite", fake_persistence)
+    monkeypatch.delitem(container.OBJECT_STORES, "filesystem")
     with pytest.raises(AdapterNotAvailableError) as info:
         build_container(settings())
     assert str(info.value) == "object_store: adapter 'filesystem' is not implemented yet"
@@ -51,33 +60,58 @@ def test_the_database_type_selects_the_sql_adapter(tmp_path: Path) -> None:
     assert list(tmp_path.iterdir()) == []  # nothing is created before `migrate`
 
 
+def test_the_storage_type_selects_the_object_store(tmp_path: Path) -> None:
+    filesystem = container.OBJECT_STORES["filesystem"](settings(storage_path=tmp_path / "o"))
+    assert isinstance(filesystem, FilesystemObjectStore)
+    s3 = container.OBJECT_STORES["s3"](
+        settings(
+            storage_type="s3",
+            s3_endpoint_url="http://garage:3900",
+            s3_bucket="b",
+            s3_access_key_id="k",
+            s3_secret_access_key="s",
+        )
+    )
+    assert isinstance(s3, S3ObjectStore)
+    assert list(tmp_path.iterdir()) == []  # directories are created on the first write
+
+
 def test_each_port_is_checked_in_turn(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(container.PERSISTENCE, "sqlite", fake_persistence)
-    with pytest.raises(AdapterNotAvailableError, match="object_store: adapter 'filesystem'"):
+    with pytest.raises(AdapterNotAvailableError, match="ocr: adapter 'ocrmypdf'"):
+        build_container(settings())
+    monkeypatch.setitem(container.OCR_ENGINES, "ocrmypdf", lambda _: object())
+    with pytest.raises(AdapterNotAvailableError, match="parser: adapter 'docling'"):
         build_container(settings())
 
-    s3 = settings(
-        storage_type="s3",
-        s3_endpoint_url="http://garage:3900",
-        s3_bucket="b",
-        s3_access_key_id="k",
-        s3_secret_access_key="s",
+
+async def test_closing_runs_every_closer_in_reverse_order() -> None:
+    closed: list[str] = []
+
+    def closer(name: str, fail: bool = False) -> Closer:
+        async def close() -> None:
+            closed.append(name)
+            if fail:
+                raise RuntimeError(name)
+
+        return close
+
+    built = replace(
+        build_memory_container(),
+        closers=(closer("database"), closer("store", fail=True), closer("other")),
     )
-    with pytest.raises(AdapterNotAvailableError, match="object_store: adapter 's3'"):
-        build_container(s3)
+    with pytest.raises(ExceptionGroup) as info:
+        await built.aclose()
+    assert closed == ["other", "store", "database"]
+    assert [str(error) for error in info.value.exceptions] == ["store"]
 
 
 def test_optional_ports_are_only_selected_when_configured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setitem(container.PERSISTENCE, "sqlite", fake_persistence)
-    tables: list[dict[str, Any]] = [
-        container.OBJECT_STORES,
-        container.OCR_ENGINES,
-        container.PARSERS,
-        container.IDENTITY_PROVIDERS,
-    ]
-    names = ["filesystem", "ocrmypdf", "docling", "native"]
+    tables: list[dict[str, Any]] = [container.OCR_ENGINES, container.PARSERS]
+    names = ["ocrmypdf", "docling"]
     for table, name in zip(tables, names, strict=True):
         monkeypatch.setitem(table, name, lambda _: object())
 
@@ -85,6 +119,7 @@ def test_optional_ports_are_only_selected_when_configured(
     assert built.search_index is None
     assert built.language_model is None
     assert built.embeddings is None
+    assert built.identity is None  # until M4
 
     with pytest.raises(AdapterNotAvailableError, match="search_index: adapter 'meilisearch'"):
         build_container(settings(meilisearch_url="http://meilisearch:7700"))
