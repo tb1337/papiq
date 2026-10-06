@@ -26,5 +26,6 @@ data/
 # IDE: keep design documents in .idea, ignore JetBrains files
 .idea/*
 !.idea/*.md
+!.idea/prompts/
 .vscode/
 .DS_Store
