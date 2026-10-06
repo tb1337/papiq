@@ -48,6 +48,7 @@ markers = [
 # Hexagonal boundaries, checked with `lint-imports`.
 [tool.importlinter]
 root_package = "papiq"
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "Layers: composition -> adapters -> core"
@@ -71,3 +72,25 @@ name = "Domain model depends on nothing else in the core"
 type = "forbidden"
 source_modules = ["papiq.core.domain"]
 forbidden_modules = ["papiq.core.ports", "papiq.core.services"]
+
+[[tool.importlinter.contracts]]
+name = "Core is plain Python: no framework or client libraries"
+type = "forbidden"
+source_modules = ["papiq.core"]
+forbidden_modules = [
+    "alembic",
+    "authlib",
+    "boto3",
+    "botocore",
+    "docling",
+    "fastapi",
+    "httpx",
+    "meilisearch",
+    "ocrmypdf",
+    "pydantic",
+    "pydantic_settings",
+    "sqlalchemy",
+    "starlette",
+    "structlog",
+    "uvicorn",
+]
