@@ -141,6 +141,29 @@ class EventBusContract:
         await event_bus.dispatch(limit=2)
         assert delivered == [good]
 
+    async def test_events_that_keep_failing_do_not_starve_other_failures(
+        self, uow_factory: UnitOfWorkFactory, event_bus: EventBus
+    ) -> None:
+        poison = [received(1), received(2)]
+        flaky = received(3)
+        flaky_failures = 1
+        delivered: list[DomainEvent] = []
+
+        async def handler(event: DomainEvent) -> None:
+            nonlocal flaky_failures
+            if event in poison:
+                raise RuntimeError("poison")
+            if flaky_failures:
+                flaky_failures -= 1
+                raise RuntimeError("flaky")
+            delivered.append(event)
+
+        event_bus.subscribe("test", handler)
+        await publish(uow_factory, *poison, flaky)
+        for _ in range(5):
+            await event_bus.dispatch(limit=2)
+        assert delivered == [flaky]
+
     async def test_a_late_commit_is_not_skipped(
         self, uow_factory: UnitOfWorkFactory, event_bus: EventBus
     ) -> None:

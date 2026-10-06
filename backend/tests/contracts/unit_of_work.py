@@ -151,7 +151,8 @@ class UnitOfWorkContract:
         async def rename(name: str) -> str:
             async with uow_factory() as uow:
                 user = await uow.users.get(owner.id)
-                await both_read.wait()
+                async with asyncio.timeout(10):
+                    await both_read.wait()
                 user.username = name
                 await uow.users.update(user)
                 await asyncio.sleep(0)

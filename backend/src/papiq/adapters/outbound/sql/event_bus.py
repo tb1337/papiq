@@ -8,10 +8,17 @@ event that is committed later.
 A dispatch reads events, calls the handler outside of any transaction (handlers may open
 units of work themselves), then records the outcome in a short transaction. The position
 moves by compare-and-set: if another dispatcher moved it meanwhile, nothing is recorded and
-the events may be delivered twice, which at-least-once delivery allows.
+the events may be delivered twice, which at-least-once delivery allows. Failed events are
+retried fewest attempts first, so events that keep failing do not starve newer failures.
+
+Rows of an unknown event type (written by a newer version) cannot be turned into events; they
+are logged and skipped, as receivers ignore unknown types anyway.
 
 `subscribe` cannot reach the database, so it notes the time. The subscription row is created
-on the next dispatch, starting after the last event recorded before that time.
+on the next dispatch, starting after the last event recorded before that time. Both times
+come from the system clocks of the processes involved; with clock skew between hosts, a *new*
+subscription may start a little early (harmless) or late. Existing subscriptions resume by
+position and are not affected.
 """
 
 import asyncio
@@ -56,7 +63,7 @@ class SqlEventBus:
     async def dispatch(self, *, limit: int = 100) -> int:
         async with self._lock:
             delivered = 0
-            for name, subscriber in self._subscribers.items():
+            for name, subscriber in list(self._subscribers.items()):
                 delivered += await self._dispatch_to(name, subscriber, limit)
             return delivered
 
@@ -68,7 +75,7 @@ class SqlEventBus:
                     select(_outbox)
                     .join(_retries, _retries.c.seq == _outbox.c.seq)
                     .where(_retries.c.subscriber == name)
-                    .order_by(_outbox.c.seq)
+                    .order_by(_retries.c.attempts, _outbox.c.seq)
                     .limit(limit)
                 )
             ).all()
@@ -81,8 +88,11 @@ class SqlEventBus:
                 )
             ).all()
 
-        retried, retries_failed = await self._deliver(name, subscriber.handler, retries)
-        _, fresh_failed = await self._deliver(name, subscriber.handler, fresh)
+        retried, retries_failed, retries_delivered = await self._deliver(
+            name, subscriber.handler, retries
+        )
+        _, fresh_failed, fresh_delivered = await self._deliver(name, subscriber.handler, fresh)
+        delivered = retries_delivered + fresh_delivered
 
         async with self._db.writing() as connection:
             if fresh:
@@ -93,7 +103,7 @@ class SqlEventBus:
                 )
                 if moved.rowcount == 0:
                     log.warning("subscription moved by another dispatcher", extra={"name": name})
-                    return 0
+                    return delivered
                 if fresh_failed:
                     await connection.execute(
                         insert(_retries),
@@ -114,17 +124,28 @@ class SqlEventBus:
                     .where(_retries.c.subscriber == name, _retries.c.seq == seq)
                     .values(attempts=_retries.c.attempts + 1, last_error=error)
                 )
-        return len(retried) + len(fresh) - len(fresh_failed)
+        return delivered
 
     async def _deliver(
         self, name: str, handler: EventHandler, rows: Sequence[Row[Any]]
-    ) -> tuple[list[int], dict[int, str]]:
-        """Call the handler for each row; returns the delivered and the failed `seq`s."""
-        delivered: list[int] = []
+    ) -> tuple[list[int], dict[int, str], int]:
+        """Call the handler for each row. Returns the handled `seq`s (delivered or skipped),
+        the failed ones with their error, and the number of successful deliveries."""
+        handled: list[int] = []
         failed: dict[int, str] = {}
+        delivered = 0
         for row in rows:
             try:
-                await handler(events.decode(row.type, row.event_id, row.occurred_at, row.payload))
+                event = events.decode(row.type, row.event_id, row.occurred_at, row.payload)
+            except (KeyError, TypeError, ValueError):
+                log.exception(
+                    "undecodable event skipped",
+                    extra={"subscriber": name, "event_id": str(row.event_id), "type": row.type},
+                )
+                handled.append(row.seq)
+                continue
+            try:
+                await handler(event)
             except Exception as error:
                 log.exception(
                     "event handler failed",
@@ -132,8 +153,9 @@ class SqlEventBus:
                 )
                 failed[row.seq] = repr(error)
             else:
-                delivered.append(row.seq)
-        return delivered, failed
+                handled.append(row.seq)
+                delivered += 1
+        return handled, failed, delivered
 
     async def _position(self, name: str, since: datetime) -> int:
         """The subscriber's position; creates the subscription if it does not exist yet."""

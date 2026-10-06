@@ -82,7 +82,9 @@ name = "Core is plain Python: no framework or client libraries"
 type = "forbidden"
 source_modules = ["papiq.core"]
 forbidden_modules = [
+    "aiosqlite",
     "alembic",
+    "asyncpg",
     "authlib",
     "boto3",
     "botocore",
