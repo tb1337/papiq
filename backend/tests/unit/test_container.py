@@ -2,36 +2,51 @@ from typing import Any
 
 import pytest
 
+from papiq.adapters.outbound.memory import ManualClock
+from papiq.adapters.outbound.system import SystemClock
 from papiq.composition import container
-from papiq.composition.container import build_container
+from papiq.composition.container import (
+    Persistence,
+    build_container,
+    build_memory_container,
+    build_services,
+)
 from papiq.composition.errors import AdapterNotAvailableError
 from papiq.composition.settings import Settings
+from papiq.core.domain.events import DomainEvent
+from papiq.core.domain.pipeline import Lane
+from papiq.core.domain.users import Role
+from tests import builders
+from tests.builders import NOW
 
 
 def settings(**values: Any) -> Settings:
     return Settings(**values)
 
 
+def fake_persistence(_: Settings) -> Persistence:
+    return Persistence(unit_of_work=object, event_bus=object())  # type: ignore[arg-type]
+
+
 def test_missing_adapter_is_reported_with_port_and_name() -> None:
     with pytest.raises(AdapterNotAvailableError) as info:
         build_container(settings())
-    assert str(info.value) == "repository: adapter 'sqlite' is not implemented yet"
-    assert (info.value.port, info.value.adapter) == ("repository", "sqlite")
+    assert str(info.value) == "persistence: adapter 'sqlite' is not implemented yet"
+    assert (info.value.port, info.value.adapter) == ("persistence", "sqlite")
 
 
 def test_selection_follows_the_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     postgres = settings(db_type="postgres", db_host="h", db_name="n", db_user="u", db_password="p")
-    with pytest.raises(AdapterNotAvailableError, match="repository: adapter 'postgres'"):
+    with pytest.raises(AdapterNotAvailableError, match="persistence: adapter 'postgres'"):
         build_container(postgres)
 
-    monkeypatch.setitem(container.REPOSITORIES, "postgres", lambda _: object())
-    with pytest.raises(AdapterNotAvailableError, match="job_queue: adapter 'postgres'"):
+    monkeypatch.setitem(container.PERSISTENCE, "postgres", fake_persistence)
+    with pytest.raises(AdapterNotAvailableError, match="object_store: adapter 'filesystem'"):
         build_container(postgres)
 
 
 def test_each_port_is_checked_in_turn(monkeypatch: pytest.MonkeyPatch) -> None:
-    for table in (container.REPOSITORIES, container.JOB_QUEUES, container.EVENT_BUSES):
-        monkeypatch.setitem(table, "sqlite", lambda _: object())
+    monkeypatch.setitem(container.PERSISTENCE, "sqlite", fake_persistence)
     with pytest.raises(AdapterNotAvailableError, match="object_store: adapter 'filesystem'"):
         build_container(settings())
 
@@ -49,16 +64,14 @@ def test_each_port_is_checked_in_turn(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_optional_ports_are_only_selected_when_configured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setitem(container.PERSISTENCE, "sqlite", fake_persistence)
     tables: list[dict[str, Any]] = [
-        container.REPOSITORIES,
-        container.JOB_QUEUES,
-        container.EVENT_BUSES,
         container.OBJECT_STORES,
         container.OCR_ENGINES,
         container.PARSERS,
         container.IDENTITY_PROVIDERS,
     ]
-    names = ["sqlite", "sqlite", "sqlite", "filesystem", "ocrmypdf", "docling", "native"]
+    names = ["filesystem", "ocrmypdf", "docling", "native"]
     for table, name in zip(tables, names, strict=True):
         monkeypatch.setitem(table, name, lambda _: object())
 
@@ -73,3 +86,38 @@ def test_optional_ports_are_only_selected_when_configured(
         build_container(settings(llm_base_url="http://ollama:11434/v1", llm_model="m"))
     with pytest.raises(AdapterNotAvailableError, match="embeddings: adapter 'openai-compatible'"):
         build_container(settings(embedding_base_url="http://ollama:11434/v1", embedding_model="m"))
+
+
+async def test_memory_container_runs_the_core() -> None:
+    clock = ManualClock(NOW)
+    built = build_memory_container(clock)
+    assert built.clock is clock
+    services = build_services(built)
+
+    admin = builders.admin()
+    async with built.unit_of_work() as uow:
+        await uow.users.add(admin)
+        await uow.commit()
+    user = await services.users.create_user(admin.id, "dana", Role.USER)
+
+    received: list[DomainEvent] = []
+
+    async def record(event: DomainEvent) -> None:
+        received.append(event)
+
+    built.event_bus.subscribe("test", record)
+    document = await services.pipeline.receive(
+        user.id, b"%PDF", filename="a.pdf", media_type="application/pdf"
+    )
+    while await services.pipeline.run_next_job():
+        pass
+    assert (await services.documents.get(user.id, document.id)).lane is Lane.GREEN
+    await built.event_bus.dispatch()
+    assert received[0].type == "document.received"
+    assert received[-1].type == "document.lane_changed"
+
+
+def test_memory_containers_are_independent() -> None:
+    first, second = build_memory_container(), build_memory_container()
+    assert first.unit_of_work is not second.unit_of_work
+    assert isinstance(first.clock, SystemClock)

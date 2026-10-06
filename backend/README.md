@@ -24,6 +24,22 @@ Dependency rules, enforced by `uv run lint-imports`:
 Every port gets an in-memory adapter for core tests and a contract test suite that every real
 adapter must pass.
 
+## Core
+
+- `core/domain`: users, drawers and shares, master data (contacts, document types, tags),
+  attribute definitions and values, the document aggregate with the pipeline state machine and
+  lanes, domain events, jobs and the permission rules. IDs are UUIDv7, timestamps are UTC.
+- `core/ports`: repositories, processing log, outbox and job queue share one `UnitOfWork`, so
+  a state change, its events and follow-up jobs are committed together (transactional outbox).
+  `EventBus` delivers committed events at least once. Further ports: `ObjectStore`, `Clock`;
+  OCR, parser, LLM, embeddings, search and identity are designed in their milestones.
+- `core/services`: use cases (users, drawers, master data, documents, pipeline). Each runs in
+  one unit of work and checks the caller's rights. Pipeline steps after receive are
+  placeholders until M3, M5 and M7.
+
+`papiq.composition.container.build_memory_container()` wires all designed ports to their
+in-memory adapters; `build_services()` creates the use cases on top.
+
 ## Configuration
 
 Environment variables with the prefix `PAPIQ_` only; there is no configuration file. Invalid or
@@ -69,3 +85,8 @@ Choices are case-insensitive; surrounding whitespace is removed and blank values
   reachable. The devcontainer provides all three.
 
 The markers are applied by directory, so new tests only need to be placed in the right folder.
+
+`tests/contracts` holds the contract suites (classes such as `UnitOfWorkContract`). An adapter's
+test module subclasses each suite as `Test...` and provides the adapter fixture
+(`uow_factory`, `event_bus`, `object_store`, `clock`); see
+`tests/unit/adapters/memory/test_contracts.py`.

@@ -109,7 +109,8 @@ jobs:
             uv run mypy
             uv run lint-imports
             uv run pytest -v -rs | tee /tmp/pytest.log
-            if grep -qi skipped /tmp/pytest.log; then
+            # pytest marks skipped tests as SKIPPED; test names may contain "skipped".
+            if grep -q SKIPPED /tmp/pytest.log; then
               echo "Integration tests were skipped: a service is not reachable" >&2
               exit 1
             fi
