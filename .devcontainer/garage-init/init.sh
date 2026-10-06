@@ -1,6 +1,8 @@
 #!/bin/sh
 # Prepare a fresh single-node Garage for development: cluster layout, access key, bucket.
-# Safe to run repeatedly: every step checks the current state first.
+# Safe to run repeatedly: every step checks the current state first. An existing access key is
+# left alone, so after changing the development credentials, reset the volumes with
+# `docker compose down -v`.
 #
 # Environment:
 #   GARAGE_ADMIN_URL           admin API, e.g. http://garage:3903

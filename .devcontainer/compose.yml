@@ -23,7 +23,7 @@ services:
       garage-init:
         condition: service_completed_successfully
       meilisearch:
-        condition: service_started
+        condition: service_healthy
 
   postgres:
     image: postgres:17.11-trixie
@@ -68,6 +68,11 @@ services:
       MEILI_NO_ANALYTICS: "true"
     volumes:
       - meilisearch-data:/meili_data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:7700/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
 volumes:
   uv-cache:
