@@ -12,6 +12,7 @@ dev = [
     "import-linter",
     "mypy",
     "pytest",
+    "pytest-asyncio>=1.4.0",
     "ruff",
 ]
 
@@ -32,6 +33,13 @@ files = ["src", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--strict-markers"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "unit: needs no external services (applied automatically to tests/unit)",
+    "integration: needs Postgres, Garage or Meilisearch (applied automatically to tests/integration)",
+]
 
 # Hexagonal boundaries, checked with `lint-imports`.
 [tool.importlinter]
