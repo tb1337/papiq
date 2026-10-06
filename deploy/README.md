@@ -1,6 +1,8 @@
 # papiq deploy
 
-Docker Compose stack: API, worker, web UI, database, S3-compatible storage, Meilisearch.
+Docker Compose stack: API, worker, web UI, database, object storage, Meilisearch.
 LLM and identity provider are external.
 
-Not started. Open: choice of S3 server.
+Object storage is either Garage (S3) or a local filesystem volume, chosen by configuration.
+
+Not started.

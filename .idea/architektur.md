@@ -30,7 +30,7 @@ flowchart TB
     llm[LLM<br/>Ollama oder Cloud, OpenAI-kompatibel]
     subgraph speicher[Speicher]
         db[(Datenbank<br/>SQLite oder Postgres)]
-        s3[(S3<br/>Originale, Derivate)]
+        s3[(Objektspeicher<br/>Garage S3 oder Dateisystem)]
         search[(Meilisearch<br/>Volltext + Vektoren)]
     end
     ui --> api
@@ -61,7 +61,7 @@ Papiq ist hexagonal aufgebaut: Der fachliche Kern kennt keine Datenbank, kein S3
 | Port | Adapter im ersten Wurf | Austauschbar gegen (Beispiele) |
 | --- | --- | --- |
 | Repository (Metadaten) | SQLAlchemy: SQLite, Postgres | andere Datenbank |
-| Objektspeicher | S3 | lokales Dateisystem (Entwicklung, Tests) |
+| Objektspeicher | S3 (Garage), lokales Dateisystem – gleichwertig, per Konfiguration | anderer S3-Server (z. B. SeaweedFS) |
 | Suchindex | Meilisearch | Typesense, Postgres-Volltext |
 | LLM | OpenAI-kompatible API | Anbieter-spezifische API |
 | Embeddings | OpenAI-kompatible API | lokales Modell |
@@ -86,7 +86,7 @@ Backend und Worker in Python; ein Image, zwei Startbefehle.
 | Ereignisse | Transactional Outbox in der Datenbank; kein Broker zum Start | entschieden |
 | Datenzugriff | SQLAlchemy 2, Alembic | entschieden |
 | Datenbank | SQLite oder Postgres, per Konfiguration | entschieden |
-| Objektspeicher | S3-kompatibel (z. B. Garage, SeaweedFS) | Server offen |
+| Objektspeicher | Garage (S3) oder lokales Dateisystem, per Konfiguration | entschieden |
 | Suche | Meilisearch Community Edition (MIT) | entschieden |
 | OCR | OCRmyPDF | entschieden |
 | Parsing | Docling | entschieden |
@@ -99,7 +99,7 @@ Nicht verwendet: MySQL (gestrichen), LangGraph (kein Bedarf, siehe Ingest-Workfl
 
 ## Datenhaltung
 
-Drei Speicher mit klarer Aufgabe: Datenbank für Metadaten, S3 für Dateien, Meilisearch für die Suche.
+Drei Speicher mit klarer Aufgabe: Datenbank für Metadaten, Objektspeicher für Dateien, Meilisearch für die Suche.
 
 **Datenbank (SQLite oder Postgres)**
 
@@ -107,8 +107,10 @@ Drei Speicher mit klarer Aufgabe: Datenbank für Metadaten, S3 für Dateien, Mei
 - SQLite nur auf lokalem Volume im WAL-Modus, nie auf Netzlaufwerk oder S3.
 - Tests in CI gegen beide Datenbanken.
 
-**S3**
+**Objektspeicher (S3 oder Dateisystem)**
 
+- Zwei gleichwertige Adapter: S3 (erster Server: Garage) oder lokales Dateisystem.
+- Papiq nutzt keine Speicher-Events. Ereignisse entstehen ausschließlich in der Outbox; so bleibt der Adapter frei tauschbar (Garage und Dateisystem kennen keine Events).
 - Originale unveränderlich, Objekt-Key = SHA-256 des Inhalts; Dubletten werden darüber erkannt.
 - Daneben die Derivate: Archiv-PDF mit Textlayer, Docling-Ausgabe (Markdown/JSON), Vorschaubilder.
 
@@ -288,7 +290,6 @@ Ein eigener CLI-Client liest die Paperless-REST-API und schreibt über die Papiq
 
 ## Offene Punkte
 
-- [ ] S3-Server wählen (Garage oder SeaweedFS; aktuellen Status von MinIO prüfen)
 - [ ] Backup-Strategie für SQLite und Postgres
 - [ ] Konfidenz-Schwellen und Anzahl automatischer Retries festlegen
 - [ ] Attribut-Datentypen bestätigen
