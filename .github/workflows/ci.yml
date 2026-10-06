@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   backend:
     runs-on: ubuntu-latest
@@ -20,3 +23,100 @@ jobs:
       - run: uv run mypy
       - run: uv run lint-imports
       - run: uv run pytest
+
+  # The same tests against both databases. Integration tests for services that are not
+  # available here (Garage, Meilisearch) skip themselves; `devcontainer` covers them.
+  backend-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [sqlite, postgres]
+    env:
+      PAPIQ_DB_TYPE: ${{ matrix.db }}
+      PAPIQ_DB_HOST: localhost
+      PAPIQ_DB_NAME: papiq
+      PAPIQ_DB_USER: papiq
+      PAPIQ_DB_PASSWORD: papiq
+    services:
+      # Started in both runs; only the postgres run configures the application to use it.
+      postgres:
+        image: postgres:17.11-trixie
+        env:
+          POSTGRES_USER: papiq
+          POSTGRES_PASSWORD: papiq
+          POSTGRES_DB: papiq
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U papiq -d papiq"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - run: uv run pytest -v -rs | tee pytest.log
+        shell: bash
+      - name: Postgres must have been tested
+        if: matrix.db == 'postgres'
+        run: |
+          if grep -q "test_postgres_is_reachable SKIPPED" pytest.log; then
+            echo "Postgres was not reachable, the postgres run tested nothing" >&2
+            exit 1
+          fi
+
+  # The dev image must build for the architectures developers use (Apple Silicon: arm64).
+  dev-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: dev
+          platforms: linux/amd64,linux/arm64
+          push: false
+          cache-from: type=gha,scope=dev-image
+          cache-to: type=gha,scope=dev-image,mode=max
+
+  # Starts the devcontainer services like "Reopen in Container" does, runs Garage's init a
+  # second time (must be repeatable) and runs the whole test suite inside the dev container.
+  devcontainer:
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE: docker compose -f .devcontainer/compose.yml
+    steps:
+      - uses: actions/checkout@v5
+      - name: Start the services
+        run: $COMPOSE up -d --build dev
+      - name: Run Garage init a second time
+        run: $COMPOSE run --rm garage-init
+      - name: Run all checks and tests in the dev container
+        # As root: the checkout belongs to the runner user, not to the container's `vscode` user.
+        run: |
+          $COMPOSE exec -T -u root dev bash -e -o pipefail -c '
+            uv sync --locked --project backend
+            cd backend
+            uv run ruff check .
+            uv run ruff format --check .
+            uv run mypy
+            uv run lint-imports
+            uv run pytest -v -rs | tee /tmp/pytest.log
+            if grep -qi skipped /tmp/pytest.log; then
+              echo "Integration tests were skipped: a service is not reachable" >&2
+              exit 1
+            fi
+          '
+      - name: Show service logs
+        if: failure()
+        run: $COMPOSE logs
+      - name: Stop the services
+        if: always()
+        run: $COMPOSE down -v

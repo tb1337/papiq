@@ -5,13 +5,18 @@ description = "Self-hosted, headless document management system"
 readme = "README.md"
 license = "GPL-3.0-only"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "pydantic>=2.13.5",
+    "pydantic-settings>=2.15.0",
+    "structlog>=26.1.0",
+]
 
 [dependency-groups]
 dev = [
     "import-linter",
     "mypy",
     "pytest",
+    "pytest-asyncio>=1.4.0",
     "ruff",
 ]
 
@@ -32,10 +37,18 @@ files = ["src", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--strict-markers"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "unit: needs no external services (applied automatically to tests/unit)",
+    "integration: needs Postgres, Garage or Meilisearch (applied automatically to tests/integration)",
+]
 
 # Hexagonal boundaries, checked with `lint-imports`.
 [tool.importlinter]
 root_package = "papiq"
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "Layers: composition -> adapters -> core"
@@ -59,3 +72,25 @@ name = "Domain model depends on nothing else in the core"
 type = "forbidden"
 source_modules = ["papiq.core.domain"]
 forbidden_modules = ["papiq.core.ports", "papiq.core.services"]
+
+[[tool.importlinter.contracts]]
+name = "Core is plain Python: no framework or client libraries"
+type = "forbidden"
+source_modules = ["papiq.core"]
+forbidden_modules = [
+    "alembic",
+    "authlib",
+    "boto3",
+    "botocore",
+    "docling",
+    "fastapi",
+    "httpx",
+    "meilisearch",
+    "ocrmypdf",
+    "pydantic",
+    "pydantic_settings",
+    "sqlalchemy",
+    "starlette",
+    "structlog",
+    "uvicorn",
+]

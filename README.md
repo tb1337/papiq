@@ -45,16 +45,27 @@ the MCP server and the Paperless migration tool are clients of that API.
 
 ## Development
 
-The backend uses [uv](https://docs.astral.sh/uv/).
+Develop inside the devcontainer (VS Code: "Reopen in Container"). It starts the `dev` container
+(Python 3.13, uv, Node.js, pnpm, OCRmyPDF system packages) together with Postgres, Garage
+(initialised with a bucket and a fixed development key) and Meilisearch, and sets the matching
+`PAPIQ_` variables. The credentials in `.devcontainer/dev.env` are for local use only.
+
+The backend uses [uv](https://docs.astral.sh/uv/). In the devcontainer, `uv sync` runs
+automatically after creation.
 
 ```sh
 cd backend
-uv sync
 uv run ruff check . && uv run ruff format --check .
 uv run mypy
 uv run lint-imports
 uv run pytest
 ```
+
+No language model runs in the devcontainer. To use an Ollama on the host, set
+`PAPIQ_LLM_BASE_URL=http://host.docker.internal:11434/v1` (and `PAPIQ_LLM_MODEL`); see
+`.devcontainer/dev.env`.
+
+Configuration is documented in [backend/README.md](backend/README.md#configuration).
 
 ## License
 
