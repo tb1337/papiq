@@ -69,6 +69,10 @@ jobs:
             echo "Postgres was not reachable, the postgres run tested nothing" >&2
             exit 1
           fi
+          if grep -E "tests/integration/adapters/sql/.* SKIPPED" pytest.log; then
+            echo "SQL adapter tests were skipped in the postgres run" >&2
+            exit 1
+          fi
 
   # The dev image must build for the architectures developers use (Apple Silicon: arm64).
   dev-image:

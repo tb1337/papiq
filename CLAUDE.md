@@ -28,6 +28,7 @@ uv run pytest                    # all tests; integration tests skip if a servic
 uv run pytest -m unit            # no external services
 uv run pytest -m integration     # needs Postgres, Garage or Meilisearch
 uv run python -m papiq.composition   # validate PAPIQ_ configuration
+uv run python -m papiq.composition migrate   # bring the configured database to the newest schema
 ```
 
 Run all five checks before every commit.
@@ -45,6 +46,9 @@ Run all five checks before every commit.
 - Async throughout (FastAPI, SQLAlchemy async, async HTTP clients).
 - Tests: `tests/unit` (marker `unit`) needs no services, `tests/integration` (marker `integration`) does.
   Markers are applied by directory. Contract suites live in `tests/contracts`; adapters subclass them.
+  The SQL adapter runs them on SQLite (unit) and Postgres (integration).
+- Schema changes: change `adapters/outbound/sql/tables.py` and add an Alembic revision in
+  `adapters/outbound/sql/migrations/versions`; a test fails if the two differ.
 - State change, domain events and follow-up jobs go through one `UnitOfWork` and one commit.
 
 ## Language
