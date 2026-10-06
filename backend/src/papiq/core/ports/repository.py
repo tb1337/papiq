@@ -42,7 +42,7 @@ class Repository[K, E](Protocol):
     async def update(self, entity: E) -> None: ...
 
     async def list_all(self) -> list[E]:
-        """All entities, oldest first."""
+        """All entities, in no particular order."""
         ...
 
 
