@@ -1,0 +1,77 @@
+# Devcontainer services. Credentials are fixed development values (see dev.env); never reuse them.
+name: papiq-dev
+
+x-garage-admin-token: &garage-admin-token dev-garage-admin-token
+
+services:
+  dev:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: dev
+    command: sleep infinity
+    env_file: dev.env
+    volumes:
+      - ..:/workspaces/papiq:cached
+      - uv-cache:/home/vscode/.cache/uv
+    extra_hosts:
+      # Lets the container reach a Ollama on the host on Linux, too (built in on Docker Desktop).
+      - host.docker.internal:host-gateway
+    depends_on:
+      postgres:
+        condition: service_healthy
+      garage-init:
+        condition: service_completed_successfully
+      meilisearch:
+        condition: service_started
+
+  postgres:
+    image: postgres:17.11-trixie
+    environment:
+      POSTGRES_USER: papiq
+      POSTGRES_PASSWORD: papiq
+      POSTGRES_DB: papiq
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U papiq -d papiq"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  garage:
+    image: dxflrs/garage:v2.4.1
+    environment:
+      GARAGE_RPC_SECRET: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
+      GARAGE_ADMIN_TOKEN: *garage-admin-token
+    volumes:
+      - ./garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+
+  # Creates layout, access key and bucket; safe to run on every start.
+  garage-init:
+    build: garage-init
+    env_file: dev.env
+    environment:
+      GARAGE_ADMIN_URL: http://garage:3903
+      GARAGE_ADMIN_TOKEN: *garage-admin-token
+    depends_on:
+      - garage
+    restart: "no"
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.54.3
+    environment:
+      MEILI_ENV: development
+      MEILI_MASTER_KEY: dev-meilisearch-master-key
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - meilisearch-data:/meili_data
+
+volumes:
+  uv-cache:
+  postgres-data:
+  garage-meta:
+  garage-data:
+  meilisearch-data:
