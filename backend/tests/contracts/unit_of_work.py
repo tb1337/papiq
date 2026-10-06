@@ -146,11 +146,12 @@ class UnitOfWorkContract:
         the first unit commits (row locks) or detect the conflict on commit.
         """
         owner, _ = await owner_with_drawer(uow_factory)
+        both_read = asyncio.Barrier(2)
 
         async def rename(name: str) -> str:
             async with uow_factory() as uow:
                 user = await uow.users.get(owner.id)
-                await asyncio.sleep(0)
+                await both_read.wait()
                 user.username = name
                 await uow.users.update(user)
                 await asyncio.sleep(0)
@@ -197,6 +198,38 @@ class UnitOfWorkContract:
             assert await uow.users.find_by_username("bob") is None
         with pytest.raises(ConflictError):
             await seed(uow_factory, builders.user("alice"))
+
+    async def test_names_compare_with_unicode_case_folding(
+        self, uow_factory: UnitOfWorkFactory
+    ) -> None:
+        """Not only ASCII: "Ärzte" and "ärzte" are the same name, as are "Straße" and "STRASSE"."""
+        await seed(uow_factory, builders.user("Jürgen"))
+        async with uow_factory() as uow:
+            await uow.tags.add(Tag.create(name="Ärzte", now=NOW))
+            await uow.contacts.add(Contact.create(name="Straße", now=NOW))
+            await uow.commit()
+        async with uow_factory() as uow:
+            found = await uow.users.find_by_username("JÜRGEN")
+            assert found is not None and found.username == "Jürgen"
+            tag = await uow.tags.find_by_name("ärzte")
+            assert tag is not None and tag.name == "Ärzte"
+            contact = await uow.contacts.find_by_name("STRASSE")
+            assert contact is not None and contact.name == "Straße"
+        duplicates: list[User | Tag | Contact] = [
+            builders.user("jürgen"),
+            Tag.create(name="ÄRZTE", now=NOW),
+            Contact.create(name="strasse", now=NOW),
+        ]
+        for duplicate in duplicates:
+            with pytest.raises(ConflictError):
+                async with uow_factory() as uow:
+                    if isinstance(duplicate, User):
+                        await uow.users.add(duplicate)
+                    elif isinstance(duplicate, Tag):
+                        await uow.tags.add(duplicate)
+                    else:
+                        await uow.contacts.add(duplicate)
+                    await uow.commit()
 
     async def test_concurrent_adds_of_the_same_name_conflict(
         self, uow_factory: UnitOfWorkFactory
