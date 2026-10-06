@@ -17,16 +17,18 @@ Papiq ist ein selbst gehostetes, headless Dokumentenmanagementsystem als Ersatz 
 
 ## Gesamtarchitektur
 
-Papiq läuft als Docker-Stack aus API, Worker, Web-UI und drei Speichern; LLM und Identity Provider sind extern.
+Papiq läuft als ein Docker-Container (API, Worker, Auslieferung der Web-UI, überwacht von s6-overlay) neben drei Speichern; LLM und Identity Provider sind extern.
 
 ```mermaid
 flowchart TB
-    ui[Web-UI<br/>Single-Page-App]
+    ui[Web-UI im Browser<br/>Single-Page-App]
     mcp[MCP-Client<br/>Claude u. a., API-Token]
     cli[Migrations-CLI<br/>aus Paperless-ngx]
-    api[API - FastAPI<br/>REST + MCP, Login, Rechte]
+    subgraph papiq[Papiq-Container · s6-overlay]
+        api[API - FastAPI<br/>REST + MCP, Login, Rechte, UI-Dateien]
+        worker[Worker<br/>OCRmyPDF, Docling, Klassifizierung, Regeln]
+    end
     idp[Identity Provider<br/>optional, OIDC]
-    worker[Worker<br/>OCRmyPDF, Docling, Klassifizierung, Regeln]
     llm[LLM<br/>Ollama oder Cloud, OpenAI-kompatibel]
     subgraph speicher[Speicher]
         db[(Datenbank<br/>SQLite oder Postgres)]
@@ -43,7 +45,7 @@ flowchart TB
     worker --> speicher
 ```
 
-Web-UI, MCP-Client und Migrations-CLI greifen ausschließlich über die API zu. Der Worker verarbeitet Dokumente als Jobs im Hintergrund und nutzt dieselben Speicher; API und Worker teilen ein Image.
+Web-UI, MCP-Client und Migrations-CLI greifen ausschließlich über die API zu. Der Worker verarbeitet Dokumente als Jobs im Hintergrund und nutzt dieselben Speicher. API und Worker laufen als überwachte Dienste im selben Container (siehe Betrieb).
 
 ## Architekturprinzip: Ports und Adapter
 
@@ -77,7 +79,7 @@ Hexagonal betrifft den inneren Aufbau, nicht die Zahl der Container: Ein Adapter
 
 ## Technologie-Stack
 
-Backend und Worker in Python; ein Image, zwei Startbefehle.
+Backend und Worker in Python; ein Container mit s6-overlay als Prozessüberwachung.
 
 | Bereich | Wahl | Status |
 | --- | --- | --- |
@@ -94,6 +96,7 @@ Backend und Worker in Python; ein Image, zwei Startbefehle.
 | Jobs | eigene Job-Tabelle über SQLAlchemy | entschieden |
 | Authentifizierung | Argon2id, TOTP, Authlib (OIDC) | entschieden |
 | Web-UI | SvelteKit (Svelte 5), Tailwind, shadcn-svelte; Ziel: cleanes, modernes Interface | entschieden |
+| Container | ein Papiq-Image, Prozessüberwachung mit s6-overlay | entschieden |
 
 Nicht verwendet: MySQL (gestrichen), LangGraph (kein Bedarf, siehe Ingest-Workflow), Procrastinate (nur Postgres).
 
@@ -272,7 +275,24 @@ Die REST-API ist der einzige Zugang; es gibt keine Hintertüren für UI oder Mig
 
 - **REST-API:** OpenAPI-Spezifikation als Vertrag; daraus wird der TypeScript-Client der Web-UI generiert.
 - **MCP-Server:** im API-Prozess, nutzt dieselbe Service-Schicht; HTTP mit Bearer-Token. Tools (Vorschlag): `search`, `get_document`, `get_text`, `update_metadata`, `list_tags`.
-- **Web-UI:** eigener Container, Single-Page-App auf der API; Job-Fortschritt per Server-Sent Events; PDF-Anzeige mit PDF.js; Posteingang mit Lanes, Probelauf für Regeln.
+- **Web-UI:** Single-Page-App auf der API, als statische Dateien im Papiq-Container ausgeliefert; Job-Fortschritt per Server-Sent Events; PDF-Anzeige mit PDF.js; Posteingang mit Lanes, Probelauf für Regeln.
+
+## Betrieb: Papiq-Container mit s6-overlay
+
+Papiq wird als ein Docker-Image ausgeliefert. Darin überwacht s6-overlay alle Papiq-Prozesse: Es läuft als PID 1, startet Dienste in fester Reihenfolge, startet abgestürzte Dienste neu und fährt sauber herunter.
+
+**Dienste im Container**
+
+| Dienst | Art | Aufgabe |
+| --- | --- | --- |
+| `init-papiq` | einmalig | Konfiguration prüfen, Verzeichnisse und Rechte für Volumes setzen (`PUID`/`PGID`) |
+| `init-migrations` | einmalig | Datenbankschema per Alembic aktualisieren, bevor API und Worker starten |
+| `svc-api` | dauerhaft | Uvicorn mit FastAPI: REST, MCP, SSE und Auslieferung der Web-UI |
+| `svc-worker` | dauerhaft | Pipeline-Jobs, Outbox-Verteilung, Webhook-Versand |
+
+**Außerhalb des Containers** (eigene Container oder extern): Datenbank (bei Postgres), Garage (bei S3), Meilisearch, LLM, Identity Provider. Mit SQLite und Dateisystem-Adapter liegen Datenbank und Dateien auf Volumes des Papiq-Containers.
+
+**Konfiguration** ausschließlich über Umgebungsvariablen mit Präfix `PAPIQ_`; die Composition Root liest sie beim Start und wählt die Adapter.
 
 ## Migration aus Paperless-ngx
 
@@ -296,3 +316,7 @@ Ein eigener CLI-Client liest die Paperless-REST-API und schreibt über die Papiq
 - [ ] Embedding-Modell für die semantische Suche wählen (lokal oder Cloud)
 - [ ] Migration: Paperless-Speicherpfade und -Berechtigungen auf Schubladen abbilden
 - [ ] Verfügbarkeit des Namens „Papiq“ prüfen (GitHub, PyPI, Docker Hub, Marken)
+- [ ] Container: Rollen per Umgebungsvariable (alles / nur API / nur Worker) für späteres Skalieren?
+- [ ] Container: Web-UI direkt von Uvicorn ausliefern oder mit Caddy im Container?
+- [ ] Container: Docling im Image (groß wegen PyTorch) oder als eigener Dienst über den Parser-Adapter?
+- [ ] Basis-Image festlegen (Debian slim wegen OCRmyPDF-Abhängigkeiten)
