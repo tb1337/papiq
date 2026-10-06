@@ -2,10 +2,22 @@ from typing import Any
 
 import pytest
 
+from papiq.adapters.outbound.memory import ManualClock
+from papiq.adapters.outbound.system import SystemClock
 from papiq.composition import container
-from papiq.composition.container import Persistence, build_container
+from papiq.composition.container import (
+    Persistence,
+    build_container,
+    build_memory_container,
+    build_services,
+)
 from papiq.composition.errors import AdapterNotAvailableError
 from papiq.composition.settings import Settings
+from papiq.core.domain.events import DomainEvent
+from papiq.core.domain.pipeline import Lane
+from papiq.core.domain.users import Role
+from tests import builders
+from tests.builders import NOW
 
 
 def settings(**values: Any) -> Settings:
@@ -74,3 +86,38 @@ def test_optional_ports_are_only_selected_when_configured(
         build_container(settings(llm_base_url="http://ollama:11434/v1", llm_model="m"))
     with pytest.raises(AdapterNotAvailableError, match="embeddings: adapter 'openai-compatible'"):
         build_container(settings(embedding_base_url="http://ollama:11434/v1", embedding_model="m"))
+
+
+async def test_memory_container_runs_the_core() -> None:
+    clock = ManualClock(NOW)
+    built = build_memory_container(clock)
+    assert built.clock is clock
+    services = build_services(built)
+
+    admin = builders.admin()
+    async with built.unit_of_work() as uow:
+        await uow.users.add(admin)
+        await uow.commit()
+    user = await services.users.create_user(admin.id, "dana", Role.USER)
+
+    received: list[DomainEvent] = []
+
+    async def record(event: DomainEvent) -> None:
+        received.append(event)
+
+    built.event_bus.subscribe("test", record)
+    document = await services.pipeline.receive(
+        user.id, b"%PDF", filename="a.pdf", media_type="application/pdf"
+    )
+    while await services.pipeline.run_next_job():
+        pass
+    assert (await services.documents.get(user.id, document.id)).lane is Lane.GREEN
+    await built.event_bus.dispatch()
+    assert received[0].type == "document.received"
+    assert received[-1].type == "document.lane_changed"
+
+
+def test_memory_containers_are_independent() -> None:
+    first, second = build_memory_container(), build_memory_container()
+    assert first.unit_of_work is not second.unit_of_work
+    assert isinstance(first.clock, SystemClock)
