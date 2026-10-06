@@ -1,5 +1,7 @@
 """The in-memory adapters pass every contract suite."""
 
+from collections.abc import Callable
+
 import pytest
 
 from papiq.adapters.outbound.memory import (
@@ -28,8 +30,8 @@ def uow_factory(database: MemoryDatabase) -> UnitOfWorkFactory:
 
 
 @pytest.fixture
-def event_bus(database: MemoryDatabase) -> EventBus:
-    return MemoryEventBus(database)
+def event_bus_factory(database: MemoryDatabase) -> Callable[[], EventBus]:
+    return lambda: MemoryEventBus(database)
 
 
 @pytest.fixture

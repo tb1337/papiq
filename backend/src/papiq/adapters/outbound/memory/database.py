@@ -58,6 +58,14 @@ DOCUMENTS = Table("document", _document_keys)
 
 
 @dataclass
+class SubscriptionState:
+    """Delivery state of one subscriber, kept with the outbox so it survives the bus."""
+
+    cursor: int  # outbox position of the next new event
+    retries: list[int] = field(default_factory=list)  # positions of failed events
+
+
+@dataclass
 class MemoryDatabase:
     """What has been committed. Rows are private copies; insertion order is creation order."""
 
@@ -65,6 +73,7 @@ class MemoryDatabase:
     processing_log: list[StepRun] = field(default_factory=list)
     outbox: list[DomainEvent] = field(default_factory=list)
     jobs: dict[JobId, Job] = field(default_factory=dict)
+    subscriptions: dict[str, SubscriptionState] = field(default_factory=dict)
 
     def rows(self, table: Table) -> dict[UUID, Any]:
         return self.tables.setdefault(table.name, {})

@@ -16,19 +16,26 @@ class Outbox(Protocol):
 class EventBus(Protocol):
     """Delivers committed events to subscribers, at least once per subscriber.
 
-    - A subscriber receives the events committed after it subscribed, in commit order.
-    - If its handler raises, that event is delivered to it again on a later dispatch; later
-      events are still delivered. Receivers recognise repetitions by the event id.
+    - Subscriptions are durable by name: the first registration of a name receives the events
+      committed from then on; a later registration under the same name (e.g. after a restart,
+      on a new bus instance) resumes where the previous one stopped.
+    - No committed event is skipped, also not one whose transaction started before, but
+      committed after, events that were already delivered.
+    - Events of one transaction arrive in the order they were added; across transactions the
+      order is not guaranteed. Events are thin: receivers fetch the current state.
+    - If a handler raises, that event is delivered to it again on a later dispatch; it does not
+      hold back later events. Receivers recognise repetitions by the event id.
 
     First adapter: outbox table in the database with in-process dispatch (M2).
     Later adapters: Valkey Streams, NATS.
     """
 
     def subscribe(self, subscriber: str, handler: EventHandler) -> None:
-        """Register a handler under a unique subscriber name."""
+        """Register a handler under a subscriber name, unique per bus instance. Adapters may
+        create the durable subscription lazily on the next dispatch."""
         ...
 
     async def dispatch(self, *, limit: int = 100) -> int:
-        """Deliver up to `limit` pending events to each subscriber; returns the number of
-        successful deliveries."""
+        """Deliver to each subscriber up to `limit` new events and up to `limit` events that
+        failed before; returns the number of successful deliveries."""
         ...
