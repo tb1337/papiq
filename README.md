@@ -27,7 +27,7 @@ the MCP server and the Paperless migration tool are clients of that API.
 | `web/` | Web UI (single-page app on top of the API) |
 | `migration/` | Migration client from Paperless-ngx |
 | `deploy/` | Docker image (s6-overlay) and Compose stack |
-| `.idea/` | Design documents (architecture, in German) |
+| `.idea/` | Design documents in German: architecture, implementation plan |
 
 ## Glossary
 
