@@ -1,5 +1,6 @@
 import json
 import logging
+from typing import Any
 
 import pytest
 import structlog
@@ -8,8 +9,8 @@ from papiq.composition.logging_setup import configure_logging
 from papiq.composition.settings import Settings
 
 
-def settings(**values: str) -> Settings:
-    return Settings(**values)  # type: ignore[arg-type]
+def settings(**values: Any) -> Settings:
+    return Settings(**values)
 
 
 def test_json_format_writes_one_json_object_per_line(capsys: pytest.CaptureFixture[str]) -> None:

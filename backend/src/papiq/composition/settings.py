@@ -5,6 +5,7 @@ Setting both `PAPIQ_<NAME>` and `PAPIQ_<NAME>_FILE` is an error.
 """
 
 import os
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args
@@ -20,6 +21,11 @@ from papiq.composition.errors import ConfigurationError
 
 ENV_PREFIX = "PAPIQ_"
 FILE_SUFFIX = "_FILE"
+
+# Choices are written in lower case; `PAPIQ_ROLE=API` is accepted.
+_LOWERCASE_FIELDS = {"role", "log_format", "db_type", "storage_type"}
+# Credentials in URLs (`http://user:password@host`) must not reach logs or error messages.
+_URL_USERINFO = re.compile(r"(?<=://)[^/@\s]+@")
 
 LogLevel = Annotated[
     Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -73,6 +79,24 @@ class Settings(BaseSettings):
     embedding_model: str | None = None
     embedding_api_key: SecretStr | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalise(cls, data: Any) -> Any:
+        """Strip whitespace, treat blank values as unset, lower-case the choices."""
+        if not isinstance(data, dict):
+            return data
+        values: dict[str, Any] = {}
+        for name, value in data.items():
+            if isinstance(value, str):
+                if not value.strip():
+                    continue
+                if name in _LOWERCASE_FIELDS:
+                    value = value.strip().lower()
+                elif name not in _secret_fields(cls):
+                    value = value.strip()
+            values[name] = value
+        return values
+
     @model_validator(mode="after")
     def _check_consistency(self) -> "Settings":
         problems: list[str] = []
@@ -108,7 +132,10 @@ class Settings(BaseSettings):
 
     def describe(self) -> dict[str, Any]:
         """The effective configuration for logging; secrets are masked."""
-        return self.model_dump(mode="json")
+        return {
+            name: _mask_userinfo(value) if isinstance(value, str) else value
+            for name, value in self.model_dump(mode="json").items()
+        }
 
 
 class _SecretFileSource(PydanticBaseSettingsSource):
@@ -144,7 +171,7 @@ def _read_secret(variable: str, path: str) -> str:
     except UnicodeDecodeError as error:
         raise ConfigurationError(f"{variable}: '{path}' is not valid UTF-8 text") from error
     value = content.removesuffix("\n").removesuffix("\r")
-    if not value:
+    if not value.strip():
         raise ConfigurationError(f"{variable}: '{path}' is empty")
     return value
 
@@ -155,6 +182,10 @@ def _secret_fields(settings_cls: type[BaseSettings]) -> list[str]:
         for name, field in settings_cls.model_fields.items()
         if SecretStr in get_args(field.annotation)
     ]
+
+
+def _mask_userinfo(text: str) -> str:
+    return _URL_USERINFO.sub("***@", text)
 
 
 def _env(field_name: str) -> str:
@@ -203,6 +234,6 @@ def _format(error: ValidationError) -> str:
         name = str(location[0])
         line = f"{_env(name)}: {item['msg']}"
         if name not in secrets:
-            line += f" (got {item['input']!r})"
+            line += f" (got {_mask_userinfo(repr(item['input']))})"
         lines.append(line)
     return "Invalid configuration:\n" + "\n".join(f"  - {line}" for line in lines)

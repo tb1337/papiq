@@ -135,10 +135,47 @@ def test_all_problems_are_reported_at_once(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_secret_is_masked(monkeypatch: pytest.MonkeyPatch) -> None:
-    set_env(monkeypatch, POSTGRES)
+    set_env(monkeypatch, POSTGRES | {"PAPIQ_DB_PASSWORD": "s3cr3t-value"})
     settings = load_settings()
-    assert "pw" not in repr(settings).replace("papiq", "")
+    assert "s3cr3t-value" not in repr(settings)
     assert settings.describe()["db_password"] == "**********"
+
+
+def test_url_credentials_are_masked(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_env(monkeypatch, {"PAPIQ_MEILISEARCH_URL": "http://admin:hunter2@meili:7700"})
+    description = load_settings().describe()
+    assert description["meilisearch_url"] == "http://***@meili:7700/"
+    assert "hunter2" not in str(description)
+
+    message = error_message(monkeypatch, {"PAPIQ_LLM_BASE_URL": "http://admin:hunter2@ollama:::1"})
+    assert "PAPIQ_LLM_BASE_URL" in message
+    assert "hunter2" not in message
+
+
+def test_choices_ignore_case_and_whitespace(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_env(
+        monkeypatch,
+        {"PAPIQ_ROLE": "API", "PAPIQ_LOG_FORMAT": " Console ", "PAPIQ_DB_TYPE": "SQLite"},
+    )
+    settings = load_settings()
+    assert (settings.role, settings.log_format, settings.db_type) == ("api", "console", "sqlite")
+
+
+def test_blank_values_count_as_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_env(monkeypatch, POSTGRES | {"PAPIQ_DB_HOST": "  ", "PAPIQ_DB_PASSWORD": " "})
+    message = error_message(monkeypatch, {})
+    assert "PAPIQ_DB_HOST is required" in message
+    assert "PAPIQ_DB_PASSWORD is required" in message
+
+
+def test_values_are_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_env(monkeypatch, POSTGRES | {"PAPIQ_DB_HOST": " db \n"})
+    assert load_settings().db_host == "db"
+
+
+def test_variable_names_are_case_insensitive(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_env(monkeypatch, {"papiq_role": "worker"})
+    assert load_settings().role == "worker"
 
 
 def test_secret_from_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -182,11 +219,39 @@ def test_missing_secret_file_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     assert str(missing) in message
 
 
-def test_empty_secret_file_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    secret = tmp_path / "empty"
-    secret.write_text("\n")
+@pytest.mark.parametrize("content", ["", "\n", "  \n"])
+def test_blank_secret_file_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, content: str
+) -> None:
+    secret = tmp_path / "blank"
+    secret.write_text(content)
     message = error_message(monkeypatch, {"PAPIQ_LLM_API_KEY_FILE": str(secret)})
     assert "is empty" in message
+
+
+def test_unreadable_secret_files_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    binary = tmp_path / "binary"
+    binary.write_bytes(b"\xff\xfe\x00")
+    assert "not valid UTF-8" in error_message(monkeypatch, {"PAPIQ_LLM_API_KEY_FILE": str(binary)})
+    assert "PAPIQ_LLM_API_KEY_FILE" in error_message(
+        monkeypatch, {"PAPIQ_LLM_API_KEY_FILE": str(tmp_path)}
+    )
+
+
+def test_s3_secrets_from_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    key_id, key = tmp_path / "id", tmp_path / "key"
+    key_id.write_text("file-id\n")
+    key.write_text("file-key\n")
+    set_env(monkeypatch, S3)
+    monkeypatch.delenv("PAPIQ_S3_ACCESS_KEY_ID")
+    monkeypatch.delenv("PAPIQ_S3_SECRET_ACCESS_KEY")
+    monkeypatch.setenv("PAPIQ_S3_ACCESS_KEY_ID_FILE", str(key_id))
+    monkeypatch.setenv("PAPIQ_S3_SECRET_ACCESS_KEY_FILE", str(key))
+    settings = load_settings()
+    assert settings.s3_access_key_id is not None
+    assert settings.s3_secret_access_key is not None
+    assert settings.s3_access_key_id.get_secret_value() == "file-id"
+    assert settings.s3_secret_access_key.get_secret_value() == "file-key"
 
 
 def test_file_variant_exists_only_for_secrets(
