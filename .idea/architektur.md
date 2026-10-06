@@ -297,12 +297,13 @@ Papiq wird als ein Docker-Image ausgeliefert. Darin überwacht s6-overlay alle P
 - Jede technische Einstellung hat eine Umgebungsvariable mit Präfix `PAPIQ_`; eine Konfigurationsdatei ist nicht nötig. Beispiele: Adapter-Auswahl, Verbindungen, LLM- und Embedding-Modell, Konfidenz-Schwellen, Retries.
 - Die Composition Root liest sie beim Start, prüft sie (Pydantic Settings) und wählt die Adapter; ungültige Konfiguration bricht den Start mit klarer Meldung ab.
 - Fachliche Daten (Nutzer, Schubladen, Stammdaten, Regeln, Webhooks) sind keine Konfiguration; sie liegen in der Datenbank und werden über API und UI gepflegt.
+- Geheimnisse (Passwörter, API-Schlüssel) zusätzlich als `PAPIQ_…_FILE`-Variable für Docker Secrets, z. B. `PAPIQ_DB_PASSWORD_FILE=/run/secrets/db`; der Inhalt der Datei gilt als Wert. Sind beide gesetzt, bricht der Start mit Fehler ab.
 - `PAPIQ_ROLE=all|api|worker` legt fest, welche Dienste s6 startet. Standard `all`; getrennte API- und Worker-Container sind damit ohne zweites Image möglich.
 
 **Image**
 
 - Basis: Debian slim (wegen der Systempakete von OCRmyPDF: Tesseract, Ghostscript u. a.).
-- Docling ist im Image enthalten; dadurch wird es wegen PyTorch deutlich größer.
+- Docling ist im Image enthalten, mit der CPU-Variante von PyTorch (kein GPU-Image).
 
 ## Migration aus Paperless-ngx
 
@@ -326,5 +327,3 @@ Ein eigener CLI-Client liest die Paperless-REST-API und schreibt über die Papiq
 - [ ] Embedding-Modell für die semantische Suche wählen (lokal oder Cloud)
 - [ ] Migration: Paperless-Speicherpfade und -Berechtigungen auf Schubladen abbilden
 - [ ] Verfügbarkeit des Namens „Papiq“ prüfen (GitHub, PyPI, Docker Hub, Marken)
-- [ ] Image: PyTorch nur CPU (kleiner) oder zusätzlich eine GPU-Variante?
-- [ ] Secrets: zusätzlich `PAPIQ_…_FILE`-Variablen für Docker Secrets anbieten?

@@ -15,8 +15,10 @@ identity provider. With SQLite and the filesystem adapter, database and files li
 of the Papiq container.
 
 Configuration: entirely through environment variables prefixed `PAPIQ_`; no config file.
-`PAPIQ_ROLE=all|api|worker` selects which services s6 starts (default `all`).
+Secrets can be passed as Docker secrets via `PAPIQ_…_FILE` (e.g.
+`PAPIQ_DB_PASSWORD_FILE=/run/secrets/db`). `PAPIQ_ROLE=all|api|worker` selects which services
+s6 starts (default `all`).
 
-Image: Debian slim base, OCRmyPDF and Docling included.
+Image: Debian slim base, OCRmyPDF and Docling included, PyTorch CPU build.
 
 Not started.
