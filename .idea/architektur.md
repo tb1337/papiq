@@ -228,8 +228,11 @@ Kein API-Aufruf wartet auf OCR, Parsing oder LLM: Die API nimmt an, quittiert so
 
 `document.received`, `document.step_completed`, `document.lane_changed`, `document.filed`, `document.updated`, `document.deleted`.
 
-**Webhooks**
+**Webhooks (Egress)**
 
+- Webhooks melden Ereignisse an externe Systeme. Eingehende Daten (Ingress) laufen über die normale REST-API mit API-Token, z. B. `POST /documents`.
+- Jeder Nutzer legt eigene Webhooks an; sie melden nur Ereignisse zu Dokumenten, die dieser Nutzer sehen darf.
+- Schlanke Ereignisse: nur Ereignistyp, Zeitpunkt, Ereignis-ID und Dokument-ID. Details holt der Empfänger per API mit eigenem Token; dabei greifen die Schubladen-Rechte.
 - Abonnement: Ziel-URL, Ereignistypen, Geheimnis.
 - Zustellung signiert (HMAC-SHA256), Wiederholung mit wachsendem Abstand, Zustellprotokoll in der UI.
 
@@ -269,5 +272,4 @@ Ein eigener CLI-Client liest die Paperless-REST-API und schreibt über die Papiq
 - [ ] Embedding-Modell für die semantische Suche wählen (lokal oder Cloud)
 - [ ] Migration: Paperless-Speicherpfade und -Berechtigungen auf Schubladen abbilden
 - [ ] Verfügbarkeit des Namens „Papiq“ prüfen (GitHub, PyPI, Docker Hub, Marken)
-- [ ] Webhooks und Rechte: Wer darf Webhooks anlegen, und welche Dokumente dürfen sie sehen (nur Admin, oder pro Nutzer auf eigene/geteilte Schubladen begrenzt)?
 - [ ] Ereignistypen bestätigen
