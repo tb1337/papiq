@@ -93,7 +93,7 @@ Backend und Worker in Python; ein Image, zwei Startbefehle.
 | LLM | OpenAI-kompatible Schnittstelle (Ollama, Cloud) | entschieden |
 | Jobs | eigene Job-Tabelle über SQLAlchemy | entschieden |
 | Authentifizierung | Argon2id, TOTP, Authlib (OIDC) | entschieden |
-| Web-UI | SvelteKit (Svelte 5), Tailwind, shadcn-svelte | Vorschlag |
+| Web-UI | SvelteKit (Svelte 5), Tailwind, shadcn-svelte; Ziel: cleanes, modernes Interface | entschieden |
 
 Nicht verwendet: MySQL (gestrichen), LangGraph (kein Bedarf, siehe Ingest-Workflow), Procrastinate (nur Postgres).
 
@@ -288,7 +288,6 @@ Ein eigener CLI-Client liest die Paperless-REST-API und schreibt über die Papiq
 
 ## Offene Punkte
 
-- [ ] Web-UI-Framework festlegen (Vorschlag: SvelteKit)
 - [ ] S3-Server wählen (Garage oder SeaweedFS; aktuellen Status von MinIO prüfen)
 - [ ] Backup-Strategie für SQLite und Postgres
 - [ ] Konfidenz-Schwellen und Anzahl automatischer Retries festlegen
