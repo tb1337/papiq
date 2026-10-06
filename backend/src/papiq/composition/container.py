@@ -67,17 +67,17 @@ def build_container(settings: Settings) -> Container:
         identity=_select("identity", "native", IDENTITY_PROVIDERS, settings),
         search_index=(
             _select("search_index", "meilisearch", SEARCH_INDEXES, settings)
-            if settings.meilisearch_url
+            if settings.meilisearch_url is not None
             else None
         ),
         language_model=(
             _select("llm", "openai-compatible", LANGUAGE_MODELS, settings)
-            if settings.llm_base_url
+            if settings.llm_base_url is not None
             else None
         ),
         embeddings=(
             _select("embeddings", "openai-compatible", EMBEDDINGS, settings)
-            if settings.embedding_base_url
+            if settings.embedding_base_url is not None
             else None
         ),
     )
