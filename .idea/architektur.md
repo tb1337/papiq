@@ -227,7 +227,9 @@ Gespeichert als JSON, geprüft mit Pydantic; die UI bietet einen Baukasten.
 
 **Rückwirkendes Anwenden (erster Wurf)**
 
-Beim Anlegen oder Ändern einer Regel zeigt ein Probelauf, welche bestehenden Dokumente betroffen wären und was sich ändert. Angewendet wird erst nach Bestätigung, als Hintergrund-Job.
+Regeln wirken nicht automatisch auf bestehende Dokumente. Anlegen oder Ändern einer Regel betrifft nur künftige Eingänge und Änderungen.
+
+Rückwirkend nur auf ausdrücklichen Wunsch: Button „Auf bestehende Dokumente anwenden" an der Regel. Ein Auswahldialog listet die betroffenen Dokumente mit den jeweiligen Änderungen; der Nutzer wählt aus, was angewendet wird. Die Ausführung läuft als Hintergrund-Job.
 
 ## Asynchronität und Ereignisse
 
@@ -294,4 +296,4 @@ Ein eigener CLI-Client liest die Paperless-REST-API und schreibt über die Papiq
 - [ ] Embedding-Modell für die semantische Suche wählen (lokal oder Cloud)
 - [ ] Migration: Paperless-Speicherpfade und -Berechtigungen auf Schubladen abbilden
 - [ ] Verfügbarkeit des Namens „Papiq“ prüfen (GitHub, PyPI, Docker Hub, Marken)
-- [ ] Rückwirkendes Anwenden: Was passiert mit bereits abgelegten Dokumenten, bei denen die Regel einen Konflikt erzeugt – zurück in den Posteingang oder überspringen und im Probelauf auflisten?
+- [ ] Rückwirkendes Anwenden: Wie werden Dokumente mit Konflikt im Auswahldialog behandelt?
