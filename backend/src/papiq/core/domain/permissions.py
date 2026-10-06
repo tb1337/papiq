@@ -5,7 +5,10 @@
   a share (`read` or `read_write`), and only once it is green. Yellow and red documents and
   documents in processing are visible to their owner only.
 - Filing into a drawer needs write access to that drawer.
-- Only admins manage users and master data. Admins have no extra rights on documents or drawers.
+- Moving a document to another drawer: its owner, into a drawer the owner may write to; or an
+  admin, any document into any drawer. Shares never allow moving.
+- Only admins manage users and master data. Apart from moving, admins have no extra rights on
+  documents or drawers.
 - Deleting, retrying and reprocessing a document is up to its owner.
 """
 
@@ -44,6 +47,12 @@ def can_write_document(user: User, document: Document, drawer: Drawer) -> bool:
 def can_file_into(user: User, drawer: Drawer) -> bool:
     access = drawer_access(user, drawer)
     return access is not None and access.can_write
+
+
+def can_move_document(user: User, document: Document, target: Drawer) -> bool:
+    if user.is_admin:
+        return True
+    return is_document_owner(user, document) and can_file_into(user, target)
 
 
 def can_manage_drawer(user: User, drawer: Drawer) -> bool:

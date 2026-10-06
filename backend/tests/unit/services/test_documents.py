@@ -11,7 +11,7 @@ from papiq.core.domain.errors import (
     ValidationError,
 )
 from papiq.core.domain.events import DocumentDeleted, DocumentFiled, DocumentUpdated
-from papiq.core.domain.ids import ContactId, DocumentId, TagId, new_id
+from papiq.core.domain.ids import ContactId, DocumentId, DrawerId, TagId, new_id
 from papiq.core.domain.pipeline import Lane, Step
 from papiq.core.domain.users import Role, User
 from tests.builders import UNCERTAIN
@@ -131,26 +131,50 @@ async def test_attribute_values_are_checked(world: World, scene: Scene) -> None:
     assert world.events() == []
 
 
-async def test_move_needs_write_access_to_the_target(world: World, scene: Scene) -> None:
-    writer_default = await world.default_drawer(scene.writer)
+async def test_owner_moves_into_drawers_with_write_access(world: World, scene: Scene) -> None:
     owner_default = await world.default_drawer(scene.owner)
-    with pytest.raises(NotFoundError):
-        await world.documents.move(scene.writer.id, scene.document.id, owner_default.id)
     read_only = await world.drawers.create(scene.stranger.id, "Archive")
-    await world.drawers.share(scene.stranger.id, read_only.id, scene.writer.id, ShareLevel.READ)
+    await world.drawers.share(scene.stranger.id, read_only.id, scene.owner.id, ShareLevel.READ)
     with pytest.raises(PermissionDeniedError):
-        await world.documents.move(scene.writer.id, scene.document.id, read_only.id)
-    with pytest.raises(PermissionDeniedError):
-        await world.documents.move(scene.reader.id, scene.document.id, scene.shared.id)
+        await world.documents.move(scene.owner.id, scene.document.id, read_only.id)
+    with pytest.raises(NotFoundError):
+        await world.documents.move(
+            scene.owner.id, scene.document.id, (await world.default_drawer(scene.writer)).id
+        )
 
-    moved = await world.documents.move(scene.writer.id, scene.document.id, writer_default.id)
-    assert moved.drawer_id == writer_default.id
+    await world.documents.move(scene.owner.id, scene.document.id, owner_default.id)
+    moved = await world.documents.get(scene.owner.id, scene.document.id)
+    assert moved.drawer_id == owner_default.id
     (event,) = world.events()
-    assert isinstance(event, DocumentFiled) and event.drawer_id == writer_default.id
-    # Owner keeps access; the reader lost it with the move.
-    assert (await world.documents.get(scene.owner.id, scene.document.id)).id == moved.id
+    assert isinstance(event, DocumentFiled) and event.drawer_id == owner_default.id
     with pytest.raises(NotFoundError):
         await world.documents.get(scene.reader.id, scene.document.id)
+
+
+async def test_shares_never_allow_moving(world: World, scene: Scene) -> None:
+    writer_default = await world.default_drawer(scene.writer)
+    with pytest.raises(PermissionDeniedError):
+        await world.documents.move(scene.writer.id, scene.document.id, writer_default.id)
+    with pytest.raises(PermissionDeniedError):
+        await world.documents.move(scene.writer.id, scene.document.id, scene.shared.id)
+    with pytest.raises(NotFoundError):
+        await world.documents.move(scene.stranger.id, scene.document.id, scene.shared.id)
+    assert world.events() == []
+
+
+async def test_admin_moves_any_document_into_any_drawer(world: World, scene: Scene) -> None:
+    admin = await world.user(role=Role.ADMIN)
+    stranger_default = await world.default_drawer(scene.stranger)
+    await world.documents.move(admin.id, scene.document.id, stranger_default.id)
+    assert (await world.documents.get(scene.owner.id, scene.document.id)).drawer_id == (
+        stranger_default.id
+    )
+    with pytest.raises(NotFoundError):
+        await world.documents.get(admin.id, scene.document.id)  # moving grants no read access
+    with pytest.raises(NotFoundError):
+        await world.documents.move(admin.id, DocumentId(new_id()), stranger_default.id)
+    with pytest.raises(NotFoundError):
+        await world.documents.move(admin.id, scene.document.id, DrawerId(new_id()))
 
 
 async def test_only_the_owner_deletes(world: World, scene: Scene) -> None:
