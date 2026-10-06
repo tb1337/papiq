@@ -55,12 +55,13 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && npm install --global pnpm@12.9.1
 
 # The virtual environment lives outside the bind-mounted workspace: a `.venv` created on the
-# host (e.g. macOS) must not clash with it, and it stays fast on Docker Desktop.
-ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
+# host (e.g. macOS) must not clash with it, and it stays fast on Docker Desktop. It sits in the
+# home directory so that it follows the user if the devcontainer remaps the UID.
+ENV UV_PROJECT_ENVIRONMENT=/home/vscode/.venv \
     UV_LINK_MODE=copy \
-    PATH="/opt/venv/bin:$PATH"
-RUN mkdir -p /opt/venv /home/vscode/.cache/uv \
-    && chown -R vscode:vscode /opt/venv /home/vscode/.cache
+    PATH="/home/vscode/.venv/bin:$PATH"
+RUN mkdir -p /home/vscode/.venv /home/vscode/.cache/uv \
+    && chown -R vscode:vscode /home/vscode/.venv /home/vscode/.cache
 
 USER vscode
 WORKDIR /workspaces/papiq

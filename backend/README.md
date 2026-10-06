@@ -34,6 +34,10 @@ Secrets (marked *secret*) can also be passed as `PAPIQ_<NAME>_FILE=/run/secrets/
 secrets): the file content, without one trailing newline, is the value. Setting both
 `PAPIQ_<NAME>` and `PAPIQ_<NAME>_FILE` is an error.
 
+Variables for the variant that is not selected (for example `PAPIQ_DB_HOST` with
+`PAPIQ_DB_TYPE=sqlite`) are not required, but must still be well-formed if set.
+Choices are case-insensitive; surrounding whitespace is removed and blank values count as unset.
+
 | Variable | Values / default | Notes |
 | --- | --- | --- |
 | `PAPIQ_ROLE` | `all` (default), `api`, `worker` | Which services run |
