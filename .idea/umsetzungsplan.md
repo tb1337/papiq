@@ -35,7 +35,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | M0 | Fundament: Devcontainer, CI, Konfiguration | Sonnet 5.5 | high |
 | M1 | Domänenkern und Ports | Opus 5.5 | high |
-| M2 | Persistenz (SQLite, Postgres), Jobs, Outbox | Opus 5.5 | medium |
+| M2 | Persistenz (SQLite, Postgres), Jobs, Outbox | Opus 5.5 | high |
 | M3 | Ingest-Pipeline: Speicher, OCR, Parsing, Worker, SSE | Opus 5.5 | high |
 | M4 | Authentifizierung, Rechte, REST-API | Opus 5.5 | high (+ Review Fable 5.1 · high) |
 | M5 | KI-Klassifizierung, Konfidenz, Lanes, Posteingang | Opus 5.5 | high |
@@ -97,7 +97,7 @@ flowchart LR
 
 **Fertig, wenn:** Vertragstests aus M1 laufen gegen SQLite und Postgres grün.
 
-**Modell:** Opus 5.5 · medium – klarer Umfang, aber zwei Datenbanken und Nebenläufigkeit.
+**Modell:** Opus 5.5 · high – die Verträge aus M1 verlangen u. a. lückenlose Ereigniszustellung trotz abweichender Commit-Reihenfolge und sicheres paralleles Claimen; das auf zwei Datenbanken braucht Verifikation.
 
 ### M3 – Ingest-Pipeline
 
