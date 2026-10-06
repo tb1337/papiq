@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+.svelte-kit/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Local data
+data/
+
+# IDE: keep design documents in .idea, ignore JetBrains files
+.idea/*
+!.idea/*.md
+.vscode/
+.DS_Store
