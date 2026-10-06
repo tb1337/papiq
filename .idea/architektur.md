@@ -68,7 +68,10 @@ Papiq ist hexagonal aufgebaut: Der fachliche Kern kennt keine Datenbank, kein S3
 | OCR | OCRmyPDF | entfernter OCR-Dienst |
 | Parser | Docling | anderer Parser |
 | Job-Queue | Job-Tabelle in der Datenbank | Valkey/Redis-basierte Queue |
+| Event-Bus | Outbox-Tabelle in der Datenbank, Verteilung im Prozess | Valkey Streams, NATS |
 | Identität | nativer Login, OIDC | weitere Anbieter |
+
+Webhook-Versand ist ein ausgehender Adapter, der Ereignisse vom Event-Bus abonniert.
 
 Hexagonal betrifft den inneren Aufbau, nicht die Zahl der Container: Ein Adapter kann lokal laufen oder einen entfernten Dienst ansprechen, ohne dass sich der Kern ändert.
 
@@ -79,6 +82,8 @@ Backend und Worker in Python; ein Image, zwei Startbefehle.
 | Bereich | Wahl | Status |
 | --- | --- | --- |
 | API | FastAPI, Pydantic | entschieden |
+| Nebenläufigkeit | durchgängig async (FastAPI, SQLAlchemy async mit asyncpg bzw. aiosqlite) | entschieden |
+| Ereignisse | Transactional Outbox in der Datenbank; kein Broker zum Start | entschieden |
 | Datenzugriff | SQLAlchemy 2, Alembic | entschieden |
 | Datenbank | SQLite oder Postgres, per Konfiguration | entschieden |
 | Objektspeicher | S3-kompatibel (z. B. Garage, SeaweedFS) | Server offen |
@@ -202,6 +207,36 @@ Regeln sind Daten in der Datenbank, keine Code-Änderung; Admins pflegen sie in 
 - **Schleifenschutz:** Regeln laufen pro Änderung einmal in fester Reihenfolge; eine Regel-Aktion löst keine weiteren Regeln aus.
 - **Konflikt:** Setzen zwei Regeln unterschiedliche Schubladen, geht das Dokument auf Gelb.
 
+## Asynchronität und Ereignisse
+
+Kein API-Aufruf wartet auf OCR, Parsing oder LLM: Die API nimmt an, quittiert sofort, die Verarbeitung läuft im Hintergrund, und jede Zustandsänderung wird als Ereignis verteilt.
+
+**Ablauf**
+
+1. `POST /documents`: Original nach S3, dann Dokument und Ereignis `document.received` in einer Transaktion; Antwort `202 Accepted` mit Dokument-ID.
+2. Der Worker verarbeitet Schritt für Schritt; jeder Schritt schreibt Ergebnis und Ereignis in einer Transaktion.
+3. Ein Verteiler liest die Outbox und stellt zu: Web-UI (Server-Sent Events), Webhooks, Suchindex.
+
+**Transactional Outbox**
+
+- Zustand und Ereignis landen in derselben Datenbank-Transaktion; kein Ereignis geht verloren, wenn die Zustellung abbricht.
+- Zustellung mindestens einmal; Empfänger erkennen Wiederholungen an der Ereignis-ID.
+- SQLite: Outbox wird abgefragt (Polling). Postgres: optional `LISTEN/NOTIFY` als Optimierung im Adapter.
+- Ein Broker (Valkey Streams, NATS) wird erst als weiterer Adapter nötig, z. B. bei mehreren API-Instanzen.
+
+**Ereignisse (Vorschlag)**
+
+`document.received`, `document.step_completed`, `document.lane_changed`, `document.filed`, `document.updated`, `document.deleted`.
+
+**Webhooks**
+
+- Abonnement: Ziel-URL, Ereignistypen, Geheimnis.
+- Zustellung signiert (HMAC-SHA256), Wiederholung mit wachsendem Abstand, Zustellprotokoll in der UI.
+
+**Nebenläufigkeit im Code**
+
+Durchgängig `async`: FastAPI, SQLAlchemy async (asyncpg bzw. aiosqlite), HTTP-Clients. Rechenlastige Schritte (OCR, Docling) laufen in eigenen Prozessen, damit sie die Event-Loop nicht blockieren.
+
 ## Schnittstellen
 
 Die REST-API ist der einzige Zugang; es gibt keine Hintertüren für UI oder Migration.
@@ -234,3 +269,5 @@ Ein eigener CLI-Client liest die Paperless-REST-API und schreibt über die Papiq
 - [ ] Embedding-Modell für die semantische Suche wählen (lokal oder Cloud)
 - [ ] Migration: Paperless-Speicherpfade und -Berechtigungen auf Schubladen abbilden
 - [ ] Verfügbarkeit des Namens „Papiq“ prüfen (GitHub, PyPI, Docker Hub, Marken)
+- [ ] Webhooks und Rechte: Wer darf Webhooks anlegen, und welche Dokumente dürfen sie sehen (nur Admin, oder pro Nutzer auf eigene/geteilte Schubladen begrenzt)?
+- [ ] Ereignistypen bestätigen

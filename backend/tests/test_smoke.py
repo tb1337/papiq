@@ -7,4 +7,4 @@ def test_version_is_set() -> None:
 
 
 def test_ports_are_exported() -> None:
-    assert len(ports.__all__) == 9
+    assert len(ports.__all__) == 10

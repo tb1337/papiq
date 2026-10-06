@@ -11,6 +11,9 @@ the MCP server and the Paperless migration tool are clients of that API.
 - **Headless.** The REST API (OpenAPI) is the only way in. No back doors for the UI.
 - **Hexagonal.** The domain core knows no database, object store, search engine or LLM — only
   ports it defines itself. Every technology lives in a replaceable adapter.
+- **Asynchronous.** API calls return immediately (`202 Accepted`); processing runs in the
+  background. State changes are published as events (transactional outbox) to the web UI,
+  webhooks and the search index. Async Python throughout.
 - **Explainable ingest.** Every document runs through retryable steps and ends up in one of
   three lanes: green (done), yellow (needs confirmation), red (needs intervention).
 - **Multi-user.** Native logins with optional TOTP, optional OIDC. Permissions are attached to
