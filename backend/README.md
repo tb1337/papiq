@@ -40,6 +40,33 @@ adapter must pass.
 `papiq.composition.container.build_memory_container()` wires all designed ports to their
 in-memory adapters; `build_services()` creates the use cases on top.
 
+## Persistence
+
+`adapters/outbound/sql` implements the unit of work (all repositories, processing log, outbox,
+job queue) and the event bus on SQLite or Postgres, selected by `PAPIQ_DB_TYPE`. It uses
+SQLAlchemy 2 Core (async; aiosqlite, asyncpg); the domain classes are not ORM-mapped,
+`tables.py` defines the tables and the repositories convert explicitly.
+
+- Isolation is read committed with optimistic locking (`version` column) on both databases.
+  On SQLite, reads run in autocommit mode and a unit takes the write lock with
+  `BEGIN IMMEDIATE` before its first write; writers are serialized. A task must not open a
+  second writing unit while its first one is still open: it would wait for its own lock until
+  the busy timeout.
+- Uniqueness is enforced by the database. Case-insensitive names are stored with a
+  `name_key` column (Unicode case folding) under a unique index.
+- Timestamps are UTC (`timestamptz`; on SQLite fixed-width UTC text), decimals exact (`numeric`;
+  on SQLite text).
+- Outbox events are written at commit. On Postgres, an advisory lock makes transactions with
+  events commit one at a time, so `outbox.seq` follows commit order and a subscriber's position
+  never skips a late commit. The event bus is polled (`dispatch`); handlers run outside of
+  transactions; failed deliveries are kept per subscriber in `event_retries` and repeated.
+- Claiming jobs uses `FOR UPDATE SKIP LOCKED` on Postgres and the write lock on SQLite.
+
+Migrations are one Alembic chain for both databases (batch mode on SQLite), in
+`adapters/outbound/sql/migrations`. Apply them with `python -m papiq.composition migrate`; it
+creates a missing SQLite file. A schema change needs both an edit of `tables.py` and a new
+revision; a test compares the migrated schema with the table definitions.
+
 ## Configuration
 
 Environment variables with the prefix `PAPIQ_` only; there is no configuration file. Invalid or
@@ -60,7 +87,7 @@ Choices are case-insensitive; surrounding whitespace is removed and blank values
 | `PAPIQ_LOG_FORMAT` | `json` (default), `console` | |
 | `PAPIQ_LOG_LEVEL` | `INFO` (default), `DEBUG`, `WARNING`, `ERROR`, `CRITICAL` | |
 | `PAPIQ_DB_TYPE` | `sqlite` (default), `postgres` | |
-| `PAPIQ_DB_SQLITE_PATH` | `data/papiq.db` | SQLite only |
+| `PAPIQ_DB_SQLITE_PATH` | `data/papiq.db` | SQLite only; local volume (WAL) |
 | `PAPIQ_DB_HOST`, `_NAME`, `_USER` | required for `postgres` | |
 | `PAPIQ_DB_PORT` | `5432` | |
 | `PAPIQ_DB_PASSWORD` | required for `postgres` | *secret* |
@@ -88,5 +115,10 @@ The markers are applied by directory, so new tests only need to be placed in the
 
 `tests/contracts` holds the contract suites (classes such as `UnitOfWorkContract`). An adapter's
 test module subclasses each suite as `Test...` and provides the adapter fixture
-(`uow_factory`, `event_bus`, `object_store`, `clock`); see
+(`uow_factory`, `event_bus_factory`, `object_store`, `clock`); see
 `tests/unit/adapters/memory/test_contracts.py`.
+
+The SQL adapter runs the contract suites and `tests/sql_suite.py` (types, concurrency,
+migrations) on SQLite in `tests/unit/adapters/sql` (a migrated database file per test) and on
+Postgres in `tests/integration/adapters/sql` (a database of its own per test session, emptied
+before every test). The CI fails if the Postgres run skips them.
