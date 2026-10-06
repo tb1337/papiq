@@ -174,7 +174,10 @@ class JobQueueContract:
         first = await enqueue(uow_factory, dedup_key="doc:1:ocr")
         assert first is not None
         assert await enqueue(uow_factory, dedup_key="doc:1:ocr") is None
-        assert await enqueue(uow_factory, dedup_key="doc:1:parse") is not None
+        assert (
+            await enqueue(uow_factory, run_at=timedelta(hours=1), dedup_key="doc:1:parse")
+            is not None
+        )
         claimed = await claim(uow_factory, kinds=["test"])
         assert claimed is not None and claimed.dedup_key == "doc:1:ocr"
         assert await enqueue(uow_factory, dedup_key="doc:1:ocr") is None

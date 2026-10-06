@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from datetime import timedelta
 
 import pytest
@@ -43,6 +44,13 @@ async def publish(uow_factory: UnitOfWorkFactory, *events: DomainEvent) -> None:
 
 
 class EventBusContract:
+    """Needs the fixtures `uow_factory` and `event_bus_factory` (new bus instances on the same
+    database)."""
+
+    @pytest.fixture
+    def event_bus(self, event_bus_factory: Callable[[], EventBus]) -> EventBus:
+        return event_bus_factory()
+
     async def test_committed_events_are_delivered_once(
         self, uow_factory: UnitOfWorkFactory, event_bus: EventBus
     ) -> None:
@@ -113,6 +121,57 @@ class EventBusContract:
         assert await event_bus.dispatch() == 1
         assert flaky.received == [second, first]
         assert await event_bus.dispatch() == 0
+
+    async def test_permanently_failing_events_do_not_block_later_ones(
+        self, uow_factory: UnitOfWorkFactory, event_bus: EventBus
+    ) -> None:
+        good = received(9)
+
+        async def handler(event: DomainEvent) -> None:
+            if event != good:
+                raise RuntimeError("poison")
+            delivered.append(event)
+
+        delivered: list[DomainEvent] = []
+        event_bus.subscribe("test", handler)
+        await publish(uow_factory, *(received(n) for n in range(3)))
+        await event_bus.dispatch(limit=2)
+        await event_bus.dispatch(limit=2)
+        await publish(uow_factory, good)
+        await event_bus.dispatch(limit=2)
+        assert delivered == [good]
+
+    async def test_a_late_commit_is_not_skipped(
+        self, uow_factory: UnitOfWorkFactory, event_bus: EventBus
+    ) -> None:
+        recorder = Recorder()
+        event_bus.subscribe("test", recorder)
+        early, late = received(1), received(2)
+        async with uow_factory() as slow:
+            await slow.outbox.add([early])
+            await publish(uow_factory, late)
+            assert await event_bus.dispatch() == 1
+            await slow.commit()
+        assert await event_bus.dispatch() == 1
+        assert recorder.received == [late, early]
+
+    async def test_a_new_bus_resumes_the_subscription(
+        self, uow_factory: UnitOfWorkFactory, event_bus_factory: Callable[[], EventBus]
+    ) -> None:
+        before = event_bus_factory()
+        first = Recorder()
+        before.subscribe("index", first)
+        delivered, missed = received(1), received(2)
+        await publish(uow_factory, delivered)
+        await before.dispatch()
+        await publish(uow_factory, missed)  # committed while no bus runs
+
+        after = event_bus_factory()
+        second = Recorder()
+        after.subscribe("index", second)
+        await after.dispatch()
+        assert first.received == [delivered]
+        assert second.received == [missed]
 
     async def test_subscribers_receive_events_from_subscription_on(
         self, uow_factory: UnitOfWorkFactory, event_bus: EventBus

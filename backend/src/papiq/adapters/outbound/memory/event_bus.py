@@ -1,50 +1,52 @@
-"""In-memory event bus: delivers committed outbox events of a MemoryDatabase."""
+"""In-memory event bus: delivers committed outbox events of a MemoryDatabase.
+
+Events are appended to the outbox at commit, so outbox positions follow commit order and no
+event can be skipped. Delivery state lives in the database; a new bus on the same database
+resumes existing subscriptions.
+"""
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
 
-from papiq.adapters.outbound.memory.database import MemoryDatabase
+from papiq.adapters.outbound.memory.database import MemoryDatabase, SubscriptionState
 from papiq.core.ports.event_bus import EventHandler
 
 log = logging.getLogger(__name__)
 
 
-@dataclass
-class _Subscription:
-    handler: EventHandler
-    cursor: int  # position in the outbox of the next new event
-    retries: list[int] = field(default_factory=list)  # positions of failed events
-
-
 class MemoryEventBus:
     def __init__(self, database: MemoryDatabase) -> None:
         self._db = database
-        self._subscriptions: dict[str, _Subscription] = {}
+        self._handlers: dict[str, EventHandler] = {}
         self._lock = asyncio.Lock()
 
     def subscribe(self, subscriber: str, handler: EventHandler) -> None:
-        if subscriber in self._subscriptions:
+        if subscriber in self._handlers:
             raise ValueError(f"subscriber {subscriber!r} is already registered")
-        self._subscriptions[subscriber] = _Subscription(handler, cursor=len(self._db.outbox))
+        self._handlers[subscriber] = handler
+        self._db.subscriptions.setdefault(subscriber, SubscriptionState(len(self._db.outbox)))
 
     async def dispatch(self, *, limit: int = 100) -> int:
         async with self._lock:
             delivered = 0
-            for name, subscription in self._subscriptions.items():
-                delivered += await self._deliver(name, subscription, limit)
+            for name, handler in self._handlers.items():
+                state = self._db.subscriptions[name]
+                delivered += await self._deliver(name, handler, state, limit)
             return delivered
 
-    async def _deliver(self, name: str, subscription: _Subscription, limit: int) -> int:
-        outbox = self._db.outbox
-        pending = [*subscription.retries, *range(subscription.cursor, len(outbox))]
-        batch = pending[:limit]
-        failed = [position for position in subscription.retries if position not in batch]
+    async def _deliver(
+        self, name: str, handler: EventHandler, state: SubscriptionState, limit: int
+    ) -> int:
+        retries, waiting = state.retries[:limit], state.retries[limit:]
+        end = min(len(self._db.outbox), state.cursor + limit)
+        fresh = list(range(state.cursor, end))
+        state.cursor = end
+        failed: list[int] = []
         delivered = 0
-        for position in batch:
-            event = outbox[position]
+        for position in [*retries, *fresh]:
+            event = self._db.outbox[position]
             try:
-                await subscription.handler(event)
+                await handler(event)
             except Exception:
                 log.exception(
                     "event handler failed", extra={"subscriber": name, "event_id": str(event.id)}
@@ -52,6 +54,5 @@ class MemoryEventBus:
                 failed.append(position)
             else:
                 delivered += 1
-            subscription.cursor = max(subscription.cursor, position + 1)
-        subscription.retries = sorted(failed)
+        state.retries = sorted([*waiting, *failed])
         return delivered
