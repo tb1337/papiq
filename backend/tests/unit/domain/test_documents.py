@@ -136,11 +136,14 @@ def test_attribute_values_are_validated_and_scoped() -> None:
     assert document.attributes == {}
 
 
-def test_failed_validation_changes_nothing_but_earlier_fields() -> None:
+def test_failed_validation_changes_nothing() -> None:
     note = AttributeDefinition.create(name="Note", data_type=AttributeType.TEXT, now=NOW)
     document = builders.document(builders.user(), builders.drawer(builders.user()))
     with pytest.raises(ValidationError):
-        document.apply_changes(DocumentChanges(attributes={note.id: 5}), {note.id: note}, LATER)
+        document.apply_changes(
+            DocumentChanges(title="New", attributes={note.id: 5}), {note.id: note}, LATER
+        )
+    assert document.title == "scan"
     assert document.attributes == {}
     assert document.pull_events() == []
 

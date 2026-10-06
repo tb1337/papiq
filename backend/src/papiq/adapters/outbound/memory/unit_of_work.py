@@ -108,6 +108,10 @@ class MemoryUnitOfWork:
                 else:
                     rows[id] = row
         self._db.processing_log.extend(self._log)
+        removed = {id for id, row in self._writes.get(DOCUMENTS.name, {}).items() if row is None}
+        self._db.processing_log[:] = [
+            entry for entry in self._db.processing_log if entry.document_id not in removed
+        ]
         self._db.outbox.extend(self._events)
         self._db.jobs.update(self._jobs)
         self._closed = True
@@ -281,6 +285,8 @@ class MemoryProcessingLog:
 
     async def list_for(self, document: DocumentId) -> list[StepRun]:
         self._uow._check_open()
+        if self._uow._row(DOCUMENTS, document) is _REMOVED:
+            return []
         entries = [*self._uow._db.processing_log, *self._uow._log]
         return [entry for entry in entries if entry.document_id == document]
 

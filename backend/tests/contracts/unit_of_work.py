@@ -1,3 +1,4 @@
+import asyncio
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -138,22 +139,31 @@ class UnitOfWorkContract:
         async with uow_factory() as uow:
             assert (await uow.users.get(owner.id)).username == "first"
 
-    async def test_concurrent_updates_the_second_commit_fails(
-        self, uow_factory: UnitOfWorkFactory
-    ) -> None:
+    async def test_concurrent_updates_one_wins(self, uow_factory: UnitOfWorkFactory) -> None:
+        """Both units read the same version and update it; exactly one commit succeeds.
+
+        The two units run as concurrent tasks, so an adapter may block the second write until
+        the first unit commits (row locks) or detect the conflict on commit.
+        """
         owner, _ = await owner_with_drawer(uow_factory)
-        async with uow_factory() as first, uow_factory() as second:
-            mine = await first.users.get(owner.id)
-            theirs = await second.users.get(owner.id)
-            mine.username = "first"
-            theirs.username = "second"
-            await first.users.update(mine)
-            await second.users.update(theirs)
-            await first.commit()
-            with pytest.raises(ConcurrencyError):
-                await second.commit()
+
+        async def rename(name: str) -> str:
+            async with uow_factory() as uow:
+                user = await uow.users.get(owner.id)
+                await asyncio.sleep(0)
+                user.username = name
+                await uow.users.update(user)
+                await asyncio.sleep(0)
+                await uow.commit()
+            return name
+
+        results = await asyncio.gather(rename("first"), rename("second"), return_exceptions=True)
+        winners = [result for result in results if isinstance(result, str)]
+        assert len(winners) == 1
+        assert any(isinstance(result, ConcurrencyError) for result in results)
         async with uow_factory() as uow:
-            assert (await uow.users.get(owner.id)).username == "first"
+            stored = await uow.users.get(owner.id)
+        assert (stored.username, stored.version) == (winners[0], 2)
 
     async def test_update_of_missing_entity(self, uow_factory: UnitOfWorkFactory) -> None:
         async with uow_factory() as uow:
@@ -191,12 +201,18 @@ class UnitOfWorkContract:
     async def test_concurrent_adds_of_the_same_name_conflict(
         self, uow_factory: UnitOfWorkFactory
     ) -> None:
-        async with uow_factory() as first, uow_factory() as second:
-            await first.users.add(builders.user("carol"))
-            await second.users.add(builders.user("Carol"))
-            await first.commit()
-            with pytest.raises(ConflictError):
-                await second.commit()
+        async def add(name: str) -> User:
+            user = builders.user(name)
+            async with uow_factory() as uow:
+                await uow.users.add(user)
+                await asyncio.sleep(0)
+                await uow.commit()
+            return user
+
+        results = await asyncio.gather(add("carol"), add("Carol"), return_exceptions=True)
+        added = [result for result in results if isinstance(result, User)]
+        assert len(added) == 1
+        assert any(isinstance(result, ConflictError) for result in results)
 
     async def test_list_all(self, uow_factory: UnitOfWorkFactory) -> None:
         users = [builders.user() for _ in range(3)]
@@ -439,6 +455,31 @@ class UnitOfWorkContract:
                 visible = {document.id for document in await uow.documents.list_visible_to(user.id)}
                 assert visible == expected, user.username
         assert len(expected) == 0  # the stranger sees nothing
+
+    async def test_removing_a_document_removes_its_processing_log(
+        self, uow_factory: UnitOfWorkFactory
+    ) -> None:
+        owner, drawer = await owner_with_drawer(uow_factory)
+        document = builders.document(owner, drawer)
+        entry = StepRun(
+            document_id=document.id,
+            step=Step.RECEIVE,
+            run=1,
+            result=OK,
+            pipeline_version="0.1.0",
+            started_at=NOW,
+            duration=timedelta(0),
+        )
+        async with uow_factory() as uow:
+            await uow.documents.add(document)
+            await uow.processing_log.append(entry)
+            await uow.commit()
+        async with uow_factory() as uow:
+            await uow.documents.remove(document.id)
+            assert await uow.processing_log.list_for(document.id) == []
+            await uow.commit()
+        async with uow_factory() as uow:
+            assert await uow.processing_log.list_for(document.id) == []
 
     # --- processing log -------------------------------------------------------------------------
 

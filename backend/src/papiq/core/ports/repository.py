@@ -92,7 +92,7 @@ class DocumentRepository(Repository[DocumentId, Document], Protocol):
         ...
 
     async def remove(self, id: DocumentId) -> None:
-        """Delete the document; NotFoundError if it does not exist."""
+        """Delete the document and its processing log; NotFoundError if it does not exist."""
         ...
 
 
