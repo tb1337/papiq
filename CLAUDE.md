@@ -44,7 +44,8 @@ Run all five checks before every commit.
   as `PAPIQ_<NAME>_FILE`; both set is an error. See `backend/src/papiq/composition/settings.py`.
 - Async throughout (FastAPI, SQLAlchemy async, async HTTP clients).
 - Tests: `tests/unit` (marker `unit`) needs no services, `tests/integration` (marker `integration`) does.
-  Markers are applied by directory.
+  Markers are applied by directory. Contract suites live in `tests/contracts`; adapters subclass them.
+- State change, domain events and follow-up jobs go through one `UnitOfWork` and one commit.
 
 ## Language
 
