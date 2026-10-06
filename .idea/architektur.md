@@ -114,7 +114,7 @@ Drei Speicher mit klarer Aufgabe: Datenbank für Metadaten, Objektspeicher für 
 
 - Zwei gleichwertige Adapter: S3 (erster Server: Garage) oder lokales Dateisystem.
 - Papiq nutzt keine Speicher-Events. Ereignisse entstehen ausschließlich in der Outbox; so bleibt der Adapter frei tauschbar (Garage und Dateisystem kennen keine Events).
-- Originale unveränderlich, Objekt-Key = SHA-256 des Inhalts; Dubletten werden darüber erkannt.
+- Originale unveränderlich, Objekt-Key = SHA-256 des Inhalts; Dubletten werden darüber erkannt. Eine Datei, die derselbe Besitzer schon hat, wird abgelehnt; ein anderer Nutzer bekommt ein eigenes Dokument zum selben Objekt.
 - Daneben die Derivate: Archiv-PDF mit Textlayer, Docling-Ausgabe (Markdown/JSON), Vorschaubilder.
 
 **Suche (Meilisearch)**
@@ -135,10 +135,10 @@ Angelehnt an Paperless-ngx, ohne Speicherpfade, mit Schubladen als Ablage- und R
 | Dokumenttyp | Art des Dokuments | global; bringt zugeordnete Attribute mit |
 | Tag | Klassifizierung | beliebig viele pro Dokument; global; trägt keine Rechte |
 | Attribut | frei definierbares Feld (Paperless: Custom Field) | Geltungsbereich global oder je Dokumenttyp; fester Datentyp |
-| Schublade | Ablage- und Rechte-Einheit | hat einen Besitzer; teilbar; jeder Nutzer hat eine private Standardschublade |
+| Schublade | Ablage- und Rechte-Einheit | hat einen Besitzer; teilbar; jeder Nutzer hat eine private Standardschublade (nicht teilbar, nicht löschbar) |
 
 - Stammdaten (Kontakte, Typen, Tags, Attribute) pflegen nur Admins.
-- Attribut-Datentypen (Vorschlag): Text, Zahl, Betrag, Datum, Ja/Nein, Auswahl, Link.
+- Attribut-Datentypen: Text, Zahl, Betrag (Dezimalzahl mit ISO-4217-Währung je Wert), Datum, Ja/Nein, Auswahl (eine Option aus fester Liste), Link (absolute http(s)-URL).
 
 ## Berechtigungen
 
@@ -149,6 +149,7 @@ Rechte hängen an der Schublade, nie am einzelnen Dokument.
 - **Andere Nutzer** sehen ein Dokument nur über eine Schublade, die mit ihnen geteilt ist – mit „lesen“ oder „lesen/schreiben“.
 - **Teilen nach Kontakt und Typ** wird als Ablageregel umgesetzt: „Kontakt X + Typ Y → Schublade Z“. Sichtbarkeit bleibt eine explizite Zuordnung und ändert sich nicht still durch eine Fehlklassifizierung.
 - **Posteingang:** Dokumente in Gelb oder Rot sieht nur der Besitzer, bis sie gelöst sind.
+- **Verschieben** in eine andere Schublade: der Besitzer (nur in Schubladen, in denen er schreiben darf) oder ein Admin (jedes Dokument in jede Schublade, ohne dadurch Leserecht zu erhalten). Eine Freigabe erlaubt kein Verschieben.
 - **Stammdaten** sind global sichtbar – Kontaktnamen sehen alle Nutzer (bewusst akzeptiert).
 
 ## Authentifizierung
@@ -187,7 +188,7 @@ Jedes Dokument durchläuft feste Schritte, jeder Schritt ist einzeln wiederholba
 | Gelb | Mensch muss bestätigen | geringe Konfidenz oder neue Gegebenheit |
 | Rot | Mensch muss eingreifen | technischer Fehler nach allen Retries, oder nichts erkannt |
 
-Die Lane eines Dokuments ist das schlechteste Ergebnis aller Schritte. Gelbe und rote Dokumente bleiben im Posteingang des Besitzers, bis sie gelöst sind.
+Die Lane eines Dokuments ist das schlechteste Ergebnis aller Schritte. Solange die Pipeline läuft, hat ein Dokument keine Lane; andere Nutzer sehen es erst, wenn es grün ist. Gelbe und rote Dokumente bleiben im Posteingang des Besitzers, bis sie gelöst sind.
 
 **Konfidenz aus prüfbaren Fakten statt LLM-Selbsteinschätzung**
 
@@ -323,7 +324,7 @@ Ein eigener CLI-Client liest die Paperless-REST-API und schreibt über die Papiq
 
 - [ ] Backup-Strategie für SQLite und Postgres
 - [ ] Konfidenz-Schwellen und Anzahl automatischer Retries festlegen
-- [ ] Attribut-Datentypen bestätigen
+- [x] Attribut-Datentypen bestätigen
 - [ ] Embedding-Modell für die semantische Suche wählen (lokal oder Cloud)
 - [ ] Migration: Paperless-Speicherpfade und -Berechtigungen auf Schubladen abbilden
 - [ ] Verfügbarkeit des Namens „Papiq“ prüfen (GitHub, PyPI, Docker Hub, Marken)
