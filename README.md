@@ -26,7 +26,7 @@ the MCP server and the Paperless migration tool are clients of that API.
 | `backend/` | Python package `papiq`: domain core, ports, adapters (API, MCP, worker) |
 | `web/` | Web UI (single-page app on top of the API) |
 | `migration/` | Migration client from Paperless-ngx |
-| `deploy/` | Docker Compose stack |
+| `deploy/` | Docker image (s6-overlay) and Compose stack |
 | `.idea/` | Design documents (architecture, in German) |
 
 ## Glossary

@@ -1,8 +1,19 @@
 # papiq deploy
 
-Docker Compose stack: API, worker, web UI, database, object storage, Meilisearch.
-LLM and identity provider are external.
+Papiq ships as a single Docker image. s6-overlay runs as PID 1 and supervises the Papiq
+processes inside it:
 
-Object storage is either Garage (S3) or a local filesystem volume, chosen by configuration.
+| Service | Type | Purpose |
+| --- | --- | --- |
+| `init-papiq` | oneshot | validate configuration, prepare volumes (`PUID`/`PGID`) |
+| `init-migrations` | oneshot | run Alembic migrations before API and worker start |
+| `svc-api` | longrun | Uvicorn with FastAPI: REST, MCP, SSE, web UI files |
+| `svc-worker` | longrun | pipeline jobs, outbox dispatch, webhook delivery |
+
+Outside the Papiq container: Postgres (if used), Garage (if S3 is used), Meilisearch, LLM,
+identity provider. With SQLite and the filesystem adapter, database and files live on volumes
+of the Papiq container.
+
+Configuration: environment variables prefixed `PAPIQ_`.
 
 Not started.
