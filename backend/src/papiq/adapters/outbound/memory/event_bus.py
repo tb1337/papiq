@@ -29,7 +29,7 @@ class MemoryEventBus:
     async def dispatch(self, *, limit: int = 100) -> int:
         async with self._lock:
             delivered = 0
-            for name, handler in self._handlers.items():
+            for name, handler in list(self._handlers.items()):
                 state = self._db.subscriptions[name]
                 delivered += await self._deliver(name, handler, state, limit)
             return delivered
@@ -54,5 +54,6 @@ class MemoryEventBus:
                 failed.append(position)
             else:
                 delivered += 1
-        state.retries = sorted([*waiting, *failed])
+        # Failed again: behind the waiting ones, so repeated failures do not starve others.
+        state.retries = [*waiting, *failed]
         return delivered

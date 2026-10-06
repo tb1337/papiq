@@ -1,7 +1,7 @@
 """Composition root: choose the configured adapter for each port.
 
 Adapters register their factories in the tables below, keyed by the configured adapter name.
-No production adapter exists yet, so every selection fails with AdapterNotAvailableError.
+A port whose configured adapter does not exist yet fails with AdapterNotAvailableError.
 """
 
 from collections.abc import Callable, Mapping
@@ -14,7 +14,9 @@ from papiq.adapters.outbound.memory import (
     MemoryObjectStore,
     MemoryUnitOfWorkFactory,
 )
+from papiq.adapters.outbound.sql import SqlEventBus, SqlUnitOfWorkFactory
 from papiq.adapters.outbound.system import SystemClock
+from papiq.composition.database import open_database
 from papiq.composition.errors import AdapterNotAvailableError
 from papiq.composition.settings import Settings
 from papiq.core.domain.pipeline import PIPELINE
@@ -48,9 +50,18 @@ class Persistence:
     event_bus: EventBus
 
 
+def sql_persistence(settings: Settings) -> Persistence:
+    """SQLite or Postgres, per `PAPIQ_DB_TYPE`; the schema must be migrated."""
+    database = open_database(settings)
+    return Persistence(unit_of_work=SqlUnitOfWorkFactory(database), event_bus=SqlEventBus(database))
+
+
 # Keys: `PAPIQ_DB_TYPE` (persistence), `PAPIQ_STORAGE_TYPE` (object store),
 # or the fixed adapter name for ports with a single adapter.
-PERSISTENCE: dict[str, Factory[Persistence]] = {}
+PERSISTENCE: dict[str, Factory[Persistence]] = {
+    "sqlite": sql_persistence,
+    "postgres": sql_persistence,
+}
 OBJECT_STORES: dict[str, Factory[ObjectStore]] = {}
 SEARCH_INDEXES: dict[str, Factory[SearchIndex]] = {}
 LANGUAGE_MODELS: dict[str, Factory[LanguageModel]] = {}
