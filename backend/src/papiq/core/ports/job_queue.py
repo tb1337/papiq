@@ -36,13 +36,17 @@ class JobQueue(Protocol):
         job whose lease has expired. Counts the attempt. None if no job is due."""
         ...
 
-    async def complete(self, job: JobId) -> None: ...
+    # `complete`, `reschedule` and `fail` take the claimed job as returned by `claim`. They raise
+    # ConcurrencyError if the job is no longer running under that claim, e.g. because the lease
+    # ran out and another worker claimed it: only the current claim may finish a job.
 
-    async def reschedule(self, job: JobId, *, run_at: datetime, error: str) -> None:
+    async def complete(self, job: Job) -> None: ...
+
+    async def reschedule(self, job: Job, *, run_at: datetime, error: str) -> None:
         """Release the job to run again at `run_at`, e.g. after a failed attempt."""
         ...
 
-    async def fail(self, job: JobId, *, error: str) -> None:
+    async def fail(self, job: Job, *, error: str) -> None:
         """Give the job up; it will not run again."""
         ...
 
