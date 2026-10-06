@@ -21,16 +21,6 @@ S3 = {
 }
 
 
-@pytest.fixture(autouse=True)
-def clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The process environment (devcontainer, CI) must not leak into these tests."""
-    import os
-
-    for name in list(os.environ):
-        if name.upper().startswith("PAPIQ_"):
-            monkeypatch.delenv(name)
-
-
 def set_env(monkeypatch: pytest.MonkeyPatch, values: dict[str, str]) -> None:
     for name, value in values.items():
         monkeypatch.setenv(name, value)
