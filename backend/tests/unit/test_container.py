@@ -1,8 +1,10 @@
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from papiq.adapters.outbound.memory import ManualClock
+from papiq.adapters.outbound.sql import SqlEventBus, SqlUnitOfWorkFactory
 from papiq.adapters.outbound.system import SystemClock
 from papiq.composition import container
 from papiq.composition.container import (
@@ -28,21 +30,25 @@ def fake_persistence(_: Settings) -> Persistence:
     return Persistence(unit_of_work=object, event_bus=object())  # type: ignore[arg-type]
 
 
-def test_missing_adapter_is_reported_with_port_and_name() -> None:
+def test_missing_adapter_is_reported_with_port_and_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(container.PERSISTENCE, "sqlite", fake_persistence)
     with pytest.raises(AdapterNotAvailableError) as info:
         build_container(settings())
-    assert str(info.value) == "persistence: adapter 'sqlite' is not implemented yet"
-    assert (info.value.port, info.value.adapter) == ("persistence", "sqlite")
+    assert str(info.value) == "object_store: adapter 'filesystem' is not implemented yet"
+    assert (info.value.port, info.value.adapter) == ("object_store", "filesystem")
 
 
-def test_selection_follows_the_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
-    postgres = settings(db_type="postgres", db_host="h", db_name="n", db_user="u", db_password="p")
-    with pytest.raises(AdapterNotAvailableError, match="persistence: adapter 'postgres'"):
-        build_container(postgres)
-
-    monkeypatch.setitem(container.PERSISTENCE, "postgres", fake_persistence)
-    with pytest.raises(AdapterNotAvailableError, match="object_store: adapter 'filesystem'"):
-        build_container(postgres)
+def test_the_database_type_selects_the_sql_adapter(tmp_path: Path) -> None:
+    for configured in (
+        settings(db_sqlite_path=tmp_path / "papiq.db"),
+        settings(db_type="postgres", db_host="h", db_name="n", db_user="u", db_password="p"),
+    ):
+        persistence = container.PERSISTENCE[configured.db_type](configured)
+        assert isinstance(persistence.unit_of_work, SqlUnitOfWorkFactory)
+        assert isinstance(persistence.event_bus, SqlEventBus)
+    assert list(tmp_path.iterdir()) == []  # nothing is created before `migrate`
 
 
 def test_each_port_is_checked_in_turn(monkeypatch: pytest.MonkeyPatch) -> None:
