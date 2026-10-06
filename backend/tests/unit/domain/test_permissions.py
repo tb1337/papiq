@@ -7,6 +7,7 @@ from papiq.core.domain.permissions import (
     can_manage_drawer,
     can_manage_master_data,
     can_manage_users,
+    can_move_document,
     can_read_document,
     can_write_document,
     document_access,
@@ -144,3 +145,15 @@ def test_admins_have_no_extra_rights_on_documents(owner: User, shared: Drawer) -
     assert document_access(admin, document, shared) is None
     assert not can_file_into(admin, shared)
     assert not can_manage_drawer(admin, shared)
+
+
+def test_moving_is_for_the_owner_and_admins(
+    owner: User, writer: User, stranger: User, shared: Drawer
+) -> None:
+    document = builders.processed(owner, shared)
+    owners_private = builders.drawer(owner)
+    foreign = builders.drawer(stranger)
+    assert can_move_document(owner, document, owners_private)
+    assert not can_move_document(owner, document, foreign)
+    assert not can_move_document(writer, document, shared)
+    assert can_move_document(builders.admin(), document, foreign)

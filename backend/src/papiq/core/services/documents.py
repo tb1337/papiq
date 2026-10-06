@@ -1,7 +1,7 @@
 from papiq.core.domain.documents import Document, DocumentChanges, Unset
 from papiq.core.domain.errors import NotFoundError, PermissionDeniedError
 from papiq.core.domain.ids import DocumentId, DrawerId, UserId
-from papiq.core.domain.permissions import can_file_into, is_document_owner
+from papiq.core.domain.permissions import can_move_document, is_document_owner
 from papiq.core.domain.pipeline import StepRun
 from papiq.core.ports import Clock, UnitOfWork, UnitOfWorkFactory
 from papiq.core.services._access import (
@@ -47,18 +47,24 @@ class DocumentService:
             await uow.commit()
         return document
 
-    async def move(self, actor: UserId, id: DocumentId, drawer: DrawerId) -> Document:
-        """Needs write access to the document and to the target drawer."""
+    async def move(self, actor: UserId, id: DocumentId, drawer: DrawerId) -> None:
+        """The owner moves into a drawer they may write to; an admin moves any document into
+        any drawer. Moving grants the admin no read access, so nothing is returned."""
         async with self._uow() as uow:
             user = await load_actor(uow, actor)
-            document, _ = await writable_document(uow, user, id)
-            target = await visible_drawer(uow, user, drawer)
-            if not can_file_into(user, target):
+            if user.is_admin:
+                document = await uow.documents.get(id)
+                target = await uow.drawers.get(drawer)
+            else:
+                document, _ = await readable_document(uow, user, id)
+                if not is_document_owner(user, document):
+                    raise PermissionDeniedError(f"only the owner moves document {id}")
+                target = await visible_drawer(uow, user, drawer)
+            if not can_move_document(user, document, target):
                 raise PermissionDeniedError(f"no write access to drawer {drawer}")
             document.move_to(target.id, self._clock.now())
             await _save(uow, document)
             await uow.commit()
-        return document
 
     async def delete(self, actor: UserId, id: DocumentId) -> None:
         """Owner only. Removes the metadata; stored files stay (cleanup is a later job)."""
