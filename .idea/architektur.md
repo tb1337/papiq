@@ -287,12 +287,22 @@ Papiq wird als ein Docker-Image ausgeliefert. Darin überwacht s6-overlay alle P
 | --- | --- | --- |
 | `init-papiq` | einmalig | Konfiguration prüfen, Verzeichnisse und Rechte für Volumes setzen (`PUID`/`PGID`) |
 | `init-migrations` | einmalig | Datenbankschema per Alembic aktualisieren, bevor API und Worker starten |
-| `svc-api` | dauerhaft | Uvicorn mit FastAPI: REST, MCP, SSE und Auslieferung der Web-UI |
+| `svc-api` | dauerhaft | Uvicorn mit FastAPI: REST, MCP, SSE und Auslieferung der Web-UI (statische Dateien, ohne zusätzlichen Webserver) |
 | `svc-worker` | dauerhaft | Pipeline-Jobs, Outbox-Verteilung, Webhook-Versand |
 
 **Außerhalb des Containers** (eigene Container oder extern): Datenbank (bei Postgres), Garage (bei S3), Meilisearch, LLM, Identity Provider. Mit SQLite und Dateisystem-Adapter liegen Datenbank und Dateien auf Volumes des Papiq-Containers.
 
-**Konfiguration** ausschließlich über Umgebungsvariablen mit Präfix `PAPIQ_`; die Composition Root liest sie beim Start und wählt die Adapter.
+**Konfiguration: vollständig über Umgebungsvariablen**
+
+- Jede technische Einstellung hat eine Umgebungsvariable mit Präfix `PAPIQ_`; eine Konfigurationsdatei ist nicht nötig. Beispiele: Adapter-Auswahl, Verbindungen, LLM- und Embedding-Modell, Konfidenz-Schwellen, Retries.
+- Die Composition Root liest sie beim Start, prüft sie (Pydantic Settings) und wählt die Adapter; ungültige Konfiguration bricht den Start mit klarer Meldung ab.
+- Fachliche Daten (Nutzer, Schubladen, Stammdaten, Regeln, Webhooks) sind keine Konfiguration; sie liegen in der Datenbank und werden über API und UI gepflegt.
+- `PAPIQ_ROLE=all|api|worker` legt fest, welche Dienste s6 startet. Standard `all`; getrennte API- und Worker-Container sind damit ohne zweites Image möglich.
+
+**Image**
+
+- Basis: Debian slim (wegen der Systempakete von OCRmyPDF: Tesseract, Ghostscript u. a.).
+- Docling ist im Image enthalten; dadurch wird es wegen PyTorch deutlich größer.
 
 ## Migration aus Paperless-ngx
 
@@ -316,7 +326,5 @@ Ein eigener CLI-Client liest die Paperless-REST-API und schreibt über die Papiq
 - [ ] Embedding-Modell für die semantische Suche wählen (lokal oder Cloud)
 - [ ] Migration: Paperless-Speicherpfade und -Berechtigungen auf Schubladen abbilden
 - [ ] Verfügbarkeit des Namens „Papiq“ prüfen (GitHub, PyPI, Docker Hub, Marken)
-- [ ] Container: Rollen per Umgebungsvariable (alles / nur API / nur Worker) für späteres Skalieren?
-- [ ] Container: Web-UI direkt von Uvicorn ausliefern oder mit Caddy im Container?
-- [ ] Container: Docling im Image (groß wegen PyTorch) oder als eigener Dienst über den Parser-Adapter?
-- [ ] Basis-Image festlegen (Debian slim wegen OCRmyPDF-Abhängigkeiten)
+- [ ] Image: PyTorch nur CPU (kleiner) oder zusätzlich eine GPU-Variante?
+- [ ] Secrets: zusätzlich `PAPIQ_…_FILE`-Variablen für Docker Secrets anbieten?

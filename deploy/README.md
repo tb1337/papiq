@@ -14,6 +14,9 @@ Outside the Papiq container: Postgres (if used), Garage (if S3 is used), Meilise
 identity provider. With SQLite and the filesystem adapter, database and files live on volumes
 of the Papiq container.
 
-Configuration: environment variables prefixed `PAPIQ_`.
+Configuration: entirely through environment variables prefixed `PAPIQ_`; no config file.
+`PAPIQ_ROLE=all|api|worker` selects which services s6 starts (default `all`).
+
+Image: Debian slim base, OCRmyPDF and Docling included.
 
 Not started.
