@@ -107,7 +107,8 @@ class PipelineService:
         """Store the original, then create the document, its first events and the OCR job in
         one transaction. Without `drawer` the document goes to the owner's default drawer;
         otherwise the owner needs write access to it. A file the owner already has is rejected
-        with DuplicateDocumentError."""
+        with DuplicateDocumentError; if the same file arrives twice at the same moment, the
+        later commit fails with ConflictError instead."""
         started = self._clock.now()
         sha256 = Sha256.of(data)
         async with self._uow() as uow:
