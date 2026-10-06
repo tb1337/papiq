@@ -41,7 +41,7 @@ the MCP server and the Paperless migration tool are clients of that API.
 | Drawer | Filing and permission unit. Has an owner, can be shared with other users. |
 | Inbox | Where yellow and red documents wait for their owner. |
 | Lane | Processing outcome: green, yellow or red. |
-| Rule | Trigger, conditions and actions, maintained by admins. |
+| Rule | Trigger, conditions and actions. Global rules by admins, personal rules by each user. |
 
 ## Development
 
