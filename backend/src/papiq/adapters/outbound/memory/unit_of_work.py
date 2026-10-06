@@ -203,6 +203,7 @@ class MemoryRepository[K: UUID, E]:
         self._uow._write(self._table, id, _copy(entity))
 
     async def update(self, entity: E) -> None:
+        self._uow._check_open()
         id = self._id(entity)
         current = self._uow._row(self._table, id)
         if current is _REMOVED:
@@ -344,14 +345,14 @@ class MemoryJobQueue:
             job, status=JobStatus.RUNNING, attempts=job.attempts + 1, locked_until=now + lease
         )
         self._write(claimed)
-        return claimed
+        return copy.deepcopy(claimed)
 
-    async def complete(self, job: JobId) -> None:
-        current = await self.get(job)
+    async def complete(self, job: Job) -> None:
+        current = await self._claimed(job)
         self._write(dataclasses.replace(current, status=JobStatus.DONE, locked_until=None))
 
-    async def reschedule(self, job: JobId, *, run_at: datetime, error: str) -> None:
-        current = await self.get(job)
+    async def reschedule(self, job: Job, *, run_at: datetime, error: str) -> None:
+        current = await self._claimed(job)
         self._write(
             dataclasses.replace(
                 current,
@@ -362,20 +363,26 @@ class MemoryJobQueue:
             )
         )
 
-    async def fail(self, job: JobId, *, error: str) -> None:
-        current = await self.get(job)
+    async def fail(self, job: Job, *, error: str) -> None:
+        current = await self._claimed(job)
         self._write(
             dataclasses.replace(
                 current, status=JobStatus.FAILED, locked_until=None, last_error=error
             )
         )
 
+    async def _claimed(self, job: Job) -> Job:
+        current = await self.get(job.id)
+        if current.status is not JobStatus.RUNNING or current.attempts != job.attempts:
+            raise ConcurrencyError(f"job {job.id} is no longer held by this claim")
+        return current
+
     async def get(self, job: JobId) -> Job:
         self._uow._check_open()
         found = self._uow._jobs.get(job) or self._uow._db.jobs.get(job)
         if found is None:
             raise NotFoundError("job", job)
-        return found
+        return copy.deepcopy(found)
 
     def _all(self) -> list[Job]:
         self._uow._check_open()

@@ -17,7 +17,14 @@ from papiq.core.domain.events import (
     StepCompleted,
 )
 from papiq.core.domain.jobs import JobStatus
-from papiq.core.domain.pipeline import PIPELINE, Lane, Outcome, ProcessingStatus, Step
+from papiq.core.domain.pipeline import (
+    PIPELINE,
+    Lane,
+    Outcome,
+    ProcessingStatus,
+    Step,
+    StepResult,
+)
 from papiq.core.domain.users import User
 from papiq.core.services.pipeline import (
     STEP_JOB,
@@ -230,6 +237,60 @@ async def test_stale_jobs_are_skipped(world: World) -> None:
     assert calls.calls == 0
     assert not await pipeline.run_next_job()
     assert all(job.status is JobStatus.DONE for job in world.database.jobs.values())
+
+
+async def crash(world: World) -> None:
+    """A worker claims the next job and dies; its lease runs out."""
+    async with world.uow() as uow:
+        assert await uow.jobs.claim(now=world.clock.now(), lease=timedelta(minutes=10))
+        await uow.commit()
+    world.clock.advance(timedelta(minutes=10))
+
+
+async def test_a_step_that_keeps_killing_the_worker_ends_red(world: World) -> None:
+    owner, document = await receive(world)
+    for _ in range(3):
+        await crash(world)
+    ocr = Returns(FAILED)
+    pipeline = world.pipeline({Step.OCR: ocr})
+    assert await pipeline.run_next_job()
+    assert ocr.calls == 0
+    stored = await world.documents.get(owner.id, document.id)
+    assert stored.lane is Lane.RED
+    log = await world.documents.processing_log(owner.id, document.id)
+    assert log[-1].result.reason is not None and "lease expired" in log[-1].result.reason
+    assert not await pipeline.run_next_job()
+
+
+async def test_a_worker_that_lost_its_claim_stores_nothing(world: World) -> None:
+    owner, document = await receive(world)
+
+    class Slow:
+        """Runs longer than the lease; meanwhile another worker takes the job over."""
+
+        async def run(self, document: Document) -> StepResult:
+            world.clock.advance(timedelta(minutes=11))
+            async with world.uow() as uow:
+                assert await uow.jobs.claim(now=world.clock.now(), lease=timedelta(minutes=10))
+                await uow.commit()
+            return FAILED
+
+    assert await world.pipeline({Step.OCR: Slow()}).run_next_job()
+    stored = await world.documents.get(owner.id, document.id)
+    assert stored.processing.current_step is Step.OCR
+    assert stored.lane is None
+    (job,) = [job for job in world.database.jobs.values() if job.payload["step"] == "ocr"]
+    assert (job.status, job.attempts) == (JobStatus.RUNNING, 2)
+
+
+async def test_invalid_job_payload_fails_the_job(world: World) -> None:
+    async with world.uow() as uow:
+        await uow.jobs.enqueue(STEP_JOB, {"step": "ocr"}, run_at=world.clock.now())
+        await uow.commit()
+    assert await world.pipeline().run_next_job()
+    (job,) = world.database.jobs.values()
+    assert job.status is JobStatus.FAILED
+    assert job.last_error is not None and job.last_error.startswith("invalid payload")
 
 
 async def test_every_step_needs_an_executor(world: World) -> None:

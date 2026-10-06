@@ -9,11 +9,12 @@ from uuid import UUID
 
 from papiq.core.domain.documents import Document, Sha256
 from papiq.core.domain.errors import (
+    ConcurrencyError,
     DuplicateDocumentError,
     PermissionDeniedError,
 )
 from papiq.core.domain.ids import DocumentId, DrawerId, JobId, UserId
-from papiq.core.domain.jobs import Job
+from papiq.core.domain.jobs import Job, JobStatus
 from papiq.core.domain.json_value import JsonObject
 from papiq.core.domain.permissions import can_file_into, is_document_owner
 from papiq.core.domain.pipeline import PIPELINE, Outcome, Step, StepResult, StepRun
@@ -22,6 +23,9 @@ from papiq.core.ports import Clock, ObjectStore, UnitOfWork, UnitOfWorkFactory
 from papiq.core.services._access import load_actor, readable_document, visible_drawer
 
 log = logging.getLogger(__name__)
+
+# Attempts to store a step result while the document is changed concurrently.
+_RECORD_ATTEMPTS = 3
 
 STEP_JOB = "pipeline.step"
 """Job kind of a pipeline step; payload: document id, step, processing run."""
@@ -176,7 +180,9 @@ class PipelineService:
 
         The step's work runs outside any transaction; its result, the processing log entry,
         the events and the next step's job are stored in one transaction with the job's
-        completion. A job whose step is no longer due (stale) is just completed.
+        completion. A job whose step is no longer due (stale) is just completed. A job that
+        was claimed more often than the retry policy allows (the worker died or overran its
+        lease each time) fails without running again.
         """
         async with self._uow() as uow:
             job = await uow.jobs.claim(now=self._clock.now(), lease=self._lease, kinds=[STEP_JOB])
@@ -184,14 +190,23 @@ class PipelineService:
         if job is None:
             return False
 
-        document_id, step, run = _parse_payload(job.payload)
+        try:
+            document_id, step, run = _parse_payload(job.payload)
+        except (KeyError, TypeError, ValueError) as error:
+            log.error("invalid step job", extra={"job_id": str(job.id), "error": str(error)})
+            await self._finish(job, error=f"invalid payload: {error}")
+            return True
         async with self._uow() as uow:
             document = await uow.documents.find(document_id)
         if document is None or not document.is_awaiting(step, run):
-            await self._finish_stale(job)
+            await self._finish(job)
             return True
 
         started = self._clock.now()
+        if job.attempts > self._retry.max_attempts:
+            reason = f"step did not finish in {self._retry.max_attempts} attempts (lease expired)"
+            await self._record(job, document_id, step, run, _failed(reason), started)
+            return True
         try:
             result = await self._executors[step].run(document)
         except Exception as error:
@@ -202,16 +217,18 @@ class PipelineService:
                 extra={"document_id": str(document_id), "step": step, "attempt": job.attempts},
                 exc_info=True,
             )
-            if retry_at is not None:
-                async with self._uow() as uow:
-                    await uow.jobs.reschedule(job.id, run_at=retry_at, error=reason)
-                    await uow.commit()
+            if retry_at is None:
+                await self._record(job, document_id, step, run, _failed(reason), started)
                 return True
-            result = StepResult(outcome=Outcome.FAILED, reason=reason)
-            await self._record(job, document_id, step, run, result, started, failed=True)
+            try:
+                async with self._uow() as uow:
+                    await uow.jobs.reschedule(job, run_at=retry_at, error=reason)
+                    await uow.commit()
+            except ConcurrencyError:
+                log.warning("lost the claim of a step job", extra={"job_id": str(job.id)})
             return True
 
-        await self._record(job, document_id, step, run, result, started, failed=False)
+        await self._record(job, document_id, step, run, result, started)
         return True
 
     async def _record(
@@ -222,14 +239,35 @@ class PipelineService:
         run: int,
         result: StepResult,
         started: datetime,
-        *,
-        failed: bool,
+    ) -> None:
+        """Store a step result. A concurrent change of the document (e.g. a metadata edit) is
+        retried; if the job's claim was lost, another worker owns the step and nothing is
+        stored."""
+        for attempt in range(1, _RECORD_ATTEMPTS + 1):
+            try:
+                await self._record_once(job, document_id, step, run, result, started)
+                return
+            except ConcurrencyError:
+                if not await self._still_claimed(job):
+                    log.warning("lost the claim of a step job", extra={"job_id": str(job.id)})
+                    return
+                if attempt == _RECORD_ATTEMPTS:
+                    raise
+
+    async def _record_once(
+        self,
+        job: Job,
+        document_id: DocumentId,
+        step: Step,
+        run: int,
+        result: StepResult,
+        started: datetime,
     ) -> None:
         now = self._clock.now()
         async with self._uow() as uow:
             document = await uow.documents.find(document_id)
             if document is None or not document.is_awaiting(step, run):
-                await uow.jobs.complete(job.id)
+                await uow.jobs.complete(job)
                 await uow.commit()
                 return
             next_step = document.record_result(step, run, result, now)
@@ -237,17 +275,29 @@ class PipelineService:
             await self._log(uow, document.id, step, run, result, started, now)
             if next_step is not None:
                 await _enqueue_step(uow, document, now)
-            if failed:
-                await uow.jobs.fail(job.id, error=result.reason or "failed")
+            if result.outcome is Outcome.FAILED:
+                await uow.jobs.fail(job, error=result.reason or "failed")
             else:
-                await uow.jobs.complete(job.id)
+                await uow.jobs.complete(job)
             await uow.outbox.add(document.pull_events())
             await uow.commit()
 
-    async def _finish_stale(self, job: Job) -> None:
+    async def _still_claimed(self, job: Job) -> bool:
         async with self._uow() as uow:
-            await uow.jobs.complete(job.id)
-            await uow.commit()
+            current = await uow.jobs.get(job.id)
+        return current.status is JobStatus.RUNNING and current.attempts == job.attempts
+
+    async def _finish(self, job: Job, *, error: str | None = None) -> None:
+        """End a job that has nothing (more) to do: completed if stale, failed with `error`."""
+        try:
+            async with self._uow() as uow:
+                if error is None:
+                    await uow.jobs.complete(job)
+                else:
+                    await uow.jobs.fail(job, error=error)
+                await uow.commit()
+        except ConcurrencyError:
+            log.warning("lost the claim of a step job", extra={"job_id": str(job.id)})
 
     async def _log(
         self,
@@ -287,6 +337,10 @@ async def _enqueue_step(uow: UnitOfWork, document: Document, now: datetime) -> J
     return await uow.jobs.enqueue(
         STEP_JOB, payload, run_at=now, dedup_key=f"{document.id}:{run}:{step.value}"
     )
+
+
+def _failed(reason: str) -> StepResult:
+    return StepResult(outcome=Outcome.FAILED, reason=reason)
 
 
 def _parse_payload(payload: JsonObject) -> tuple[DocumentId, Step, int]:

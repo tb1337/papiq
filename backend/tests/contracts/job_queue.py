@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta
 
 import pytest
@@ -126,9 +127,10 @@ class JobQueueContract:
     async def test_completed_job_does_not_run_again(self, uow_factory: UnitOfWorkFactory) -> None:
         id = await enqueue(uow_factory)
         assert id is not None
-        await claim(uow_factory)
+        claimed = await claim(uow_factory)
+        assert claimed is not None
         async with uow_factory() as uow:
-            await uow.jobs.complete(id)
+            await uow.jobs.complete(claimed)
             await uow.commit()
         job = await get(uow_factory, id)
         assert (job.status, job.locked_until) == (JobStatus.DONE, None)
@@ -137,9 +139,10 @@ class JobQueueContract:
     async def test_rescheduled_job_runs_again_later(self, uow_factory: UnitOfWorkFactory) -> None:
         id = await enqueue(uow_factory)
         assert id is not None
-        await claim(uow_factory)
+        claimed = await claim(uow_factory)
+        assert claimed is not None
         async with uow_factory() as uow:
-            await uow.jobs.reschedule(id, run_at=NOW + timedelta(minutes=1), error="timeout")
+            await uow.jobs.reschedule(claimed, run_at=NOW + timedelta(minutes=1), error="timeout")
             await uow.commit()
         job = await get(uow_factory, id)
         assert (job.status, job.last_error, job.locked_until) == (
@@ -154,9 +157,10 @@ class JobQueueContract:
     async def test_failed_job_is_given_up(self, uow_factory: UnitOfWorkFactory) -> None:
         id = await enqueue(uow_factory)
         assert id is not None
-        await claim(uow_factory)
+        claimed = await claim(uow_factory)
+        assert claimed is not None
         async with uow_factory() as uow:
-            await uow.jobs.fail(id, error="broken file")
+            await uow.jobs.fail(claimed, error="broken file")
             await uow.commit()
         job = await get(uow_factory, id)
         assert (job.status, job.last_error, job.locked_until) == (
@@ -171,10 +175,11 @@ class JobQueueContract:
         assert first is not None
         assert await enqueue(uow_factory, dedup_key="doc:1:ocr") is None
         assert await enqueue(uow_factory, dedup_key="doc:1:parse") is not None
-        await claim(uow_factory)
+        claimed = await claim(uow_factory, kinds=["test"])
+        assert claimed is not None and claimed.dedup_key == "doc:1:ocr"
         assert await enqueue(uow_factory, dedup_key="doc:1:ocr") is None
         async with uow_factory() as uow:
-            await uow.jobs.complete(first)
+            await uow.jobs.complete(claimed)
             await uow.commit()
         assert await enqueue(uow_factory, dedup_key="doc:1:ocr") is not None
 
@@ -186,11 +191,50 @@ class JobQueueContract:
 
     async def test_a_job_is_never_claimed_twice(self, uow_factory: UnitOfWorkFactory) -> None:
         id = await enqueue(uow_factory)
-        async with uow_factory() as first, uow_factory() as second:
-            mine = await first.jobs.claim(now=NOW, lease=LEASE)
-            theirs = await second.jobs.claim(now=NOW, lease=LEASE)
-            await first.commit()
-            assert mine is not None and mine.id == id
-            if theirs is not None and theirs.id == id:
-                with pytest.raises(ConcurrencyError):
-                    await second.commit()
+
+        async def claim_and_commit() -> Job | None:
+            async with uow_factory() as uow:
+                job = await uow.jobs.claim(now=NOW, lease=LEASE)
+                await asyncio.sleep(0)
+                await uow.commit()
+                return job
+
+        results = await asyncio.gather(
+            claim_and_commit(), claim_and_commit(), return_exceptions=True
+        )
+        claimed = [r for r in results if isinstance(r, Job)]
+        assert [job.id for job in claimed] == [id]
+        assert all(r is None or isinstance(r, (Job, ConcurrencyError)) for r in results)
+
+    async def test_only_the_current_claim_finishes_a_job(
+        self, uow_factory: UnitOfWorkFactory
+    ) -> None:
+        id = await enqueue(uow_factory)
+        lost = await claim(uow_factory)
+        current = await claim(uow_factory, at=LEASE)
+        assert lost is not None and current is not None and current.id == lost.id == id
+        for finish in ("complete", "reschedule", "fail"):
+            with pytest.raises(ConcurrencyError):
+                async with uow_factory() as uow:
+                    if finish == "complete":
+                        await uow.jobs.complete(lost)
+                    elif finish == "reschedule":
+                        await uow.jobs.reschedule(lost, run_at=NOW, error="late")
+                    else:
+                        await uow.jobs.fail(lost, error="late")
+                    await uow.commit()
+        async with uow_factory() as uow:
+            await uow.jobs.complete(current)
+            await uow.commit()
+        with pytest.raises(ConcurrencyError):
+            async with uow_factory() as uow:
+                await uow.jobs.complete(current)
+                await uow.commit()
+        assert (await get(uow_factory, id)).status is JobStatus.DONE
+
+    async def test_reads_are_copies(self, uow_factory: UnitOfWorkFactory) -> None:
+        id = await enqueue(uow_factory)
+        assert id is not None
+        job = await get(uow_factory, id)
+        job.payload["n"] = 2
+        assert (await get(uow_factory, id)).payload == {"n": 1}
