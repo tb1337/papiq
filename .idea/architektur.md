@@ -195,17 +195,39 @@ LangGraph wird nicht eingesetzt: Die Verzweigung je Dokumenttyp ist deterministi
 
 ## Regel-Engine
 
-Regeln sind Daten in der Datenbank, keine Code-Änderung; Admins pflegen sie in der Web-UI.
+Regeln sind Daten in der Datenbank, keine Code-Änderung; sie werden in der Web-UI gepflegt.
+
+**Besitz und Wirkungsbereich**
+
+| Art | Angelegt von | Wirkt auf | Erlaubte Aktionen |
+| --- | --- | --- | --- |
+| Globale Regel | Admin | alle Dokumente | Tags, Attribute, Prüfung erzwingen – nichts, was Sichtbarkeit ändert |
+| Nutzer-Regel | jeder Nutzer | nur eigene Dokumente | alle Aktionen; Schublade nur, wenn der Nutzer dort schreiben darf |
+
+**Aufbau einer Regel**
 
 | Teil | Inhalt |
 | --- | --- |
 | Auslöser | Eingang eines Dokuments, jede Dokumentänderung |
-| Bedingungen | Kontakt, Dokumenttyp, Tags, Quelle, Textmuster, Attributwerte |
-| Aktionen | Schublade setzen, Tags setzen, Attribute setzen, Prüfung erzwingen (→ Posteingang) |
+| Bedingungen | Baum aus UND/ODER-Gruppen; jede Bedingung = Feld + Operator + Wert |
+| Felder | Kontakt, Dokumenttyp, Tags, Quelle, Text, Attribute, Dokumentdatum |
+| Operatoren (je nach Datentyp) | ist, ist eines von, enthält, Muster (Regex), größer/kleiner, vorhanden/fehlt |
+| Aktionen | Schublade setzen, Kontakt setzen, Typ setzen, Tags hinzufügen/entfernen, Attribut setzen, Prüfung erzwingen (→ Posteingang) |
 
-- **Probelauf:** Vor dem Speichern einer Änderung zeigt die UI die Folgen, z. B. „Dokument wandert in Schublade Z – sichtbar für User B“.
-- **Schleifenschutz:** Regeln laufen pro Änderung einmal in fester Reihenfolge; eine Regel-Aktion löst keine weiteren Regeln aus.
-- **Konflikt:** Setzen zwei Regeln unterschiedliche Schubladen, geht das Dokument auf Gelb.
+Gespeichert als JSON, geprüft mit Pydantic; die UI bietet einen Baukasten.
+
+**Auswertung**
+
+- **Position:** Regeln laufen nach der LLM-Klassifizierung und sehen deren Ergebnis.
+- **Reihenfolge:** Alle zutreffenden Regeln laufen, sortiert nach Priorität; Tags werden vereinigt.
+- **Konflikte → Gelb:** Setzen zwei Regeln unterschiedliche Werte für ein Einzelfeld (Schublade, Kontakt, Typ, Attribut), oder widerspricht eine Regel dem LLM-Ergebnis, geht das Dokument auf Gelb. Regeln überschreiben das LLM nicht stillschweigend.
+- **Schleifenschutz:** Regeln laufen pro Änderung einmal; eine Regel-Aktion löst keine weiteren Regeln aus.
+- **Probelauf:** Vor dem Speichern einer Dokumentänderung zeigt die UI die Folgen, z. B. „Dokument wandert in Schublade Z – sichtbar für User B“.
+- **Nachvollziehbarkeit:** Regeln sind versioniert; das Verarbeitungsprotokoll hält fest, welche Regel in welcher Version was geändert hat.
+
+**Rückwirkendes Anwenden (erster Wurf)**
+
+Beim Anlegen oder Ändern einer Regel zeigt ein Probelauf, welche bestehenden Dokumente betroffen wären und was sich ändert. Angewendet wird erst nach Bestätigung, als Hintergrund-Job.
 
 ## Asynchronität und Ereignisse
 
@@ -272,3 +294,4 @@ Ein eigener CLI-Client liest die Paperless-REST-API und schreibt über die Papiq
 - [ ] Embedding-Modell für die semantische Suche wählen (lokal oder Cloud)
 - [ ] Migration: Paperless-Speicherpfade und -Berechtigungen auf Schubladen abbilden
 - [ ] Verfügbarkeit des Namens „Papiq“ prüfen (GitHub, PyPI, Docker Hub, Marken)
+- [ ] Rückwirkendes Anwenden: Was passiert mit bereits abgelegten Dokumenten, bei denen die Regel einen Konflikt erzeugt – zurück in den Posteingang oder überspringen und im Probelauf auflisten?
