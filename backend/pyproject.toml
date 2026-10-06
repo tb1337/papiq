@@ -5,7 +5,11 @@ description = "Self-hosted, headless document management system"
 readme = "README.md"
 license = "GPL-3.0-only"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "pydantic>=2.13.5",
+    "pydantic-settings>=2.15.0",
+    "structlog>=26.1.0",
+]
 
 [dependency-groups]
 dev = [
