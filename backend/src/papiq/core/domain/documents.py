@@ -62,11 +62,11 @@ class Sha256:
         return self.hex
 
 
-class _Unset(Enum):
+class Unset(Enum):
     UNSET = "unset"
 
 
-UNSET = _Unset.UNSET
+UNSET = Unset.UNSET
 """Marks a field of DocumentChanges that is left as it is."""
 
 
@@ -78,11 +78,11 @@ class DocumentChanges:
     None to remove the value.
     """
 
-    title: str | _Unset = UNSET
-    contact_id: ContactId | _Unset | None = UNSET
-    document_type_id: DocumentTypeId | _Unset | None = UNSET
-    tag_ids: frozenset[TagId] | _Unset = UNSET
-    document_date: date | _Unset | None = UNSET
+    title: str | Unset = UNSET
+    contact_id: ContactId | Unset | None = UNSET
+    document_type_id: DocumentTypeId | Unset | None = UNSET
+    tag_ids: frozenset[TagId] | Unset = UNSET
+    document_date: date | Unset | None = UNSET
     attributes: Mapping[AttributeId, object] = field(default_factory=dict)
 
 
@@ -325,8 +325,8 @@ class Document:
         self.updated_at = require_utc(now, "updated_at")
 
 
-def _pick[T](change: T | _Unset, current: T) -> T:
-    return current if isinstance(change, _Unset) else change
+def _pick[T](change: T | Unset, current: T) -> T:
+    return current if isinstance(change, Unset) else change
 
 
 def _definition(
