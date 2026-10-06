@@ -6,6 +6,7 @@ readme = "README.md"
 license = "GPL-3.0-only"
 requires-python = ">=3.13"
 dependencies = [
+    "aioboto3>=15.5.0",
     "aiosqlite>=0.22.1",
     "alembic>=1.20.0",
     "asyncpg>=0.31.0",
@@ -100,3 +101,8 @@ forbidden_modules = [
     "structlog",
     "uvicorn",
 ]
+
+# Libraries without type information.
+[[tool.mypy.overrides]]
+module = ["aioboto3.*", "aiobotocore.*", "botocore.*"]
+ignore_missing_imports = true
