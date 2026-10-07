@@ -252,6 +252,17 @@ class SqlAdapterSuite:
         assert "handler failed" in rows[0].last_error
         assert rows[0].retry_at == NOW + timedelta(seconds=30)
 
+    async def test_enqueue_with_dedup_key_many_times(self, uow_factory: UnitOfWorkFactory) -> None:
+        """Postgres plans a prepared statement generically from its sixth run on; the partial
+        index of the dedup key must still match then."""
+        for number in range(12):
+            async with uow_factory() as uow:
+                assert await uow.jobs.enqueue("test", {}, run_at=NOW, dedup_key=f"k{number}")
+                assert (
+                    await uow.jobs.enqueue("test", {}, run_at=NOW, dedup_key=f"k{number}") is None
+                )
+                await uow.commit()
+
     async def test_dispatch_logs_at_info_level(
         self,
         uow_factory: UnitOfWorkFactory,
