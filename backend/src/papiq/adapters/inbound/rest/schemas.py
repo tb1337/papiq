@@ -422,7 +422,11 @@ class ConfirmRequest(BaseModel):
         description="A metadata change as with PATCH; decides the fields it sets.",
     )
     accept_suggestions: bool = Field(
-        default=False, description="Take the suggestion of every open field not in `changes`."
+        default=False,
+        description=(
+            "Take the suggestion of every open field that is neither in `changes` nor set on "
+            "the document."
+        ),
     )
     resume_at: ResumeStep = Field(
         default=ResumeStep.APPLY_RULES,  # type: ignore[attr-defined]

@@ -75,11 +75,13 @@ class Review:
 @dataclass(frozen=True)
 class Decision:
     """The owner's decision on the open fields: the change to apply, and which fields were
-    accepted as suggested or entered by the owner, by step."""
+    accepted as suggested, entered by the owner, or kept with the value the document has, by
+    step."""
 
     changes: DocumentChanges
     accepted: Mapping[Step, tuple[str, ...]]
     entered: Mapping[Step, tuple[str, ...]]
+    kept: Mapping[Step, tuple[str, ...]]
 
 
 def latest_entries(log: Sequence[StepRun], *, by_model: bool = False) -> dict[Step, StepRun]:
@@ -143,16 +145,19 @@ def step_reviews(log: Sequence[StepRun]) -> tuple[StepReview, ...]:
 
 def decide(
     open: Sequence[OpenStep],
+    document: Document,
     changes: DocumentChanges,
     *,
     accept_suggestions: bool,
     definitions: Mapping[AttributeId, AttributeDefinition],
 ) -> Decision:
-    """Every open field needs a decision: a value (or None) in `changes`, or, with
-    `accept_suggestions`, a suggestion that can be taken as it is. OpenFieldsError lists the
-    fields without one. Fields of attributes that no longer exist need none."""
+    """Every open field needs a decision: a value (or None) in `changes`, a value the document
+    has (its owner set it meanwhile; it is kept), or, with `accept_suggestions`, a suggestion
+    that can be taken as it is. Suggestions never replace a value. OpenFieldsError lists the
+    fields without a decision. Fields of attributes that no longer exist need none."""
     accepted: dict[Step, list[str]] = {}
     entered: dict[Step, list[str]] = {}
+    kept: dict[Step, list[str]] = {}
     suggested: dict[str, Any] = {}
     attributes = dict(changes.attributes)
     undecided: list[str] = []
@@ -163,6 +168,8 @@ def decide(
                 continue
             if _given(changes, check.field, attribute):
                 entered.setdefault(item.step, []).append(check.field)
+            elif _has_value(document, check.field, attribute):
+                kept.setdefault(item.step, []).append(check.field)
             elif accept_suggestions and check.suggestion is not None:
                 value = _suggested(check, attribute, definitions)
                 if attribute is not None:
@@ -183,6 +190,7 @@ def decide(
         changes=combined,
         accepted={step: tuple(fields) for step, fields in accepted.items()},
         entered={step: tuple(fields) for step, fields in entered.items()},
+        kept={step: tuple(fields) for step, fields in kept.items()},
     )
 
 
@@ -195,6 +203,7 @@ def confirmation(
         "outcome_before": None if before is None else before.value,
         "accepted": list(decision.accepted.get(step, ())),
         "entered": list(decision.entered.get(step, ())),
+        "kept": list(decision.kept.get(step, ())),
     }
     return StepResult(outcome=Outcome.OK, model_version=PERSON, output=output)
 
@@ -229,6 +238,13 @@ def _given(changes: DocumentChanges, field: str, attribute: AttributeId | None) 
         return attribute in changes.attributes
     name = _CHANGE_FIELDS.get(field)
     return name is not None and not isinstance(getattr(changes, name), Unset)
+
+
+def _has_value(document: Document, field: str, attribute: AttributeId | None) -> bool:
+    if attribute is not None:
+        return attribute in document.attributes
+    name = _CHANGE_FIELDS.get(field)
+    return name is not None and getattr(document, name) not in (None, set())
 
 
 def _suggested(

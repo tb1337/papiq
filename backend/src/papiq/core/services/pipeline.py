@@ -284,7 +284,11 @@ class PipelineService:
             overruled = document.confirm(resume_at, now)
             definitions = {item.id: item for item in await uow.attributes.list_all()}
             decision = decide(
-                open, changes, accept_suggestions=accept_suggestions, definitions=definitions
+                open,
+                document,
+                changes,
+                accept_suggestions=accept_suggestions,
+                definitions=definitions,
             )
             await check_references(uow, decision.changes)
             document.apply_changes(decision.changes, definitions, now)

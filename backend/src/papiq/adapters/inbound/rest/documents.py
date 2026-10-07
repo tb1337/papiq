@@ -360,9 +360,11 @@ async def review(id: UUID, user: CurrentUser, context: Context) -> ReviewOut:
     description=(
         "Owner only, for yellow and red documents that are not being processed. Every open "
         "field of the steps before `resume_at` needs a decision: a value or null in `changes`, "
-        "or its suggestion with `accept_suggestions`. Otherwise 422 lists the open fields in "
-        "`open_fields`. The results before `resume_at` count as confirmed; processing continues "
-        "from there up to filing."
+        "a value the document already has (it is kept), or its suggestion with "
+        "`accept_suggestions`. Otherwise 422 lists the open fields in `open_fields`. The "
+        "results before `resume_at` count as confirmed; processing continues from there up to "
+        "filing. From `extract_attributes` on, the extracted attributes replace the ones the "
+        "document has."
     ),
     response_model=DocumentDetails,
     responses=problem_responses(401, 403, 404, 409, 422),
