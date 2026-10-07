@@ -79,6 +79,9 @@ SESSIONS = Table("session", _session_keys)
 API_TOKENS = Table("API token", _token_keys)
 EXTERNAL_IDENTITIES = Table("external identity", _external_identity_keys)
 LOGIN_FAILURES = Table("login failures", _no_keys)
+RULES = Table("rule", _no_keys)
+RULE_VERSIONS = Table("rule version", _no_keys)
+RULE_APPLICATIONS = Table("rule application", _no_keys)
 
 
 @dataclass

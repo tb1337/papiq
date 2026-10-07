@@ -24,6 +24,8 @@ from papiq.adapters.outbound.memory.database import (
     DRAWERS,
     EXTERNAL_IDENTITIES,
     LOGIN_FAILURES,
+    RULE_APPLICATIONS,
+    RULES,
     SESSIONS,
     TAGS,
     USERS,
@@ -38,6 +40,10 @@ from papiq.adapters.outbound.memory.identity import (
     MemorySessionRepository,
 )
 from papiq.adapters.outbound.memory.rows import _REMOVED, MemoryRepository, _copy
+from papiq.adapters.outbound.memory.rules import (
+    MemoryRuleApplicationRepository,
+    MemoryRuleRepository,
+)
 from papiq.core.domain.attributes import AttributeDefinition
 from papiq.core.domain.documents import Document, Sha256
 from papiq.core.domain.drawers import Drawer
@@ -87,6 +93,8 @@ class MemoryUnitOfWork:
         self.attributes = MemoryNamedRepository[AttributeId, AttributeDefinition](self, ATTRIBUTES)
         self.documents = MemoryDocumentRepository(self, DOCUMENTS)
         self.processing_log = MemoryProcessingLog(self)
+        self.rules = MemoryRuleRepository(self, RULES)
+        self.rule_applications = MemoryRuleApplicationRepository(self, RULE_APPLICATIONS)
         self.outbox = MemoryOutbox(self)
         self.jobs = MemoryJobQueue(self)
         self.credentials = MemoryCredentialRepository(self, CREDENTIALS)

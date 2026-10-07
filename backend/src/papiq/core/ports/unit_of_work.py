@@ -18,13 +18,16 @@ from papiq.core.ports.repository import (
     DocumentTypeRepository,
     DrawerRepository,
     ProcessingLog,
+    RuleApplicationRepository,
+    RuleRepository,
     TagRepository,
     UserRepository,
 )
 
 
 class UnitOfWork(Protocol):
-    """One transaction over repositories, processing log, outbox, job queue and identity.
+    """One transaction over repositories (rules included), processing log, outbox, job queue and
+    identity.
 
     State change, events and jobs are committed together or not at all:
 
@@ -56,6 +59,10 @@ class UnitOfWork(Protocol):
     def documents(self) -> DocumentRepository: ...
     @property
     def processing_log(self) -> ProcessingLog: ...
+    @property
+    def rules(self) -> RuleRepository: ...
+    @property
+    def rule_applications(self) -> RuleApplicationRepository: ...
     @property
     def outbox(self) -> Outbox: ...
     @property
