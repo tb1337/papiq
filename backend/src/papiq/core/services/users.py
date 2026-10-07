@@ -92,36 +92,33 @@ class UserService:
         return user
 
     async def change_role(self, actor: UserId, id: UserId, role: Role) -> User:
-        """Admins only. Sessions and tokens stay; rights follow the role at once, since every
-        request reads the user anew."""
-        async with self._uow() as uow:
-            await _require_admin(uow, actor)
-            user = await uow.users.get(id)
-            if user.role is not role:
-                if user.is_active_admin:
-                    await _keep_an_admin(uow, user)
-                user.role = role
-                await uow.users.update(user)
-                await uow.commit()
-        log.info("role changed", extra={"user_id": str(id), "role": role.value})
-        return user
+        return await self.update(actor, id, role=role)
 
     async def set_active(self, actor: UserId, id: UserId, active: bool) -> User:
-        """Admins only. Deactivating ends the user's sessions; their API tokens are refused
-        while the account is inactive."""
+        return await self.update(actor, id, active=active)
+
+    async def update(
+        self, actor: UserId, id: UserId, *, role: Role | None = None, active: bool | None = None
+    ) -> User:
+        """Admins only; role and state in one transaction. Rights follow the role at once,
+        since every request reads the user anew; sessions and tokens stay. Deactivating ends
+        the user's sessions; their API tokens are refused while the account is inactive."""
         async with self._uow() as uow:
             await _require_admin(uow, actor)
             user = await uow.users.get(id)
-            if user.active != active:
-                if not active and user.is_active_admin:
+            new_role = user.role if role is None else role
+            new_active = user.active if active is None else active
+            if (new_role, new_active) != (user.role, user.active):
+                if user.is_active_admin and not (new_active and new_role is Role.ADMIN):
                     await _keep_an_admin(uow, user)
-                user.active = active
+                user.role, user.active = new_role, new_active
                 await uow.users.update(user)
-                if not active:
+                if not new_active:
                     await uow.sessions.remove_for_user(id)
                 await uow.commit()
         log.info(
-            "account activated" if active else "account deactivated", extra={"user_id": str(id)}
+            "account changed",
+            extra={"user_id": str(id), "role": user.role.value, "active": user.active},
         )
         return user
 

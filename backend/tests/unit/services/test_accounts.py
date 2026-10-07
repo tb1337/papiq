@@ -237,3 +237,17 @@ async def test_admins_do_not_reset_their_own_sign_in_here(world: World) -> None:
     with pytest.raises(PermissionDeniedError):
         await world.users.disable_totp(admin.id, admin.id)
     await world.auth.login("root", PASSWORD)
+
+
+async def test_role_and_state_change_together(world: World) -> None:
+    admin = await world.account("root", Role.ADMIN)
+    other = await world.account("second", Role.ADMIN)
+    await world.auth.login("second", PASSWORD)
+    changed = await world.users.update(admin.id, other.id, role=Role.USER, active=False)
+    assert (changed.role, changed.active) == (Role.USER, False)
+    async with world.uow() as uow:
+        assert await uow.sessions.remove_for_user(other.id) == 0  # ended with the change
+    with pytest.raises(ConflictError):  # nothing changes when one part is refused
+        await world.users.update(admin.id, admin.id, role=Role.ADMIN, active=False)
+    assert (await world.users.get(admin.id, admin.id)).active is True
+    assert await world.users.update(admin.id, admin.id) == await world.users.get(admin.id, admin.id)
