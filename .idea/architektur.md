@@ -93,6 +93,8 @@ Backend und Worker in Python; ein Container mit s6-overlay als Prozessüberwachu
 | OCR | OCRmyPDF | entschieden |
 | Parsing | Docling | entschieden |
 | LLM | OpenAI-kompatible Schnittstelle (Ollama, Cloud) | entschieden |
+| LLM-Modell (lokal) | `qwen3:8b` über Ollama mit 8192 Token Kontext (NUC, nur CPU); Bewertung siehe unten | entschieden |
+| Embedding-Modell (lokal) | `bge-m3` über Ollama; Prüfung mit der Suche (M6) | vorgesehen |
 | Jobs | eigene Job-Tabelle über SQLAlchemy | entschieden |
 | Authentifizierung | Argon2id, TOTP, Authlib (OIDC) | entschieden |
 | Web-UI | SvelteKit (Svelte 5), Tailwind, shadcn-svelte; Ziel: cleanes, modernes Interface | entschieden |
@@ -194,8 +196,10 @@ Die Lane eines Dokuments ist das schlechteste Ergebnis aller Schritte. Solange d
 
 - Kontakt: Abgleich gegen bestehende Kontakte; kein Treffer → neuer Kontakt → Gelb.
 - Dokumenttyp: LLM wählt nur aus der bestehenden Liste; Vorschlag eines neuen Typs → Gelb.
-- Attribute, Datum, Betrag: Wert muss im Dokumenttext vorkommen und gültig sein; sonst Gelb.
+- Attribute, Datum, Betrag: Wert muss im Dokumenttext vorkommen und gültig sein; sonst Gelb. Ein Datumsattribut gleich dem Dokumentdatum ist nur ein Vorschlag (Gelb), weil Modelle das Dokumentdatum für fehlende Daten wie die Fälligkeit einsetzen.
 - Regelkonflikt (zwei Regeln, verschiedene Schubladen) → Gelb.
+
+**Bewertung des lokalen Modells (07.10.2026):** `qwen3:8b` mit 8192 Kontext auf dem NUC, 5 Dokumente des Bewertungssatzes: kein falsches Grün, keine Änderung ohne bestandene Prüfung, Kontakt, Typ, Datum und Beträge richtig, Anweisungen im Text ohne Wirkung. Zweimal grün mit falscher Fälligkeit (Dokumentdatum eingesetzt), daraufhin die Regel oben. Laufzeit 3 bis 10 Minuten pro Dokument (Median 190 s); empfohlen ist daher `PAPIQ_LLM_TIMEOUT=600`.
 
 LangGraph wird nicht eingesetzt: Die Verzweigung je Dokumenttyp ist deterministisch, Regeln müssen in der UI änderbar sein. Der Klassifizierungsschritt bleibt austauschbar, falls er später agentisch werden soll.
 
@@ -323,8 +327,8 @@ Ein eigener CLI-Client liest die Paperless-REST-API und schreibt über die Papiq
 ## Offene Punkte
 
 - [ ] Backup-Strategie für SQLite und Postgres
-- [ ] Konfidenz-Schwellen und Anzahl automatischer Retries festlegen
+- [x] Konfidenz-Schwellen und Anzahl automatischer Retries festlegen (0,9 und 0,75; eine Nachfrage bei unpassender Antwort, dann Rot; Schritt-Retries `PAPIQ_STEP_MAX_ATTEMPTS`)
 - [x] Attribut-Datentypen bestätigen
-- [ ] Embedding-Modell für die semantische Suche wählen (lokal oder Cloud)
+- [ ] Embedding-Modell für die semantische Suche bestätigen (`bge-m3` vorgesehen, Prüfung in M6)
 - [ ] Migration: Paperless-Speicherpfade und -Berechtigungen auf Schubladen abbilden
 - [ ] Verfügbarkeit des Namens „Papiq“ prüfen (GitHub, PyPI, Docker Hub, Marken)
