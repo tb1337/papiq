@@ -179,7 +179,7 @@ async def test_a_document_is_sent_whole() -> None:
     )
     plain = index_document(lane=Lane.YELLOW)
     await sim.index(dimensions=2).upsert([document, plain])
-    (write,) = sim.calls("POST", "/documents")
+    (write,) = sim.calls("PUT", "/documents")
     first, second = sim.body(write)
     assert first["id"] == str(uid(10))
     assert (first["lane"], first["version"], first["contact_id"]) == ("processing", 5, str(uid(1)))
@@ -194,11 +194,20 @@ async def test_a_document_is_sent_whole() -> None:
     assert second["contact_id"] is None
 
 
+async def test_kept_vectors_are_left_out_of_the_update() -> None:
+    sim = SimulatedMeilisearch()
+    sim.settings = wanted_settings(sim, dimensions=2)
+    await sim.index(dimensions=2).upsert([index_document(vectors=None)])
+    (write,) = sim.calls("PUT", "/documents")
+    (sent,) = sim.body(write)
+    assert not {"_vectors", "embedding_model", "embedding_digest"} & set(sent)
+
+
 async def test_an_index_without_embedder_sends_no_vectors() -> None:
     sim = SimulatedMeilisearch()
     sim.settings = wanted_settings(sim)
     await sim.index().upsert([index_document()])
-    (write,) = sim.calls("POST", "/documents")
+    (write,) = sim.calls("PUT", "/documents")
     assert "_vectors" not in sim.body(write)[0]
     assert "embedders" not in sim.settings
 
@@ -209,7 +218,7 @@ async def test_vectors_of_the_wrong_length_never_leave_the_adapter() -> None:
     document = index_document(vectors=((1.0, 2.0),), embedding=EmbeddingStamp("m", "d"))
     with pytest.raises(SearchIndexError, match="needs 3"):
         await sim.index(dimensions=3).upsert([document])
-    assert sim.calls("POST", "/documents") == []
+    assert sim.calls("PUT", "/documents") == []
 
 
 async def test_writes_wait_for_their_task() -> None:
@@ -372,7 +381,7 @@ async def test_the_rebuild_swaps_and_removes_the_old_index() -> None:
         if request.url.path != "/tasks/1"
     ]
     assert ("DELETE", "/indexes/papiq-test-rebuild") in steps
-    assert ("POST", "/indexes/papiq-test-rebuild/documents") in steps
+    assert ("PUT", "/indexes/papiq-test-rebuild/documents") in steps
     swap = [request for request in sim.requests if request.url.path == "/swap-indexes"]
     assert sim.body(swap[0]) == [{"indexes": ["papiq-test", "papiq-test-rebuild"]}]
     assert steps[-1] == ("DELETE", "/indexes/papiq-test-rebuild")

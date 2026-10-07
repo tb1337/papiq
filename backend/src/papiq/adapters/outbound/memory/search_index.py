@@ -7,6 +7,7 @@ roughly alike, but it knows no typos, stemming or compound words beyond substrin
 import math
 import re
 from collections.abc import AsyncIterator, Sequence
+from dataclasses import replace
 
 from papiq.core.domain.errors import SearchIndexError
 from papiq.core.domain.ids import DocumentId
@@ -34,7 +35,9 @@ class MemorySearchIndex:
     async def upsert(self, documents: Sequence[IndexDocument]) -> None:
         _check(documents, self._dimensions)
         for document in documents:
-            self._documents[document.id] = document
+            self._documents[document.id] = _keeping_vectors(
+                document, self._documents.get(document.id)
+            )
 
     async def remove(self, id: DocumentId) -> None:
         self._documents.pop(id, None)
@@ -103,7 +106,7 @@ class _MemoryBuild:
         self._open()
         _check(documents, self._index._dimensions)
         for document in documents:
-            self._documents[document.id] = document
+            self._documents[document.id] = _keeping_vectors(document, None)
 
     async def finish(self) -> None:
         self._open()
@@ -119,11 +122,19 @@ class _MemoryBuild:
             raise SearchIndexError("the rebuild is over")
 
 
+def _keeping_vectors(document: IndexDocument, old: IndexDocument | None) -> IndexDocument:
+    if document.vectors is not None:
+        return document
+    if old is None:
+        raise SearchIndexError(f"document {document.id}: no vectors to keep")
+    return replace(document, vectors=old.vectors, embedding=old.embedding)
+
+
 def _check(documents: Sequence[IndexDocument], dimensions: int | None) -> None:
     if dimensions is None:
         return
     for document in documents:
-        for vector in document.vectors:
+        for vector in document.vectors or ():
             if len(vector) != dimensions:
                 raise SearchIndexError(
                     f"document {document.id}: vector of length {len(vector)}, "

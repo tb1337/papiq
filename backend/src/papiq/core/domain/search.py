@@ -40,7 +40,9 @@ class IndexDocument:
     """A document as the index holds it. Names are indexed for the search, ids for the filters.
 
     `vectors` holds one vector per section of the text (all of one length); `embedding` says
-    how they were made and is required with them.
+    how they were made and is required with them. `vectors=None` keeps the vectors (and their
+    stamp) that the index already holds for the document: for an update after which the text,
+    and so the vectors, did not change.
     """
 
     id: DocumentId
@@ -60,10 +62,14 @@ class IndexDocument:
     attributes: tuple[str, ...] = ()
     document_date: date | None = None
     created_at: datetime
-    vectors: tuple[tuple[float, ...], ...] = field(default=(), repr=False)
+    vectors: tuple[tuple[float, ...], ...] | None = field(default=(), repr=False)
     embedding: EmbeddingStamp | None = None
 
     def __post_init__(self) -> None:
+        if self.vectors is None:
+            if self.embedding is not None:
+                raise ValueError("kept vectors keep their stamp: give none")
+            return
         if self.vectors and self.embedding is None:
             raise ValueError("vectors need an embedding stamp")
         if len({len(vector) for vector in self.vectors}) > 1 or any(
