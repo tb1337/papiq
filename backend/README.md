@@ -34,10 +34,10 @@ adapter must pass.
   `EventBus` delivers committed events at least once. The identity repositories (credentials,
   sessions, API tokens, external identities, failed sign-ins) are part of the unit of work too.
   Further ports: `ObjectStore`, `Clock`, `Ocr`, `DocumentParser`, `PreviewRenderer`,
-  `PasswordHasher`, `SecretCipher`, `Totp`, `OidcProvider`, `LanguageModel`, `Embeddings`;
-  search is designed in its milestone.
+  `PasswordHasher`, `SecretCipher`, `Totp`, `OidcProvider`, `LanguageModel`, `Embeddings`,
+  `SearchIndex`.
 - `core/services`: use cases (users, drawers, master data, documents, pipeline, inbox,
-  classification, maintenance). Each runs in one unit of work and checks the caller's rights.
+  classification, indexing, search, maintenance). Each runs in one unit of work and checks the caller's rights.
   Rules and filing are placeholders until M7.
 
 `papiq.composition.container.build_memory_container()` wires all designed ports to their
@@ -241,6 +241,52 @@ with `OLLAMA_CONTEXT_LENGTH=8192` or more. Local models on a CPU are slow:
 **Evaluation.** `python -m papiq.composition evaluate [--fake]` runs the synthetic documents in
 `evaluation/` through both steps and writes a report; see [evaluation/README.md](evaluation/README.md).
 
+## Search
+
+Hybrid search in Meilisearch: full text and meaning (vectors) in one query. Without
+`PAPIQ_MEILISEARCH_URL` there is no search; without `PAPIQ_EMBEDDING_BASE_URL` it works on words
+only. `GET /api/v1/documents/search?q=…` takes the filters of `GET /documents`, `limit`,
+`offset` (at most 1000 hits can be reached) and `semantic_ratio` (0 words only, 1 meaning only;
+default `PAPIQ_SEARCH_SEMANTIC_RATIO`). Each hit carries the document as `GET /documents/{id}`
+does, a score and a snippet whose matches are marked. `semantic` in the answer tells whether the
+meaning took part.
+
+- **The index follows the documents.** The indexing service subscribes to the document events
+  (`search.index`) and queues one job per change; it writes the document and reads it back, up to
+  three rounds, so a change made meanwhile is not lost. A failed job repeats after 30 s,
+  doubling up to an hour, ten times; the last attempt writes the words without vectors. Renaming
+  a contact, a type or a tag queues the documents that carry it: the index holds names for the
+  search by words. A reconciliation every `PAPIQ_SEARCH_RECONCILE_INTERVAL` compares the index
+  with the database and queues what is missing, stale or gone.
+- **Rebuild at any time.** `POST /search/reindex` (admins) or `python -m papiq.composition
+  reindex` builds `<index>-rebuild` from the database and the object store while the active
+  index keeps serving, swaps it in and reconciles what changed meanwhile. The index holds no
+  information that is not in the database.
+- **Rights.** The index query contains the rights (own documents in any lane; green documents of
+  drawers the caller owns or that are shared with them). Every hit is checked against the
+  database once more and the filter applied again, so a withdrawn share ends the search for that
+  document at once, before the index has changed; a page can therefore hold fewer items than
+  `limit`. Documents still in processing are in the index, for their owner only.
+- **Sections.** The text (at most `PAPIQ_SEARCH_MAX_TEXT` characters) is cut into sections of
+  about `PAPIQ_SEARCH_CHUNK_SIZE` characters, at most `PAPIQ_SEARCH_MAX_CHUNKS`; each gets a
+  vector, and the first one starts with title, contact, type and tags. `PAPIQ_SEARCH_MAX_CHUNKS=1`
+  gives one vector per document. A vector is made again only when model or section texts change.
+- **Embeddings.** The query is embedded at request time (`PAPIQ_SEARCH_EMBED_TIMEOUT`); if the
+  endpoint is down or slow, the search falls back to words (`semantic: false`).
+  `PAPIQ_EMBEDDING_DIMENSIONS` is the length of the vectors and required with Meilisearch and an
+  embedding endpoint; changing the model means a rebuild. Some models want a prefix for queries
+  and documents (`PAPIQ_EMBEDDING_QUERY_PREFIX`, `PAPIQ_EMBEDDING_DOCUMENT_PREFIX`).
+- **Limits.** Meilisearch ranks the documents nearest in meaning even if no word matches, so
+  a hybrid search always returns hits; there is no threshold yet. A rebuild occupies one worker
+  loop for its time. On a CPU the embedding of the sections dominates the indexing cost;
+  `evaluate-search` measures it for a model.
+- **Health.** `GET /health` includes `search` when it is configured.
+
+**Evaluation of the embedding model.** `python -m papiq.composition evaluate-search [--fake]
+[--models a,b] [--ratios 0,0.5,1]` indexes the documents of the evaluation set with each model in
+a temporary Meilisearch index and runs the queries of `evaluation/search/queries.json`; see
+[evaluation/README.md](evaluation/README.md).
+
 ## REST API
 
 `python -m papiq.composition api` (with `PAPIQ_ROLE` `all` or `api`) serves
@@ -276,6 +322,8 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
 | `POST /users`, `POST /users/{id}/password`, `DELETE /users/{id}/totp`, `DELETE /users/{id}/oidc` | Create with password, reset password, turn TOTP off, remove links (admins, session only, not the own account) |
 | `/contacts`, `/document-types`, `/tags`, `/attributes` (`GET`, `POST`, `GET/PATCH/DELETE /{id}`) | Master data: read by all, changed by admins, deleted only when unused. Attributes: name, choices and scope change, the data type does not; removing a used choice or narrowing the scope past documents with values is `409` |
 | `GET/POST /drawers`, `GET/PATCH/DELETE /drawers/{id}`, `PUT/DELETE /drawers/{id}/shares/{user_id}` | Drawers and shares (owner) |
+| `GET /documents/search` | Search: `q`, the filters of `GET /documents`, `limit`, `offset`, `semantic_ratio`; hits with snippet, `estimated_total`, `next_offset`, `semantic` |
+| `POST /search/reindex` | Rebuild the search index in the background (admins); `202` |
 | `GET /documents` | Readable documents, newest first; filters `contact_id`, `document_type_id`, `tag_id`, `drawer_id`, `lane`; `limit`, `cursor` |
 | `POST /documents` | Upload (multipart: `file`, optional `drawer_id`); `202` with `id`, `status_url` |
 | `GET/PATCH/DELETE /documents/{id}` | Metadata and state with the caller's access; change (write access); delete (owner) |
@@ -288,7 +336,7 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
 | `GET /documents/{id}/review` | What the model proposed and how each field was checked (owner) |
 | `POST /documents/{id}/confirm` | Decide the open fields (`changes` as with `PATCH`, `accept_suggestions`), then continue from `resume_at` (`apply_rules`, or `extract_attributes` after a type change) up to filing (owner); undecided fields: `422` with `open_fields` |
 | `GET /events` | Server-sent events of the documents the caller may read; `?document_id=` |
-| `GET /health` | Database reachable, bucket or storage directory usable; `200` or `503`, no authentication |
+| `GET /health` | Database, bucket or storage directory and, if configured, the search index reachable; `200` or `503`, no authentication |
 
 - Uploads are streamed into a temporary file and hashed on the way; the limit
   `PAPIQ_UPLOAD_MAX_SIZE` applies while receiving (`413`). The type is recognised from the
@@ -402,8 +450,17 @@ Durations are seconds (`30`, `1.5`) or ISO 8601 (`PT1H`, `P7D`) and must be posi
 | `PAPIQ_OCR_LANGUAGES` | `deu+eng` | Tesseract languages, joined by `+` |
 | `PAPIQ_OCR_TIMEOUT`, `PAPIQ_PARSE_TIMEOUT` | `600` | Seconds per document and step |
 | `PAPIQ_DOCLING_MODELS_PATH` | `/opt/docling-models` | Docling layout and table models |
-| `PAPIQ_MEILISEARCH_URL` | unset | required from M6 on |
+| `PAPIQ_MEILISEARCH_URL` | unset | Without it there is no search |
 | `PAPIQ_MEILISEARCH_API_KEY` | unset | *secret* |
+| `PAPIQ_MEILISEARCH_INDEX` | `papiq-documents` | The active index; a rebuild fills `<name>-rebuild` |
+| `PAPIQ_MEILISEARCH_TIMEOUT`, `PAPIQ_MEILISEARCH_TASK_TIMEOUT` | `30`, `120` | Seconds per request; seconds a write waits for its task |
+| `PAPIQ_SEARCH_LOCALES` | `deu+eng` | Languages of the documents, ISO 639-3 codes joined by `+` |
+| `PAPIQ_SEARCH_SEMANTIC_RATIO` | `0.5` | Weight of the meaning against the words when a request does not say |
+| `PAPIQ_SEARCH_EMBED_TIMEOUT` | `5` | Seconds to wait for the embedding of a query, then words only |
+| `PAPIQ_SEARCH_MAX_TEXT` | `200000` | Characters of text per document in the index |
+| `PAPIQ_SEARCH_CHUNK_SIZE`, `PAPIQ_SEARCH_MAX_CHUNKS` | `1500`, `8` | Characters per section with a vector; sections per document |
+| `PAPIQ_SEARCH_RECONCILE_INTERVAL` | `21600` | Seconds between comparisons of index and database |
+| `PAPIQ_SEARCH_REBUILD_TIMEOUT` | `21600` | Seconds a rebuild may take |
 | `PAPIQ_LLM_BASE_URL`, `_MODEL` | unset | OpenAI-compatible endpoint; set both or neither |
 | `PAPIQ_LLM_API_KEY` | unset | *secret* |
 | `PAPIQ_LLM_TEMPERATURE` | `0` | 0 to 2; 0 for repeatable answers |
@@ -417,6 +474,8 @@ Durations are seconds (`30`, `1.5`) or ISO 8601 (`PT1H`, `P7D`) and must be posi
 | `PAPIQ_EMBEDDING_BASE_URL`, `_MODEL` | unset | OpenAI-compatible endpoint; set both or neither |
 | `PAPIQ_EMBEDDING_API_KEY` | unset | *secret* |
 | `PAPIQ_EMBEDDING_TIMEOUT` | `60` | Seconds per request |
+| `PAPIQ_EMBEDDING_DIMENSIONS` | unset | Length of the vectors (`bge-m3`: 1024); required with Meilisearch and an embedding endpoint |
+| `PAPIQ_EMBEDDING_QUERY_PREFIX`, `PAPIQ_EMBEDDING_DOCUMENT_PREFIX` | unset | Put before queries and before document sections, for models that ask for it |
 
 ## Tests
 
