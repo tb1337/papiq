@@ -1,4 +1,4 @@
-# p:api:q
+# p:a~p~i:q
 
 **Papiq** is a self-hosted, headless document management system — a replacement for
 Paperless-ngx, built as a Docker stack. Every feature is exposed through the API; the web UI,
