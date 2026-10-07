@@ -5,8 +5,13 @@ isolation level. On SQLite the driver runs in autocommit mode, so reads see the 
 committed state; a unit of work starts its transaction with `BEGIN IMMEDIATE` right before
 its first write. That takes SQLite's single write lock up front: a read transaction is never
 upgraded to a write transaction, which would fail with SQLITE_BUSY instead of waiting.
+
+SQLite has one writer. A task that opened a write transaction and starts a second one would
+wait for its own lock until the busy timeout; `begin_write` raises RuntimeError at once instead.
 """
 
+import asyncio
+import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -31,6 +36,8 @@ class Database:
 
     def __init__(self, engine: AsyncEngine) -> None:
         self.engine = engine
+        # Tasks holding SQLite's write lock.
+        self._writers: weakref.WeakSet[asyncio.Task[Any]] = weakref.WeakSet()
 
     @classmethod
     def sqlite(cls, path: Path) -> "Database":
@@ -57,9 +64,29 @@ class Database:
         return self.engine.dialect.name == "sqlite"
 
     async def begin_write(self, connection: AsyncConnection) -> None:
-        """Start the write transaction on `connection`; call before its first write."""
-        if self.is_sqlite:
+        """Start the write transaction on `connection`; call before its first write and call
+        `end_write` when the transaction ends."""
+        if not self.is_sqlite:
+            return
+        task = asyncio.current_task()
+        if task is not None:
+            if task in self._writers:
+                raise RuntimeError(
+                    "this task already has an open write transaction; on SQLite a second one "
+                    "would wait for its own lock"
+                )
+            self._writers.add(task)
+        try:
             await connection.exec_driver_sql("BEGIN IMMEDIATE")
+        except BaseException:
+            self.end_write()
+            raise
+
+    def end_write(self) -> None:
+        """The current task's write transaction has ended (committed or rolled back)."""
+        task = asyncio.current_task()
+        if task is not None:
+            self._writers.discard(task)
 
     @asynccontextmanager
     async def reading(self) -> AsyncIterator[AsyncConnection]:
@@ -72,8 +99,11 @@ class Database:
         """A write transaction, committed when the block ends without an exception."""
         async with self.engine.connect() as connection:
             await self.begin_write(connection)
-            yield connection
-            await connection.commit()
+            try:
+                yield connection
+                await connection.commit()
+            finally:
+                self.end_write()
 
     async def dispose(self) -> None:
         await self.engine.dispose()
