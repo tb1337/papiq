@@ -244,37 +244,45 @@ class PipelineService:
         was claimed more often than the retry policy allows (the worker died or overran its
         lease each time) fails without running again.
 
-        If the caller is cancelled while the step runs (the worker shuts down), the job is
-        released at once to run again, instead of waiting for its lease to expire.
+        If the caller is cancelled after the claim (the worker shuts down), the job is released
+        at once to run again, instead of waiting for its lease to expire. The release still
+        counts as an attempt.
         """
         async with self._uow() as uow:
             job = await uow.jobs.claim(now=self._clock.now(), lease=self._lease, kinds=[STEP_JOB])
             await uow.commit()
         if job is None:
             return False
+        try:
+            await self._run_claimed(job)
+        except asyncio.CancelledError:
+            await asyncio.shield(self._release(job))
+            raise
+        return True
 
+    async def _run_claimed(self, job: Job) -> None:
         try:
             document_id, step, run = _parse_payload(job.payload)
         except (KeyError, TypeError, ValueError) as error:
             log.error("invalid step job", extra={"job_id": str(job.id), "error": str(error)})
             await self._finish(job, error=f"invalid payload: {error}")
-            return True
+            return
         async with self._uow() as uow:
             document = await uow.documents.find(document_id)
         if document is None or not document.is_awaiting(step, run):
             await self._finish(job)
-            return True
+            return
 
         started = self._clock.now()
         if job.attempts > self._retry.max_attempts:
-            reason = f"step did not finish in {self._retry.max_attempts} attempts (lease expired)"
+            reason = (
+                f"step did not finish in {self._retry.max_attempts} attempts "
+                "(the worker stopped or ran out of time each time)"
+            )
             await self._record(job, document_id, step, run, _failed(reason), started)
-            return True
+            return
         try:
             result = await self._executors[step].run(document)
-        except asyncio.CancelledError:
-            await asyncio.shield(self._release(job))
-            raise
         except UnprocessableDocumentError as error:
             result = _failed(str(error))
         except Exception as error:
@@ -287,17 +295,16 @@ class PipelineService:
             )
             if retry_at is None:
                 await self._record(job, document_id, step, run, _failed(reason), started)
-                return True
+                return
             try:
                 async with self._uow() as uow:
                     await uow.jobs.reschedule(job, run_at=retry_at, error=reason)
                     await uow.commit()
             except ConcurrencyError:
                 log.warning("lost the claim of a step job", extra={"job_id": str(job.id)})
-            return True
+            return
 
         await self._record(job, document_id, step, run, result, started)
-        return True
 
     async def _record(
         self,
@@ -351,14 +358,22 @@ class PipelineService:
             await uow.commit()
 
     async def _release(self, job: Job) -> None:
+        """Let an interrupted job run again at once. Nothing to do if it was finished or lost
+        its claim meanwhile."""
         try:
             async with self._uow() as uow:
                 await uow.jobs.reschedule(
                     job, run_at=self._clock.now(), error="interrupted: the worker stopped"
                 )
                 await uow.commit()
+        except ConcurrencyError:
+            pass
         except Exception:
-            log.warning("could not release an interrupted job", extra={"job_id": str(job.id)})
+            log.warning(
+                "could not release an interrupted job",
+                extra={"job_id": str(job.id)},
+                exc_info=True,
+            )
 
     async def _still_claimed(self, job: Job) -> bool:
         async with self._uow() as uow:

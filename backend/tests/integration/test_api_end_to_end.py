@@ -1,9 +1,10 @@
 """Milestone M3 end to end: documents arrive through the REST API, the worker processes them
-with OCRmyPDF and Docling, progress arrives as server-sent events. Real API server (Uvicorn),
-worker, SQLite, and the object store on the filesystem and on S3 (Garage).
+with OCRmyPDF and Docling, progress arrives as server-sent events. Real API server (Uvicorn)
+and worker, in two set-ups: SQLite with the filesystem, Postgres with S3 (Garage).
 Marker `docling` (slow)."""
 
 import asyncio
+import secrets
 import shutil
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
@@ -28,9 +29,10 @@ from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.users import User
 from papiq.core.ports import ObjectStore, OcrResult
 from papiq.core.services.objects import archive_key, markdown_key, preview_key, structure_key
-from tests import builders
+from tests import builders, probes
 from tests.api import Stream, allow_test_users, auth, listen, serving, until
 from tests.contracts.processing import SAMPLES
+from tests.integration.adapters.sql.conftest import create_database, drop_database, postgres
 from tests.integration.conftest import s3_test_store
 
 pytestmark = pytest.mark.docling
@@ -87,26 +89,45 @@ class System:
         return status
 
 
-@pytest.fixture(params=["filesystem", "s3"])
-async def object_store(
+@pytest.fixture(params=["sqlite+filesystem", "postgres+s3"])
+async def stores(
     request: pytest.FixtureRequest, tmp_path: Path
-) -> AsyncIterator[ObjectStore]:
-    if request.param == "filesystem":
-        yield FilesystemObjectStore(tmp_path / "objects")
+) -> AsyncIterator[tuple[Database, ObjectStore]]:
+    if request.param == "sqlite+filesystem":
+        database = Database.sqlite(tmp_path / "papiq.db")
+        await migrate(database)
+        yield database, FilesystemObjectStore(tmp_path / "objects")
+        await database.dispose()
         return
-    settings: Settings = request.getfixturevalue("s3_settings")
-    async with s3_test_store(settings) as store:
-        yield store
+    settings: Settings = request.getfixturevalue("settings")
+    if settings.db_type != "postgres" or settings.db_host is None:
+        pytest.skip("PAPIQ_DB_TYPE is not postgres")
+    if not probes.postgres_answers(settings.db_host, settings.db_port):
+        pytest.skip(f"Postgres not reachable at {settings.db_host}:{settings.db_port}")
+    s3: Settings = request.getfixturevalue("s3_settings")
+    assert settings.db_name
+    name = f"{settings.db_name}_test_{secrets.token_hex(4)}"
+    await create_database(settings, name)
+    database = postgres(settings, name)
+    try:
+        await migrate(database)
+        async with s3_test_store(s3) as store:
+            yield database, store
+    finally:
+        await database.dispose()
+        await drop_database(settings, name)
 
 
 @pytest.fixture
-async def system(
-    object_store: ObjectStore, settings: Settings, tmp_path: Path
-) -> AsyncIterator[System]:
+def object_store(stores: tuple[Database, ObjectStore]) -> ObjectStore:
+    return stores[1]
+
+
+@pytest.fixture
+async def system(stores: tuple[Database, ObjectStore], settings: Settings) -> AsyncIterator[System]:
     if not settings.docling_models_path.is_dir():
         pytest.skip(f"Docling models not found in {settings.docling_models_path}")
-    database = Database.sqlite(tmp_path / "papiq.db")
-    await migrate(database)
+    database, object_store = stores
     ocr = Interruptible(OcrmypdfEngine(languages=["deu", "eng"], timeout=timedelta(minutes=5)))
     container = replace(
         build_memory_container(),
@@ -140,7 +161,6 @@ async def system(
     finally:
         worker.stop()
         await asyncio.wait_for(running, timeout=60)  # the worker shuts down cleanly
-        await database.dispose()
 
 
 async def test_documents_go_through_the_api(system: System, object_store: ObjectStore) -> None:

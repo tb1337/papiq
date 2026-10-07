@@ -111,6 +111,7 @@ forbidden_modules = [
     "pydantic",
     "pydantic_settings",
     "pypdfium2",
+    "python_multipart",
     "sqlalchemy",
     "starlette",
     "structlog",

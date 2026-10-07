@@ -77,6 +77,16 @@ class FilesystemObjectStore:
 
         await asyncio.to_thread(remove)
 
+    async def check(self) -> None:
+        """For health checks: OSError unless the root is a writable directory."""
+
+        def check() -> None:
+            self._root.mkdir(parents=True, exist_ok=True)
+            if not os.access(self._root, os.W_OK | os.X_OK):
+                raise PermissionError(f"{self._root} is not writable")
+
+        await asyncio.to_thread(check)
+
     def _path(self, key: str) -> Path:
         # Valid keys have no empty, `.` or `..` segments, so the path stays below the root.
         return self._root.joinpath(*check_key(key).split("/"))

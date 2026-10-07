@@ -10,9 +10,10 @@ from papiq.adapters.outbound.filesystem import FilesystemObjectStore
 from papiq.adapters.outbound.memory import ManualClock
 from papiq.adapters.outbound.ocrmypdf import OcrmypdfEngine
 from papiq.adapters.outbound.s3 import S3ObjectStore
-from papiq.adapters.outbound.sql import SqlEventBus, SqlUnitOfWorkFactory
+from papiq.adapters.outbound.sql import Database, SqlEventBus, SqlUnitOfWorkFactory, migrate
 from papiq.adapters.outbound.system import SystemClock
 from papiq.composition import container
+from papiq.composition.api import health_checks
 from papiq.composition.container import (
     Closer,
     Persistence,
@@ -208,3 +209,21 @@ def test_memory_containers_are_independent() -> None:
     first, second = build_memory_container(), build_memory_container()
     assert first.unit_of_work is not second.unit_of_work
     assert isinstance(first.clock, SystemClock)
+
+
+async def test_health_checks_reach_database_and_store(tmp_path: Path) -> None:
+    database = Database.sqlite(tmp_path / "papiq.db")
+    built = replace(
+        build_memory_container(),
+        unit_of_work=SqlUnitOfWorkFactory(database),
+        object_store=FilesystemObjectStore(tmp_path / "objects"),
+    )
+    checks = health_checks(built)
+    try:
+        with pytest.raises(Exception, match="no such table"):
+            await checks["database"]()  # not migrated
+        await migrate(database)
+        await checks["database"]()
+        await checks["object_store"]()
+    finally:
+        await database.dispose()

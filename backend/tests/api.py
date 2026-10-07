@@ -2,6 +2,7 @@
 server, and a reader for server-sent events."""
 
 import asyncio
+import contextlib
 import json
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -71,7 +72,14 @@ class Stream:
 
 
 async def listen(client: httpx.AsyncClient, user: User, stream: Stream, **params: str) -> None:
-    """Collect events into `stream` until the server ends the stream."""
+    """Collect events into `stream` until the server ends the stream or goes away."""
+    with contextlib.suppress(httpx.ReadError, httpx.RemoteProtocolError):
+        await _listen(client, user, stream, params)
+
+
+async def _listen(
+    client: httpx.AsyncClient, user: User, stream: Stream, params: dict[str, str]
+) -> None:
     async with client.stream(
         "GET", f"{PREFIX}/events", headers=auth(user), params=params
     ) as response:

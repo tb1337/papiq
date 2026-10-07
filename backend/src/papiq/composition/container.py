@@ -110,16 +110,25 @@ LANGUAGE_MODELS: dict[str, Factory[LanguageModel]] = {}
 EMBEDDINGS: dict[str, Factory[Embeddings]] = {}
 
 
+def _cores_per_job(settings: Settings) -> int:
+    """The cores are shared by the jobs that run at the same time."""
+    return max(1, (os.cpu_count() or 1) // settings.worker_concurrency)
+
+
 def ocrmypdf_engine(settings: Settings) -> OcrmypdfEngine:
-    # The cores are shared by the jobs that run at the same time.
-    cores = max(1, (os.cpu_count() or 1) // settings.worker_concurrency)
     return OcrmypdfEngine(
-        languages=settings.ocr_languages.split("+"), timeout=settings.ocr_timeout, jobs=cores
+        languages=settings.ocr_languages.split("+"),
+        timeout=settings.ocr_timeout,
+        jobs=_cores_per_job(settings),
     )
 
 
 def docling_parser(settings: Settings) -> DoclingParser:
-    return DoclingParser(models=settings.docling_models_path, timeout=settings.parse_timeout)
+    return DoclingParser(
+        models=settings.docling_models_path,
+        timeout=settings.parse_timeout,
+        threads=_cores_per_job(settings),
+    )
 
 
 OCR_ENGINES: dict[str, Factory[Ocr]] = {"ocrmypdf": ocrmypdf_engine}

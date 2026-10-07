@@ -61,7 +61,26 @@ _UPLOAD_BODY: dict[str, Any] = {
         "at `status_url` or with `GET /events`."
     ),
     response_model=DocumentAccepted,
-    responses=problem_responses(400, 401, 403, 404, 409, 413, 415, 422),
+    responses={
+        202: {
+            "description": "Accepted; processing runs in the background.",
+            "headers": {
+                "Location": {
+                    "description": "The status of the document.",
+                    "schema": {"type": "string"},
+                }
+            },
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b",
+                        "status_url": "/api/v1/documents/01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b",
+                    }
+                }
+            },
+        },
+        **problem_responses(400, 401, 403, 404, 409, 413, 415, 422),
+    },
     openapi_extra=_UPLOAD_BODY,
 )
 async def upload(

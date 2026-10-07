@@ -8,7 +8,7 @@ import pytest
 from papiq.adapters.outbound.s3 import S3ObjectStore
 from papiq.composition.settings import Settings
 from tests.contracts.object_store import ObjectStoreContract
-from tests.integration.conftest import s3_test_store
+from tests.integration.conftest import s3_store, s3_test_store
 
 
 @pytest.fixture
@@ -32,3 +32,13 @@ async def test_the_store_can_be_closed_and_reused(object_store: S3ObjectStore) -
     await object_store.put("a", b"x", content_type="text/plain")
     await object_store.aclose()
     assert await object_store.get("a") == b"x"
+
+
+async def test_check_needs_the_bucket(object_store: S3ObjectStore, s3_settings: Settings) -> None:
+    await object_store.check()
+    missing = s3_store(s3_settings.model_copy(update={"s3_bucket": "papiq-missing"}), "")
+    try:
+        with pytest.raises(Exception, match=r"404|NoSuchBucket|Not Found"):
+            await missing.check()
+    finally:
+        await missing.aclose()

@@ -11,6 +11,8 @@ import uvicorn
 from fastapi import FastAPI
 
 from papiq.adapters.inbound.rest import ApiContext, HealthCheck, close_event_streams, create_app
+from papiq.adapters.outbound.filesystem import FilesystemObjectStore
+from papiq.adapters.outbound.s3 import S3ObjectStore
 from papiq.composition.container import Container, build_container, build_services
 from papiq.composition.settings import Settings
 from papiq.core.domain.ids import UserId
@@ -28,8 +30,13 @@ def health_checks(container: Container) -> dict[str, HealthCheck]:
         async with container.unit_of_work() as uow:
             await uow.users.find(UserId(UUID(int=0)))
 
+    store = container.object_store
+
     async def object_store() -> None:
-        await container.object_store.exists("health/probe")
+        if isinstance(store, FilesystemObjectStore | S3ObjectStore):
+            await store.check()  # the root directory or the bucket
+        else:
+            await store.exists("health/probe")
 
     return {"database": database, "object_store": object_store}
 
