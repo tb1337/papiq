@@ -5,7 +5,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import PurePath
 from typing import Self
 
@@ -62,6 +62,14 @@ class Sha256:
         return self.hex
 
 
+class Channel(StrEnum):
+    """How a document came in (its intake channel). Further connectors (mail, folder) follow."""
+
+    WEB = "web"  # uploaded with a session (web UI)
+    API = "api"  # uploaded with an API token
+    MIGRATION = "migration"  # taken over from Paperless-ngx
+
+
 class Unset(Enum):
     UNSET = "unset"
 
@@ -109,6 +117,7 @@ class Document:
     tag_ids: set[TagId] = field(default_factory=set)
     attributes: dict[AttributeId, AttributeValue] = field(default_factory=dict)
     document_date: date | None = None
+    channel: Channel = Channel.API
     lane: Lane | None = None
     processing: Processing
     created_at: datetime
@@ -138,6 +147,7 @@ class Document:
         media_type: str,
         result: StepResult,
         now: datetime,
+        channel: Channel = Channel.API,
     ) -> Self:
         """A newly received document. The receive step (hash, duplicate check, storage) is done;
         processing continues with OCR."""
@@ -152,6 +162,7 @@ class Document:
             title=PurePath(filename).stem or filename,
             original_filename=filename,
             media_type=media_type,
+            channel=channel,
             processing=Processing(
                 status=ProcessingStatus.PROCESSING, current_step=Step.RECEIVE, run=1
             ),
