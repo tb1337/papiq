@@ -1,11 +1,13 @@
 import shutil
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
 
 from papiq.adapters.outbound.sql import Database, SqlEventBus, SqlUnitOfWorkFactory, migrate
-from papiq.core.ports import EventBus, UnitOfWorkFactory
+from papiq.core.ports import Clock, DeliveryRetry, EventBus, UnitOfWorkFactory
+from papiq.core.ports.event_bus import DEFAULT_DELIVERY_RETRY
+from tests.contracts.event_bus import EventBusFactory
 
 
 @pytest.fixture(scope="session")
@@ -43,8 +45,13 @@ def uow_factory(database: Database) -> UnitOfWorkFactory:
 
 
 @pytest.fixture
-def event_bus_factory(database: Database) -> Callable[[], EventBus]:
-    return lambda: SqlEventBus(database)
+def event_bus_factory(database: Database) -> EventBusFactory:
+    def create(
+        *, clock: Clock | None = None, retry: DeliveryRetry = DEFAULT_DELIVERY_RETRY
+    ) -> EventBus:
+        return SqlEventBus(database, clock=clock, retry=retry)
+
+    return create
 
 
 @pytest.fixture

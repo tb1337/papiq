@@ -2,7 +2,7 @@
 
 from papiq.core.ports.clock import Clock
 from papiq.core.ports.embeddings import Embeddings
-from papiq.core.ports.event_bus import EventBus, EventHandler, Outbox
+from papiq.core.ports.event_bus import DeliveryRetry, EventBus, EventHandler, Outbox
 from papiq.core.ports.identity import IdentityProvider
 from papiq.core.ports.job_queue import JobQueue
 from papiq.core.ports.llm import LanguageModel
@@ -28,6 +28,7 @@ __all__ = [
     "AttributeDefinitionRepository",
     "Clock",
     "ContactRepository",
+    "DeliveryRetry",
     "DocumentParser",
     "DocumentRepository",
     "DocumentTypeRepository",

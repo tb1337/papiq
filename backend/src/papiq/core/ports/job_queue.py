@@ -53,3 +53,8 @@ class JobQueue(Protocol):
     async def get(self, job: JobId) -> Job:
         """NotFoundError if the job does not exist."""
         ...
+
+    async def purge(self, *, before: datetime) -> int:
+        """Remove done and failed jobs that were due before `before`; returns how many. Queued
+        and running jobs stay."""
+        ...
