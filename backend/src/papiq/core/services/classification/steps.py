@@ -30,6 +30,7 @@ from papiq.core.domain.classification import (
     TAGS,
     FieldCheck,
     attribute_field,
+    attribute_of,
     attribute_to_json,
     checks_to_json,
 )
@@ -601,6 +602,11 @@ def _output(
     }
 
 
+def _reason(check: FieldCheck) -> str:
+    """Reasons of attribute checks name the attribute already."""
+    return str(check.reason) if attribute_of(check.field) else f"{check.field}: {check.reason}"
+
+
 def _result(
     checks: list[FieldCheck],
     answer: JsonObject,
@@ -610,7 +616,7 @@ def _result(
     uncertain = [check for check in checks if not check.ok]
     return StepResult(
         outcome=Outcome.UNCERTAIN if uncertain else Outcome.OK,
-        reason="; ".join(f"{check.field}: {check.reason}" for check in uncertain) or None,
+        reason="; ".join(_reason(check) for check in uncertain) or None,
         confidence=min((check.confidence for check in checks), default=1.0),
         model_version=_model_version(answers[-1]),
         input=input,
