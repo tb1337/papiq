@@ -37,7 +37,7 @@ Größengrenzen für JSON-Eingaben.
 | M4-02 | mittel | Drossel ist nicht atomar; gleichzeitige Versuche umgehen sie | ja |
 | M4-03 | mittel | Admin-API-Token übernimmt das eigene Admin-Konto (Passwort, TOTP) | ja |
 | M4-04 | mittel | JSON-Bodies ohne Größengrenze, auch an `POST /auth/login` | ja |
-| M4-05 | mittel | API-Tokens überleben Passwortwechsel und Admin-Reset (Design) | Entscheidung |
+| M4-05 | mittel | API-Tokens überleben Passwortwechsel und Admin-Reset (Design) | nein (entschieden) |
 | M4-06 | gering | OIDC-Anmeldung lässt eine bestehende Session serverseitig gültig | nein |
 | M4-07 | gering | Eingegebener Nutzername wird bei Fehlversuchen geloggt | nein |
 | M4-08 | gering | Kein `Cache-Control: no-store` auf `/auth/*`; Docs/OpenAPI/Health öffentlich | nein |
@@ -311,6 +311,16 @@ Dateiname bereinigt (Steuerzeichen, 255), Typ per Inhalt. Downloads über Tempda
 Modelle mit `extra="forbid"`, Längen für Nutzername, Passwort, Codes, Namen, Listen, Query-
 Parameter (`cursor` 64, `tag_id` ≤ 50, `next` ≤ 2000). Offen: Gesamtgröße von JSON-Bodies
 (M4-04).
+
+## Entscheidungen des Besitzers (2026-10-07)
+
+- **M4-01:** Beides: Start bricht mit `Secure`-Cookies ohne `PAPIQ_FORWARDED_ALLOW_IPS` ab, und
+  die Quellen-Sperre weist nur falsche Anmeldungen ab (richtiges Passwort kommt durch; die
+  Konto-Drossel bleibt wie sie ist). Der bestehende Test zur Quellen-Sperre wird entsprechend
+  geändert.
+- **M4-05:** Keine Änderung; `revoke_tokens` bleibt standardmäßig `false`.
+- Alle übrigen Befunde werden wie empfohlen behoben; Arbeitsauftrag in
+  `.idea/prompts/M4-fixes.md`.
 
 ## Vor dem Merge beheben
 
