@@ -1,11 +1,14 @@
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from papiq.adapters.outbound.docling import DoclingParser
 from papiq.adapters.outbound.filesystem import FilesystemObjectStore
 from papiq.adapters.outbound.memory import ManualClock
+from papiq.adapters.outbound.ocrmypdf import OcrmypdfEngine
 from papiq.adapters.outbound.s3 import S3ObjectStore
 from papiq.adapters.outbound.sql import SqlEventBus, SqlUnitOfWorkFactory
 from papiq.adapters.outbound.system import SystemClock
@@ -20,10 +23,13 @@ from papiq.composition.container import (
 from papiq.composition.errors import AdapterNotAvailableError
 from papiq.composition.settings import Settings
 from papiq.core.domain.events import DomainEvent
-from papiq.core.domain.pipeline import Lane
+from papiq.core.domain.pipeline import Lane, Step
 from papiq.core.domain.users import Role
+from papiq.core.services.pipeline import RetryPolicy
+from papiq.core.services.steps import OcrStep, ParseStep
 from tests import builders
 from tests.builders import NOW
+from tests.contracts.processing import SAMPLES
 
 
 def settings(**values: Any) -> Settings:
@@ -78,11 +84,51 @@ def test_the_storage_type_selects_the_object_store(tmp_path: Path) -> None:
 
 def test_each_port_is_checked_in_turn(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(container.PERSISTENCE, "sqlite", fake_persistence)
+    monkeypatch.delitem(container.OCR_ENGINES, "ocrmypdf")
+    monkeypatch.delitem(container.PARSERS, "docling")
     with pytest.raises(AdapterNotAvailableError, match="ocr: adapter 'ocrmypdf'"):
         build_container(settings())
     monkeypatch.setitem(container.OCR_ENGINES, "ocrmypdf", lambda _: object())
     with pytest.raises(AdapterNotAvailableError, match="parser: adapter 'docling'"):
         build_container(settings())
+
+
+def test_processing_adapters_follow_the_settings(tmp_path: Path) -> None:
+    configured = settings(
+        ocr_languages="deu+eng+fra",
+        ocr_timeout="120",
+        parse_timeout="300",
+        docling_models_path=tmp_path,
+        storage_path=tmp_path,
+    )
+    ocr = container.OCR_ENGINES["ocrmypdf"](configured)
+    assert isinstance(ocr, OcrmypdfEngine)
+    assert (ocr._languages, ocr._timeout) == ("deu+eng+fra", timedelta(minutes=2))
+    parser = container.PARSERS["docling"](configured)
+    assert isinstance(parser, DoclingParser)
+    assert (parser._models, parser._timeout) == (tmp_path, timedelta(minutes=5))
+
+
+def test_services_take_their_tuning_from_the_settings() -> None:
+    configured = settings(
+        step_max_attempts="5",
+        step_retry_delay="10",
+        ocr_timeout="120",
+        parse_timeout="300",
+        cleanup_interval="60",
+        retention="P1D",
+    )
+    services = build_services(build_memory_container(), configured)
+    pipeline = services.pipeline
+    assert pipeline._retry == RetryPolicy(max_attempts=5, delay=timedelta(seconds=10))
+    assert pipeline._lease == timedelta(minutes=5) + container.LEASE_MARGIN
+    assert isinstance(pipeline._executors[Step.OCR], OcrStep)
+    assert isinstance(pipeline._executors[Step.PARSE], ParseStep)
+    maintenance = services.maintenance
+    assert (maintenance._interval, maintenance._retention) == (
+        timedelta(minutes=1),
+        timedelta(days=1),
+    )
 
 
 async def test_closing_runs_every_closer_in_reverse_order() -> None:
@@ -148,7 +194,7 @@ async def test_memory_container_runs_the_core() -> None:
 
     built.event_bus.subscribe("test", record)
     document = await services.pipeline.receive(
-        user.id, b"%PDF", filename="a.pdf", media_type="application/pdf"
+        user.id, (SAMPLES / "scan.pdf").read_bytes(), filename="a.pdf", media_type="application/pdf"
     )
     while await services.pipeline.run_next_job():
         pass

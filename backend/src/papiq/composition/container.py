@@ -4,26 +4,35 @@ Adapters register their factories in the tables below, keyed by the configured a
 A port whose configured adapter does not exist yet fails with AdapterNotAvailableError.
 """
 
+import os
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from datetime import timedelta
 
 from papiq import __version__
+from papiq.adapters.outbound.docling import DoclingParser
 from papiq.adapters.outbound.filesystem import FilesystemObjectStore
 from papiq.adapters.outbound.memory import (
+    FakeOcr,
+    FakeParser,
+    FakePreviewRenderer,
     MemoryDatabase,
     MemoryEventBus,
     MemoryObjectStore,
     MemoryUnitOfWorkFactory,
 )
+from papiq.adapters.outbound.ocrmypdf import OcrmypdfEngine
+from papiq.adapters.outbound.pdfium import PdfiumPreviewRenderer
 from papiq.adapters.outbound.s3 import S3ObjectStore
 from papiq.adapters.outbound.sql import SqlEventBus, SqlUnitOfWorkFactory
 from papiq.adapters.outbound.system import SystemClock
 from papiq.composition.database import open_database
 from papiq.composition.errors import AdapterNotAvailableError
 from papiq.composition.settings import Settings
-from papiq.core.domain.pipeline import PIPELINE
+from papiq.core.domain.pipeline import PIPELINE, Step
 from papiq.core.ports import (
     Clock,
+    DeliveryRetry,
     DocumentParser,
     Embeddings,
     EventBus,
@@ -31,13 +40,16 @@ from papiq.core.ports import (
     LanguageModel,
     ObjectStore,
     Ocr,
+    PreviewRenderer,
     SearchIndex,
     UnitOfWorkFactory,
 )
 from papiq.core.services.documents import DocumentService
 from papiq.core.services.drawers import DrawerService
+from papiq.core.services.maintenance import MaintenanceService
 from papiq.core.services.master_data import MasterDataService
-from papiq.core.services.pipeline import PipelineService, PlaceholderStep
+from papiq.core.services.pipeline import PipelineService, PlaceholderStep, RetryPolicy, StepExecutor
+from papiq.core.services.steps import OcrStep, ParseStep
 from papiq.core.services.users import UserService
 
 type Factory[T] = Callable[[Settings], T]
@@ -57,9 +69,10 @@ class Persistence:
 def sql_persistence(settings: Settings) -> Persistence:
     """SQLite or Postgres, per `PAPIQ_DB_TYPE`; the schema must be migrated."""
     database = open_database(settings)
+    retry = DeliveryRetry(max_attempts=settings.events_max_attempts)
     return Persistence(
         unit_of_work=SqlUnitOfWorkFactory(database),
-        event_bus=SqlEventBus(database),
+        event_bus=SqlEventBus(database, retry=retry),
         close=database.dispose,
     )
 
@@ -95,16 +108,32 @@ OBJECT_STORES: dict[str, Factory[ObjectStore]] = {
 SEARCH_INDEXES: dict[str, Factory[SearchIndex]] = {}
 LANGUAGE_MODELS: dict[str, Factory[LanguageModel]] = {}
 EMBEDDINGS: dict[str, Factory[Embeddings]] = {}
-OCR_ENGINES: dict[str, Factory[Ocr]] = {}
-PARSERS: dict[str, Factory[DocumentParser]] = {}
+
+
+def ocrmypdf_engine(settings: Settings) -> OcrmypdfEngine:
+    # The cores are shared by the jobs that run at the same time.
+    cores = max(1, (os.cpu_count() or 1) // settings.worker_concurrency)
+    return OcrmypdfEngine(
+        languages=settings.ocr_languages.split("+"), timeout=settings.ocr_timeout, jobs=cores
+    )
+
+
+def docling_parser(settings: Settings) -> DoclingParser:
+    return DoclingParser(models=settings.docling_models_path, timeout=settings.parse_timeout)
+
+
+OCR_ENGINES: dict[str, Factory[Ocr]] = {"ocrmypdf": ocrmypdf_engine}
+PARSERS: dict[str, Factory[DocumentParser]] = {"docling": docling_parser}
+PREVIEW_RENDERERS: dict[str, Factory[PreviewRenderer]] = {
+    "pdfium": lambda _: PdfiumPreviewRenderer()
+}
 IDENTITY_PROVIDERS: dict[str, Factory[IdentityProvider]] = {}  # selected from M4 on
 
 
 @dataclass(frozen=True)
 class Container:
     """One adapter per port. Search, language model and embeddings are optional until the
-    milestones that need them (M6, M5); identity is missing until M4, OCR and parser in the
-    in-memory container.
+    milestones that need them (M6, M5); identity is missing until M4.
 
     `aclose` releases what the adapters hold (database engine, S3 client); call it when the
     API or the worker stops.
@@ -114,8 +143,9 @@ class Container:
     event_bus: EventBus
     object_store: ObjectStore
     clock: Clock
-    ocr: Ocr | None
-    parser: DocumentParser | None
+    ocr: Ocr
+    parser: DocumentParser
+    previews: PreviewRenderer
     identity: IdentityProvider | None
     search_index: SearchIndex | None
     language_model: LanguageModel | None
@@ -148,6 +178,7 @@ def build_container(settings: Settings) -> Container:
         object_store=object_store,
         ocr=_select("ocr", "ocrmypdf", OCR_ENGINES, settings),
         parser=_select("parser", "docling", PARSERS, settings),
+        previews=_select("previews", "pdfium", PREVIEW_RENDERERS, settings),
         identity=None,
         search_index=(
             _select("search_index", "meilisearch", SEARCH_INDEXES, settings)
@@ -176,8 +207,9 @@ def build_memory_container(clock: Clock | None = None) -> Container:
         event_bus=MemoryEventBus(database),
         object_store=MemoryObjectStore(),
         clock=clock or SystemClock(),
-        ocr=None,
-        parser=None,
+        ocr=FakeOcr(),
+        parser=FakeParser(),
+        previews=FakePreviewRenderer(),
         identity=None,
         search_index=None,
         language_model=None,
@@ -194,12 +226,24 @@ class Services:
     master_data: MasterDataService
     documents: DocumentService
     pipeline: PipelineService
+    maintenance: MaintenanceService
 
 
-def build_services(container: Container) -> Services:
-    """Pipeline steps after receive are placeholders until M3 (OCR, parsing), M5
-    (classification, attributes) and M7 (rules)."""
-    uow, clock = container.unit_of_work, container.clock
+# Time a step job may take beyond its time limit: downloads, uploads, preview, bookkeeping.
+LEASE_MARGIN = timedelta(minutes=2)
+
+
+def build_services(container: Container, settings: Settings | None = None) -> Services:
+    """The use cases; tuning (retries, time limits, cleanup) from `settings`, or the defaults.
+
+    OCR and parsing run on the container's adapters. Classification, attributes, rules and
+    filing are placeholders until M5 and M7.
+    """
+    settings = settings or Settings.model_construct()
+    uow, clock, store = container.unit_of_work, container.clock, container.object_store
+    executors: dict[Step, StepExecutor] = {step: PlaceholderStep() for step in PIPELINE[1:]}
+    executors[Step.OCR] = OcrStep(store, container.ocr, container.previews)
+    executors[Step.PARSE] = ParseStep(store, container.parser)
     return Services(
         users=UserService(uow, clock),
         drawers=DrawerService(uow, clock),
@@ -208,9 +252,21 @@ def build_services(container: Container) -> Services:
         pipeline=PipelineService(
             uow,
             clock,
-            container.object_store,
-            {step: PlaceholderStep() for step in PIPELINE[1:]},
+            store,
+            executors,
             pipeline_version=__version__,
+            retry=RetryPolicy(
+                max_attempts=settings.step_max_attempts, delay=settings.step_retry_delay
+            ),
+            # Longer than any step may take, so a running step never loses its claim.
+            lease=max(settings.ocr_timeout, settings.parse_timeout) + LEASE_MARGIN,
+        ),
+        maintenance=MaintenanceService(
+            uow,
+            clock,
+            container.event_bus,
+            interval=settings.cleanup_interval,
+            retention=settings.retention,
         ),
     )
 

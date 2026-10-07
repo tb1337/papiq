@@ -1,2 +1,5 @@
-# The Dockerfile copies nothing from the build context; keep it small.
+# Only what the image build needs; keep the context small.
 *
+# The locked dependencies, to download the Docling models of the locked Docling version.
+!backend/pyproject.toml
+!backend/uv.lock
