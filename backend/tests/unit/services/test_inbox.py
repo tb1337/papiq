@@ -282,6 +282,27 @@ async def test_the_inbox_is_the_owners(world: World) -> None:
         await pipeline.confirm(reader.id, green.id, DocumentChanges())
 
 
+async def test_a_confirmed_document_becomes_visible_to_the_drawers_readers(world: World) -> None:
+    s = await scene(world)
+    reader = await world.user()
+    drawer = await world.drawers.create(s.owner.id, "Shared")
+    await world.drawers.share(s.owner.id, drawer.id, reader.id, ShareLevel.READ)
+    document = await s.pipeline.receive(
+        s.owner.id, incoming(b"%PDF-1.7 shared\n"), filename="b.pdf", drawer=drawer.id
+    )
+    await world.drain(s.pipeline)
+    assert await world.documents.list_visible(reader.id) == []  # yellow: the owner's
+    await s.pipeline.confirm(
+        s.owner.id,
+        document.id,
+        DocumentChanges(document_date=date(2026, 3, 31)),
+        accept_suggestions=True,
+    )
+    await world.drain(s.pipeline)
+    (visible,) = await world.documents.list_visible(reader.id)
+    assert (visible.id, visible.lane) == (document.id, Lane.GREEN)
+
+
 def test_suggestions_that_do_not_fit_are_refused() -> None:
     check = FieldCheck(
         field="contact",

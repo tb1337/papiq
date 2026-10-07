@@ -11,7 +11,7 @@ from papiq.core.domain.errors import ConcurrencyError, ConflictError, NotFoundEr
 from papiq.core.domain.ids import DocumentId, DrawerId, new_id
 from papiq.core.domain.master_data import Contact, DocumentType, Tag
 from papiq.core.domain.permissions import can_read_document
-from papiq.core.domain.pipeline import Lane, Outcome, Step, StepResult, StepRun
+from papiq.core.domain.pipeline import Lane, Outcome, ProcessingStatus, Step, StepResult, StepRun
 from papiq.core.domain.users import User
 from papiq.core.ports import DocumentFilter, UnitOfWorkFactory
 from tests import builders
@@ -414,13 +414,15 @@ class UnitOfWorkContract:
         failed.retry(NOW)
         failed.pull_events()
         received = builders.document(owner, drawer)
+        in_review = builders.processed(owner, drawer, {Step.CLASSIFY: UNCERTAIN})
+        assert in_review.processing.status is ProcessingStatus.REVIEW
         async with uow_factory() as uow:
-            await uow.documents.add(failed)
-            await uow.documents.add(received)
+            for document in (failed, received, in_review):
+                await uow.documents.add(document)
             await uow.commit()
         async with uow_factory() as uow:
-            assert await uow.documents.get(failed.id) == failed
-            assert await uow.documents.get(received.id) == received
+            for document in (failed, received, in_review):
+                assert await uow.documents.get(document.id) == document
 
     async def test_loaded_documents_carry_no_events(self, uow_factory: UnitOfWorkFactory) -> None:
         owner, drawer = await owner_with_drawer(uow_factory)
