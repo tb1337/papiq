@@ -23,14 +23,19 @@ from papiq.adapters.outbound.ocrmypdf import OcrmypdfEngine
 from papiq.adapters.outbound.pdfium import PdfiumPreviewRenderer
 from papiq.adapters.outbound.sql import Database, SqlEventBus, SqlUnitOfWorkFactory, migrate
 from papiq.composition.api import build_app
-from papiq.composition.container import Container, build_memory_container, build_services
+from papiq.composition.container import (
+    Container,
+    Services,
+    build_memory_container,
+    build_services,
+)
 from papiq.composition.settings import Settings
 from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.users import User
 from papiq.core.ports import ObjectStore, OcrResult
 from papiq.core.services.objects import archive_key, markdown_key, preview_key, structure_key
 from tests import builders, probes
-from tests.api import Stream, allow_test_users, auth, listen, serving, until
+from tests.api import Stream, auth, issue_token, listen, serving, until
 from tests.contracts.processing import SAMPLES
 from tests.integration.adapters.sql.conftest import create_database, drop_database, postgres
 from tests.integration.conftest import s3_test_store
@@ -60,6 +65,7 @@ class Interruptible:
 @dataclass
 class System:
     container: Container
+    services: Services
     ocr: Interruptible
     client: httpx2.AsyncClient
 
@@ -69,6 +75,7 @@ class System:
             await uow.users.add(user)
             await uow.drawers.add(builders.default_drawer(user))
             await uow.commit()
+        await issue_token(self.services.auth, user)
         return user
 
     async def upload(self, user: User, sample: str, **data: str) -> httpx2.Response:
@@ -153,11 +160,11 @@ async def system(stores: tuple[Database, ObjectStore], settings: Settings) -> As
         dispatch_interval=timedelta(milliseconds=50),
         shutdown_timeout=timedelta(seconds=30),
     )
-    app = allow_test_users(build_app(container, tuning))
+    app = build_app(container, tuning, services)
     running = asyncio.create_task(worker.run())
     try:
         async with serving(app) as url, httpx2.AsyncClient(base_url=url, timeout=30) as client:
-            yield System(container, ocr, client)
+            yield System(container, services, ocr, client)
     finally:
         worker.stop()
         await asyncio.wait_for(running, timeout=60)  # the worker shuts down cleanly

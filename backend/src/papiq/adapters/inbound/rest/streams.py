@@ -7,13 +7,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
-from papiq.adapters.inbound.rest.auth import CurrentUser
+from papiq.adapters.inbound.rest.auth import PROTECTED, CurrentUser, still_authenticated
 from papiq.adapters.inbound.rest.context import Context
 from papiq.adapters.inbound.rest.events import EventHub, message
 from papiq.adapters.inbound.rest.problems import problem_responses
 from papiq.core.domain.ids import DocumentId
 
-router = APIRouter(tags=["events"])
+router = APIRouter(tags=["events"], dependencies=PROTECTED)
 
 
 def _hub(request: Request) -> EventHub:
@@ -42,7 +42,8 @@ async def _visible_document(
         "the caller may read at that moment; other users' documents are visible once green. "
         "Each event has the event type as `event`, the event id as `id`, and JSON as `data` "
         "(see `EventMessage`). Events are thin: fetch the document for its state. There is "
-        "no replay; after reconnecting, fetch the current state."
+        "no replay; after reconnecting, fetch the current state. The stream checks every "
+        "30 seconds that its session or token is still valid and ends otherwise."
     ),
     response_class=EventSourceResponse,
     responses={
@@ -66,10 +67,15 @@ async def _visible_document(
     },
 )
 async def events(
+    request: Request,
     user: CurrentUser,
+    context: Context,
     hub: Annotated[EventHub, Depends(_hub)],
     document: Annotated[DocumentId | None, Depends(_visible_document)],
 ) -> AsyncIterable[ServerSentEvent]:
+    async def still_allowed() -> bool:
+        return await still_authenticated(request, context, user)
+
     async with hub.listen(user, document) as listener:
-        async for event in listener.events():
+        async for event in listener.events(still_allowed, context.stream_recheck_interval):
             yield ServerSentEvent(event=event.type, id=str(event.id), data=message(event))

@@ -47,3 +47,19 @@ def configure_logging(settings: Settings) -> None:
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(settings.log_level)
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, HideCallbackQuery) for f in access.filters):
+        access.addFilter(HideCallbackQuery())
+
+
+class HideCallbackQuery(logging.Filter):
+    """The OIDC callback's query holds the authorization code and state; the access log shows
+    its path only."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            path = args[2]
+            if "/oidc/callback" in path and "?" in path:
+                record.args = (*args[:2], path.split("?", 1)[0], *args[3:])
+        return True

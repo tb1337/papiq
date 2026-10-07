@@ -58,6 +58,11 @@ class UserService:
             raise NotFoundError("user", id)
         return found
 
+    async def own_account(self, actor: UserId) -> Account:
+        """The caller's own account."""
+        async with self._uow() as uow:
+            return await _account(uow, await load_actor(uow, actor))
+
     async def account(self, actor: UserId, id: UserId) -> Account:
         """Admins only."""
         async with self._uow() as uow:

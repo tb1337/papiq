@@ -48,6 +48,12 @@ def build_app(
     services = services or build_services(container, settings)
     return create_app(
         ApiContext(
+            auth=services.auth,
+            users=services.users,
+            drawers=services.drawers,
+            master_data=services.master_data,
+            oidc=services.oidc,
+            cookie_secure=settings.cookie_secure,
             pipeline=services.pipeline,
             documents=services.documents,
             event_bus=container.event_bus,
