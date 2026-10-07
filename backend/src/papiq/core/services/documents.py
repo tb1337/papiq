@@ -1,34 +1,131 @@
+import logging
 from collections.abc import Collection
+from dataclasses import dataclass
+from enum import StrEnum
+from pathlib import Path, PurePath
 
+from papiq.core.domain import media_types
 from papiq.core.domain.documents import Document, DocumentChanges, Unset
+from papiq.core.domain.drawers import Drawer, ShareLevel
 from papiq.core.domain.errors import NotFoundError, PermissionDeniedError
 from papiq.core.domain.ids import DocumentId, DrawerId, UserId
 from papiq.core.domain.permissions import (
     can_move_document,
     can_read_document,
+    document_access,
     is_document_owner,
 )
 from papiq.core.domain.pipeline import StepRun
-from papiq.core.ports import Clock, UnitOfWork, UnitOfWorkFactory
+from papiq.core.ports import Clock, DocumentFilter, ObjectStore, UnitOfWork, UnitOfWorkFactory
+from papiq.core.ports.preview import PREVIEW_MEDIA_TYPE
 from papiq.core.services._access import (
     load_actor,
     readable_document,
     visible_drawer,
     writable_document,
 )
+from papiq.core.services.objects import archive_key, original_key, preview_key
+
+log = logging.getLogger(__name__)
+
+MAX_PAGE = 200
+
+
+@dataclass(frozen=True)
+class DocumentView:
+    """A document with the caller's access to it."""
+
+    document: Document
+    access: ShareLevel
+
+
+class DocumentFile(StrEnum):
+    ORIGINAL = "original"
+    ARCHIVE = "archive"
+    PREVIEW = "preview"
+
+
+@dataclass(frozen=True)
+class FileInfo:
+    """A downloaded file: its media type and a filename to offer."""
+
+    media_type: str
+    filename: str
 
 
 class DocumentService:
     """Reading and changing documents. Ingest and processing live in PipelineService."""
 
-    def __init__(self, uow: UnitOfWorkFactory, clock: Clock) -> None:
+    def __init__(
+        self, uow: UnitOfWorkFactory, clock: Clock, object_store: ObjectStore | None = None
+    ) -> None:
         self._uow = uow
         self._clock = clock
+        self._store = object_store
 
     async def get(self, actor: UserId, id: DocumentId) -> Document:
         async with self._uow() as uow:
             document, _ = await readable_document(uow, await load_actor(uow, actor), id)
             return document
+
+    async def view(self, actor: UserId, id: DocumentId) -> DocumentView:
+        async with self._uow() as uow:
+            user = await load_actor(uow, actor)
+            document, drawer = await readable_document(uow, user, id)
+            access = document_access(user, document, drawer)
+        assert access is not None  # readable
+        return DocumentView(document, access)
+
+    async def query(
+        self,
+        actor: UserId,
+        filter: DocumentFilter,
+        *,
+        before: DocumentId | None = None,
+        limit: int = 50,
+    ) -> list[DocumentView]:
+        """Readable documents matching `filter`, newest first, after the page ending at
+        `before`. Each is checked against the permission rules once more."""
+        limit = max(1, min(limit, MAX_PAGE))
+        async with self._uow() as uow:
+            user = await load_actor(uow, actor)
+            documents = await uow.documents.query_visible(actor, filter, before=before, limit=limit)
+            drawers: dict[DrawerId, Drawer] = {}
+            views = []
+            for document in documents:
+                if document.drawer_id not in drawers:
+                    drawers[document.drawer_id] = await uow.drawers.get(document.drawer_id)
+                access = document_access(user, document, drawers[document.drawer_id])
+                if access is None:
+                    log.error(
+                        "the repository listed a document the user may not read",
+                        extra={"document_id": str(document.id), "user_id": str(actor)},
+                    )
+                    continue
+                views.append(DocumentView(document, access))
+        return views
+
+    async def download(
+        self, actor: UserId, id: DocumentId, file: DocumentFile, target: Path
+    ) -> FileInfo:
+        """Write a file of a readable document to the local path `target`. NotFoundError if
+        the caller may not read the document or the file does not exist (yet)."""
+        assert self._store is not None, "DocumentService needs an object store for downloads"
+        async with self._uow() as uow:
+            document, _ = await readable_document(uow, await load_actor(uow, actor), id)
+        stem = PurePath(document.original_filename).stem or "document"
+        match file:
+            case DocumentFile.ORIGINAL:
+                key = original_key(document.sha256)
+                info = FileInfo(document.media_type, document.original_filename)
+            case DocumentFile.ARCHIVE:
+                key, info = archive_key(id), FileInfo(media_types.PDF, f"{stem}.pdf")
+            case DocumentFile.PREVIEW:
+                key, info = preview_key(id), FileInfo(PREVIEW_MEDIA_TYPE, f"{stem}.webp")
+        if not await self._store.exists(key):
+            raise NotFoundError(f"{file.value} of document", id)
+        await self._store.download(key, target)
+        return info
 
     async def list_visible(self, actor: UserId) -> list[Document]:
         async with self._uow() as uow:

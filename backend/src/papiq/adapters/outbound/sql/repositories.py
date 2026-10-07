@@ -49,6 +49,7 @@ from papiq.core.domain.pipeline import (
 )
 from papiq.core.domain.users import Role, User
 from papiq.core.domain.validation import name_key
+from papiq.core.ports.repository import DocumentFilter
 
 type Values = dict[str, Any]
 
@@ -238,6 +239,19 @@ class SqlDrawerRepository(SqlRepository[DrawerId, Drawer]):
         await self._tx.write(delete(t.drawer_shares).where(t.drawer_shares.c.drawer_id.in_(ids)))
 
 
+def _visible_to(user: UserId) -> ColumnElement[bool]:
+    """The rule of `papiq.core.domain.permissions`: own documents, and green documents in
+    drawers the user owns or that are shared with them."""
+    documents = t.documents
+    return or_(
+        documents.c.owner_id == user,
+        and_(
+            documents.c.lane == Lane.GREEN.value,
+            documents.c.drawer_id.in_(accessible_drawer_ids(user)),
+        ),
+    )
+
+
 def accessible_drawer_ids(user: UserId) -> Any:
     """Subquery: ids of the drawers the user owns or that are shared with them."""
     return (
@@ -357,16 +371,43 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
         return found[0] if found else None
 
     async def list_visible_to(self, user: UserId) -> list[Document]:
+        return await self._load(_visible_to(user))
+
+    async def query_visible(
+        self,
+        user: UserId,
+        filter: DocumentFilter,
+        *,
+        before: DocumentId | None = None,
+        limit: int,
+    ) -> list[Document]:
         documents = t.documents
-        return await self._load(
-            or_(
-                documents.c.owner_id == user,
-                and_(
-                    documents.c.lane == Lane.GREEN.value,
-                    documents.c.drawer_id.in_(accessible_drawer_ids(user)),
-                ),
+        criteria = [_visible_to(user)]
+        if before is not None:
+            criteria.append(documents.c.id < before)
+        if filter.contact is not None:
+            criteria.append(documents.c.contact_id == filter.contact)
+        if filter.document_type is not None:
+            criteria.append(documents.c.document_type_id == filter.document_type)
+        if filter.drawer is not None:
+            criteria.append(documents.c.drawer_id == filter.drawer)
+        for tag in sorted(filter.tags):
+            tags = t.document_tags
+            criteria.append(
+                documents.c.id.in_(select(tags.c.document_id).where(tags.c.tag_id == tag))
             )
-        )
+        if filter.lanes is not None:
+            values = [lane.value for lane in filter.lanes if lane is not None]
+            lane_criteria = [documents.c.lane.in_(values)]
+            if None in filter.lanes:
+                lane_criteria.append(documents.c.lane.is_(None))
+            criteria.append(or_(*lane_criteria))
+        rows = (
+            await self._tx.read(
+                select(documents).where(*criteria).order_by(documents.c.id.desc()).limit(limit)
+            )
+        ).all()
+        return await self._entities(rows)
 
     async def exists(
         self,

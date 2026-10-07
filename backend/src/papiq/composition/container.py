@@ -348,7 +348,7 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
         users=UserService(uow, clock, container.password_hasher),
         drawers=DrawerService(uow, clock),
         master_data=MasterDataService(uow, clock),
-        documents=DocumentService(uow, clock),
+        documents=DocumentService(uow, clock, store),
         pipeline=PipelineService(
             uow,
             clock,

@@ -86,6 +86,80 @@ class MasterDataService:
     ) -> AttributeDefinition:
         return await self._rename(actor, _attributes, id, name)
 
+    # --- reading (every signed-in user) ----------------------------------------------------------
+
+    async def list_contacts(self, actor: UserId) -> list[Contact]:
+        return await self._list(actor, _contacts)
+
+    async def list_document_types(self, actor: UserId) -> list[DocumentType]:
+        return await self._list(actor, _document_types)
+
+    async def list_tags(self, actor: UserId) -> list[Tag]:
+        return await self._list(actor, _tags)
+
+    async def list_attributes(self, actor: UserId) -> list[AttributeDefinition]:
+        return await self._list(actor, _attributes)
+
+    async def get_contact(self, actor: UserId, id: ContactId) -> Contact:
+        return await self._get(actor, _contacts, id)
+
+    async def get_document_type(self, actor: UserId, id: DocumentTypeId) -> DocumentType:
+        return await self._get(actor, _document_types, id)
+
+    async def get_tag(self, actor: UserId, id: TagId) -> Tag:
+        return await self._get(actor, _tags, id)
+
+    async def get_attribute(self, actor: UserId, id: AttributeId) -> AttributeDefinition:
+        return await self._get(actor, _attributes, id)
+
+    # --- deleting (admins; only what no document uses) -------------------------------------------
+
+    async def delete_contact(self, actor: UserId, id: ContactId) -> None:
+        await self._delete(actor, _contacts, id, lambda uow: uow.documents.exists(contact=id))
+
+    async def delete_document_type(self, actor: UserId, id: DocumentTypeId) -> None:
+        async def used(uow: UnitOfWork) -> bool:
+            if await uow.documents.exists(document_type=id):
+                return True
+            return any(
+                id in (attribute.document_type_ids or ())
+                for attribute in await uow.attributes.list_all()
+            )
+
+        await self._delete(actor, _document_types, id, used)
+
+    async def delete_tag(self, actor: UserId, id: TagId) -> None:
+        await self._delete(actor, _tags, id, lambda uow: uow.documents.exists(tag=id))
+
+    async def delete_attribute(self, actor: UserId, id: AttributeId) -> None:
+        await self._delete(actor, _attributes, id, lambda uow: uow.documents.exists(attribute=id))
+
+    async def _list[E: MasterData](self, actor: UserId, repository: Repo[E]) -> list[E]:
+        async with self._uow() as uow:
+            await load_actor(uow, actor)
+            items = await repository(uow).list_all()
+        return sorted(items, key=lambda item: item.name.casefold())
+
+    async def _get[E: MasterData](self, actor: UserId, repository: Repo[E], id: Any) -> E:
+        async with self._uow() as uow:
+            await load_actor(uow, actor)
+            return await repository(uow).get(id)
+
+    async def _delete[E: MasterData](
+        self,
+        actor: UserId,
+        repository: Repo[E],
+        id: Any,
+        used: Callable[[UnitOfWork], Awaitable[bool]],
+    ) -> None:
+        async with self._uow() as uow:
+            await _require_admin(uow, actor)
+            item = await repository(uow).get(id)
+            if await used(uow):
+                raise ConflictError(f"'{item.name}' is in use")
+            await repository(uow).remove(id)
+            await uow.commit()
+
     def _now(self) -> datetime:
         return self._clock.now()
 

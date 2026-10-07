@@ -24,6 +24,7 @@ from papiq.core.ports.preview import PreviewRenderer
 from papiq.core.ports.repository import (
     AttributeDefinitionRepository,
     ContactRepository,
+    DocumentFilter,
     DocumentRepository,
     DocumentTypeRepository,
     DrawerRepository,
@@ -44,6 +45,7 @@ __all__ = [
     "CredentialRepository",
     "DecryptionError",
     "DeliveryRetry",
+    "DocumentFilter",
     "DocumentParser",
     "DocumentRepository",
     "DocumentTypeRepository",

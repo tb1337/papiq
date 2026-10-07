@@ -13,6 +13,7 @@ Common rules for every adapter:
 - `get` raises NotFoundError, `find` returns None.
 """
 
+from dataclasses import dataclass
 from typing import Protocol
 
 from papiq.core.domain.attributes import AttributeDefinition
@@ -28,7 +29,7 @@ from papiq.core.domain.ids import (
     UserId,
 )
 from papiq.core.domain.master_data import Contact, DocumentType, Tag
-from papiq.core.domain.pipeline import StepRun
+from papiq.core.domain.pipeline import Lane, StepRun
 from papiq.core.domain.users import User
 
 
@@ -49,6 +50,10 @@ class Repository[K, E](Protocol):
 class NamedRepository[K, E](Repository[K, E], Protocol):
     async def find_by_name(self, name: str) -> E | None:
         """Case-insensitive lookup."""
+        ...
+
+    async def remove(self, id: K) -> None:
+        """Delete it; NotFoundError if missing. No document may refer to it."""
         ...
 
 
@@ -92,6 +97,18 @@ class AttributeDefinitionRepository(
 ): ...
 
 
+@dataclass(frozen=True, kw_only=True)
+class DocumentFilter:
+    """Criteria for listing documents; all given ones must match. `tags`: every one of them.
+    `lanes`: one of them, where None stands for documents still in processing."""
+
+    contact: ContactId | None = None
+    document_type: DocumentTypeId | None = None
+    tags: frozenset[TagId] = frozenset()
+    drawer: DrawerId | None = None
+    lanes: frozenset[Lane | None] | None = None
+
+
 class DocumentRepository(Repository[DocumentId, Document], Protocol):
     async def find_by_sha256(self, owner: UserId, sha256: Sha256) -> Document | None: ...
 
@@ -99,6 +116,18 @@ class DocumentRepository(Repository[DocumentId, Document], Protocol):
         """Documents the user may read, by the rules of `papiq.core.domain.permissions`:
         own documents, and green documents in drawers the user owns or that are shared with them.
         """
+        ...
+
+    async def query_visible(
+        self,
+        user: UserId,
+        filter: DocumentFilter,
+        *,
+        before: DocumentId | None = None,
+        limit: int,
+    ) -> list[Document]:
+        """Documents the user may read (as `list_visible_to`) that match `filter`, newest first
+        (by id, descending), only those with an id below `before`, at most `limit`."""
         ...
 
     async def remove(self, id: DocumentId) -> None:
