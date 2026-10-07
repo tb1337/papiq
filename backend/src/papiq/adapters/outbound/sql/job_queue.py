@@ -56,6 +56,7 @@ class SqlJobQueue:
             "dedup_key": dedup_key,
             "status": JobStatus.QUEUED.value,
             "attempts": 0,
+            "releases": 0,
             "run_at": require_utc(run_at, "run_at"),
         }
         if dedup_key is None:
@@ -112,6 +113,15 @@ class SqlJobQueue:
             job, status=JobStatus.QUEUED, run_at=require_utc(run_at, "run_at"), last_error=error
         )
 
+    async def release(self, job: Job, *, run_at: datetime, error: str) -> None:
+        await self._finish(
+            job,
+            status=JobStatus.QUEUED,
+            run_at=require_utc(run_at, "run_at"),
+            last_error=error,
+            releases=_jobs.c.releases + 1,
+        )
+
     async def fail(self, job: Job, *, error: str) -> None:
         await self._finish(job, status=JobStatus.FAILED, last_error=error)
 
@@ -156,4 +166,5 @@ def _job(row: Row[Any]) -> Job:
         run_at=row.run_at,
         locked_until=row.locked_until,
         last_error=row.last_error,
+        releases=row.releases,
     )

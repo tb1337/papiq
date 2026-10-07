@@ -36,3 +36,9 @@ class Job:
     run_at: datetime
     locked_until: datetime | None = None
     last_error: str | None = None
+    releases: int = 0  # claims given back unfinished (`JobQueue.release`)
+
+    @property
+    def tries(self) -> int:
+        """Claims that counted: the attempts without the released ones."""
+        return self.attempts - self.releases

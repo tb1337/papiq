@@ -375,6 +375,19 @@ class MemoryJobQueue:
             )
         )
 
+    async def release(self, job: Job, *, run_at: datetime, error: str) -> None:
+        current = await self._claimed(job)
+        self._write(
+            dataclasses.replace(
+                current,
+                status=JobStatus.QUEUED,
+                releases=current.releases + 1,
+                run_at=require_utc(run_at, "run_at"),
+                locked_until=None,
+                last_error=error,
+            )
+        )
+
     async def fail(self, job: Job, *, error: str) -> None:
         current = await self._claimed(job)
         self._write(

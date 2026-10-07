@@ -154,6 +154,30 @@ class JobQueueContract:
         again = await claim(uow_factory, at=timedelta(minutes=1))
         assert again is not None and again.id == id and again.attempts == 2
 
+    async def test_released_job_runs_again_without_counting_the_attempt(
+        self, uow_factory: UnitOfWorkFactory
+    ) -> None:
+        id = await enqueue(uow_factory)
+        assert id is not None
+        claimed = await claim(uow_factory)
+        assert claimed is not None and claimed.attempts == 1
+        async with uow_factory() as uow:
+            await uow.jobs.release(claimed, run_at=NOW, error="interrupted")
+            await uow.commit()
+        job = await get(uow_factory, id)
+        assert (job.status, job.locked_until, job.last_error) == (
+            JobStatus.QUEUED,
+            None,
+            "interrupted",
+        )
+        assert (job.attempts, job.releases, job.tries) == (1, 1, 0)
+        again = await claim(uow_factory)
+        assert again is not None and again.id == id
+        assert (again.attempts, again.tries) == (2, 1)
+        async with uow_factory() as uow:
+            with pytest.raises(ConcurrencyError):
+                await uow.jobs.release(claimed, run_at=NOW, error="stale claim")
+
     async def test_failed_job_is_given_up(self, uow_factory: UnitOfWorkFactory) -> None:
         id = await enqueue(uow_factory)
         assert id is not None
