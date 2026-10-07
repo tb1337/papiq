@@ -29,6 +29,7 @@ from papiq.adapters.inbound.rest.auth import (
 )
 from papiq.adapters.inbound.rest.context import ApiContext
 from papiq.adapters.inbound.rest.events import EventHub, dispatch_forever
+from papiq.adapters.inbound.rest.middleware import LimitRequestBody
 from papiq.adapters.inbound.rest.schemas import EventMessage
 
 PREFIX = "/api/v1"
@@ -92,6 +93,11 @@ def create_app(context: ApiContext) -> FastAPI:
     app.state.context = context
     app.state.hub = hub
     problems.install(app)
+    app.add_middleware(
+        LimitRequestBody,
+        limit=context.max_request_size,
+        exempt={("POST", f"{PREFIX}/documents")},  # the upload has its own limit
+    )
     for router in (
         account.public,
         account.router,
@@ -129,6 +135,8 @@ def create_app(context: ApiContext) -> FastAPI:
                 for method in context.methods or ():
                     operation = schema["paths"][context.path_format][method.lower()]
                     operation["security"] = security_of(route)
+                    if "requestBody" in operation and "413" not in operation["responses"]:
+                        operation["responses"]["413"] = problems.problem_responses(413)[413]
         return schema
 
     app.openapi = openapi  # type: ignore[method-assign]

@@ -30,6 +30,7 @@ class ApiContext:
     event_bus: EventBus
     health_checks: Mapping[str, HealthCheck]
     max_upload_size: int
+    max_request_size: int = 1024 * 1024  # every other request body
     oidc: OidcService | None = None
     events_poll_interval: timedelta = timedelta(seconds=1)
     # `False` only for development over plain HTTP: cookies without `Secure`.

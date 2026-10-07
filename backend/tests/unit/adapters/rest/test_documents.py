@@ -354,3 +354,20 @@ async def test_unexpected_errors_are_problems_without_details(
     assert response.headers["content-type"] == PROBLEM
     assert response.json()["detail"] == "an unexpected error occurred"
     assert "secret" not in response.text
+
+
+async def test_uploads_have_their_own_limit() -> None:
+    """M4-04: the general limit for request bodies (1 MiB) does not apply to uploads."""
+    container = build_memory_container()
+    services = build_services(container)
+    app = make_app(container, services, max_upload=2 * 1024 * 1024)
+    owner = await services.users.bootstrap_admin("root", PASSWORD)
+    assert owner is not None
+    await issue_token(services.auth, owner)
+    content = b"%PDF-1.7\n%" + b"0" * (2 * 1024 * 1024 - 64 * 1024) + b"\n%%EOF\n"
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app), base_url="http://papiq"
+    ) as client:
+        files = {"file": ("big.pdf", content, "application/pdf")}
+        response = await client.post(DOCUMENTS, files=files, headers=auth(owner))
+    assert response.status_code == 202, response.text

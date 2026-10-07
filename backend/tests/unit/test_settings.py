@@ -424,3 +424,9 @@ def test_secure_cookies_need_the_trusted_proxies(monkeypatch: pytest.MonkeyPatch
     assert load_settings().forwarded_allow_ips is None  # development over plain HTTP
     set_env(monkeypatch, {"PAPIQ_COOKIE_SECURE": "true", "PAPIQ_ROLE": "worker"})
     assert load_settings().forwarded_allow_ips is None  # no cookies in the worker
+
+
+def test_request_bodies_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert load_settings().request_max_size == 1024 * 1024
+    set_env(monkeypatch, {"PAPIQ_REQUEST_MAX_SIZE": "64KiB"})
+    assert load_settings().request_max_size == 64 * 1024

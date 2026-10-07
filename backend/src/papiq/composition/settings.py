@@ -95,6 +95,8 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: Annotated[int, Field(ge=1, le=65535)] = 8000
     upload_max_size: Annotated[ByteSize, Field(gt=0)] = ByteSize(100 * 1024 * 1024)
+    # Every other request body (JSON).
+    request_max_size: Annotated[ByteSize, Field(gt=0)] = ByteSize(1024 * 1024)
     # Addresses of reverse proxies whose X-Forwarded-For is trusted (comma-separated, `*` for
     # all); the client address counts failed sign-ins per source. Required with secure cookies.
     forwarded_allow_ips: str | None = None
