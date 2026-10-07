@@ -1,7 +1,5 @@
 """The in-memory adapters pass every contract suite."""
 
-from collections.abc import Callable
-
 import pytest
 
 from papiq.adapters.outbound.memory import (
@@ -11,9 +9,10 @@ from papiq.adapters.outbound.memory import (
     MemoryObjectStore,
     MemoryUnitOfWorkFactory,
 )
-from papiq.core.ports import Clock, EventBus, ObjectStore, UnitOfWorkFactory
+from papiq.core.ports import Clock, DeliveryRetry, EventBus, ObjectStore, UnitOfWorkFactory
+from papiq.core.ports.event_bus import DEFAULT_DELIVERY_RETRY
 from tests.contracts.clock import ClockContract
-from tests.contracts.event_bus import EventBusContract
+from tests.contracts.event_bus import EventBusContract, EventBusFactory
 from tests.contracts.job_queue import JobQueueContract
 from tests.contracts.object_store import ObjectStoreContract
 from tests.contracts.unit_of_work import UnitOfWorkContract
@@ -30,8 +29,13 @@ def uow_factory(database: MemoryDatabase) -> UnitOfWorkFactory:
 
 
 @pytest.fixture
-def event_bus_factory(database: MemoryDatabase) -> Callable[[], EventBus]:
-    return lambda: MemoryEventBus(database)
+def event_bus_factory(database: MemoryDatabase) -> EventBusFactory:
+    def create(
+        *, clock: Clock | None = None, retry: DeliveryRetry = DEFAULT_DELIVERY_RETRY
+    ) -> EventBus:
+        return MemoryEventBus(database, clock=clock, retry=retry)
+
+    return create
 
 
 @pytest.fixture

@@ -26,11 +26,11 @@ from papiq.core.domain.ids import new_id
 from papiq.core.domain.jobs import Job
 from papiq.core.domain.pipeline import PIPELINE
 from papiq.core.domain.users import User
-from papiq.core.ports import EventBus, UnitOfWorkFactory
+from papiq.core.ports import DeliveryRetry, EventBus, UnitOfWorkFactory
 from papiq.core.services.pipeline import PipelineService, PlaceholderStep
 from tests import builders
 from tests.builders import NOW
-from tests.contracts.event_bus import Recorder, publish, received
+from tests.contracts.event_bus import EventBusFactory, Recorder, publish, received
 from tests.contracts.unit_of_work import owner_with_drawer
 
 LEASE = timedelta(minutes=5)
@@ -236,19 +236,22 @@ class SqlAdapterSuite:
     async def test_failed_deliveries_are_kept_per_subscriber(
         self,
         uow_factory: UnitOfWorkFactory,
-        event_bus_factory: Callable[[], EventBus],
+        event_bus_factory: EventBusFactory,
         database: Database,
     ) -> None:
-        bus = event_bus_factory()
+        clock = ManualClock(NOW)
+        bus = event_bus_factory(clock=clock, retry=DeliveryRetry(delay=timedelta(seconds=10)))
         failing = Recorder(failures=3)
         bus.subscribe("failing", failing)
         await publish(uow_factory, received(1))
         await bus.dispatch()
+        clock.advance(timedelta(seconds=10))
         await bus.dispatch()
         async with database.reading() as connection:
             rows = (await connection.execute(select(t.event_retries))).all()
         assert [(row.subscriber, row.attempts) for row in rows] == [("failing", 2)]
         assert "handler failed" in rows[0].last_error
+        assert rows[0].retry_at == NOW + timedelta(seconds=30)
 
 
 class MigrationSuite:

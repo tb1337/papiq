@@ -170,6 +170,45 @@ class JobQueueContract:
         )
         assert await claim(uow_factory, at=2 * LEASE) is None
 
+    async def test_purge_removes_finished_jobs(self, uow_factory: UnitOfWorkFactory) -> None:
+        ids = [await enqueue(uow_factory, run_at=timedelta(seconds=n)) for n in range(4)]
+        assert all(ids)
+        done, failed, running = [await claim(uow_factory, at=LEASE) for _ in range(3)]
+        assert done and failed and running
+        async with uow_factory() as uow:
+            await uow.jobs.complete(done)
+            await uow.jobs.fail(failed, error="broken")
+            await uow.commit()
+
+        async with uow_factory() as uow:  # not committed: nothing removed
+            assert await uow.jobs.purge(before=NOW + LEASE) == 2
+        assert (await get(uow_factory, done.id)).status is JobStatus.DONE
+
+        async with uow_factory() as uow:
+            assert await uow.jobs.purge(before=NOW + timedelta(seconds=1)) == 1  # due before
+            assert await uow.jobs.purge(before=NOW + LEASE) == 1
+            with pytest.raises(NotFoundError):
+                await uow.jobs.get(failed.id)
+            await uow.commit()
+        for job in (done, failed):
+            with pytest.raises(NotFoundError):
+                await get(uow_factory, job.id)
+        assert (await get(uow_factory, running.id)).status is JobStatus.RUNNING
+        queued = ids[3]
+        assert queued is not None and (await get(uow_factory, queued)).status is JobStatus.QUEUED
+
+    async def test_a_purged_dedup_key_can_be_used_again(
+        self, uow_factory: UnitOfWorkFactory
+    ) -> None:
+        assert await enqueue(uow_factory, dedup_key="cleanup") is not None
+        claimed = await claim(uow_factory)
+        assert claimed is not None
+        async with uow_factory() as uow:
+            await uow.jobs.complete(claimed)
+            await uow.jobs.purge(before=NOW + LEASE)
+            assert await uow.jobs.enqueue("test", {}, run_at=NOW, dedup_key="cleanup")
+            await uow.commit()
+
     async def test_dedup_key_while_active(self, uow_factory: UnitOfWorkFactory) -> None:
         first = await enqueue(uow_factory, dedup_key="doc:1:ocr")
         assert first is not None

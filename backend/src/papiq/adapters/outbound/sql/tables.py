@@ -234,7 +234,7 @@ outbox = Table(
 )
 
 # Durable subscriptions: every event with `seq <= position` has been handled; failed ones wait
-# in `event_retries`.
+# in `event_retries` until `retry_at`.
 event_subscriptions = Table(
     "event_subscriptions",
     metadata,
@@ -255,4 +255,6 @@ event_retries = Table(
     Column("seq", _SEQUENCE, ForeignKey("outbox.seq", ondelete="CASCADE"), primary_key=True),
     Column("attempts", Integer, nullable=False),
     Column("last_error", Text, nullable=False),
+    # When the delivery is due again; NULL: at once.
+    Column("retry_at", UtcDateTime, nullable=True),
 )

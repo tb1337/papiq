@@ -51,7 +51,7 @@ SQLAlchemy 2 Core (async; aiosqlite, asyncpg); the domain classes are not ORM-ma
   On SQLite, reads run in autocommit mode and a unit takes the write lock with
   `BEGIN IMMEDIATE` before its first write; writers are serialized. A task must not open a
   second writing unit while its first one is still open: it would wait for its own lock until
-  the busy timeout.
+  the busy timeout, so the adapter raises RuntimeError at once instead.
 - Uniqueness is enforced by the database. Case-insensitive names are stored with a
   `name_key` column (Unicode case folding) under a unique index.
 - Timestamps are UTC (`timestamptz`; on SQLite fixed-width UTC text), decimals exact (`numeric`;
@@ -59,7 +59,9 @@ SQLAlchemy 2 Core (async; aiosqlite, asyncpg); the domain classes are not ORM-ma
 - Outbox events are written at commit. On Postgres, an advisory lock makes transactions with
   events commit one at a time, so `outbox.seq` follows commit order and a subscriber's position
   never skips a late commit. The event bus is polled (`dispatch`); handlers run outside of
-  transactions; failed deliveries are kept per subscriber in `event_retries` and repeated.
+  transactions; failed deliveries are kept per subscriber in `event_retries` and repeated with
+  growing delay (`DeliveryRetry`) until they are given up. `purge` removes events every
+  subscription has handled; `JobQueue.purge` removes finished jobs.
 - Claiming jobs uses `FOR UPDATE SKIP LOCKED` on Postgres and the write lock on SQLite.
 
 Migrations are one Alembic chain for both databases (batch mode on SQLite), in

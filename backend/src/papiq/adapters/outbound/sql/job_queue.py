@@ -16,7 +16,7 @@ from collections.abc import Collection, Mapping
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Row, and_, insert, or_, select, update
+from sqlalchemy import Row, and_, delete, insert, or_, select, update
 from sqlalchemy.dialects import postgresql, sqlite
 
 from papiq.adapters.outbound.sql import tables as t
@@ -114,6 +114,15 @@ class SqlJobQueue:
         if row is None:
             raise NotFoundError("job", job)
         return _job(row)
+
+    async def purge(self, *, before: datetime) -> int:
+        result = await self._tx.write(
+            delete(_jobs).where(
+                _jobs.c.status.in_([JobStatus.DONE.value, JobStatus.FAILED.value]),
+                _jobs.c.run_at < require_utc(before, "before"),
+            )
+        )
+        return int(result.rowcount)
 
     async def _finish(self, job: Job, *, status: JobStatus, **values: Any) -> None:
         result = await self._tx.write(
