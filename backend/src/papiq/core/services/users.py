@@ -128,7 +128,10 @@ class UserService:
     async def reset_password(
         self, actor: UserId, id: UserId, password: str, *, revoke_tokens: bool = False
     ) -> None:
-        """Admins only. All sessions of the user end; API tokens stay unless `revoke_tokens`."""
+        """Admins only, not for their own account (that is `AuthService.change_password`, which
+        needs the current password). All sessions of the user end; API tokens stay unless
+        `revoke_tokens`."""
+        _not_own(actor, id, "reset their own password here")
         async with self._uow() as uow:
             await _require_admin(uow, actor)
             user = await uow.users.get(id)
@@ -153,7 +156,9 @@ class UserService:
         log.info("password reset", extra={"user_id": str(id), "tokens_revoked": revoke_tokens})
 
     async def disable_totp(self, actor: UserId, id: UserId) -> None:
-        """Admins only: for a user who lost their authenticator and recovery codes."""
+        """Admins only, for a user who lost their authenticator and recovery codes; not for
+        their own account (that is `AuthService.disable_totp`, which needs a code)."""
+        _not_own(actor, id, "turn off their own TOTP here")
         async with self._uow() as uow:
             await _require_admin(uow, actor)
             await uow.users.get(id)
@@ -231,6 +236,11 @@ class UserService:
         if self._hasher is None:
             raise RuntimeError("UserService needs a password hasher to set passwords")
         return await self._hasher.hash(check_new_password(password, username))
+
+
+def _not_own(actor: UserId, id: UserId, what: str) -> None:
+    if actor == id:
+        raise PermissionDeniedError(f"admins cannot {what}")
 
 
 async def _require_admin(uow: UnitOfWork, actor: UserId) -> User:

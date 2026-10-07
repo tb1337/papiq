@@ -199,8 +199,11 @@ API token as `Authorization: Bearer papiq_…` (a Bearer header wins over a cook
 depends on it except the five public ones (sign-in, OIDC start, info and callback, health); a
 test calls every registered route without credentials and expects `401`. Requests that change
 something need, with a session, the header `X-CSRF-Token` (from the sign-in answer or
-`GET /auth/me`) and, with a token, the scope `read_write`; otherwise `403`. Managing the own
-sign-in (password, TOTP, tokens, sessions, links) needs a session. Event streams check every 30
+`GET /auth/me`) and, with a token, the scope `read_write`; otherwise `403`. Changing sign-in
+data needs a session, so a leaked API token cannot take over an account: the own password,
+TOTP, tokens, sessions and links (`/auth/*`), and the admin endpoints that create users with a
+password, reset passwords, turn TOTP off and remove links. Admins cannot reset their own
+password or TOTP there; that goes through `/auth/*` with the current password or a code. Event streams check every 30
 seconds that their session or token still holds and end otherwise.
 
 The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax`, `Path=/`, for
@@ -216,7 +219,8 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
 | `POST /auth/totp`, `/totp/confirm`, `/totp/disable`, `/totp/recovery-codes` | TOTP |
 | `GET/POST /auth/tokens`, `DELETE /auth/tokens/{id}` | Own API tokens |
 | `GET /auth/oidc`, `/auth/oidc/login`, `/auth/oidc/callback`; `POST/DELETE /auth/oidc/link` | OpenID Connect |
-| `GET/POST /users`, `GET/PATCH/DELETE /users/{id}`, `POST /users/{id}/password`, `DELETE /users/{id}/totp`, `DELETE /users/{id}/oidc` | Accounts (admins; others list active users' names) |
+| `GET /users`, `GET/PATCH/DELETE /users/{id}` | Accounts: list (others see active users' names), role and state, delete (admins) |
+| `POST /users`, `POST /users/{id}/password`, `DELETE /users/{id}/totp`, `DELETE /users/{id}/oidc` | Create with password, reset password, turn TOTP off, remove links (admins, session only, not the own account) |
 | `/contacts`, `/document-types`, `/tags`, `/attributes` (`GET`, `POST`, `GET/PATCH/DELETE /{id}`) | Master data: read by all, changed by admins, deleted only when unused. Attributes: name, choices and scope change, the data type does not; removing a used choice or narrowing the scope past documents with values is `409` |
 | `GET/POST /drawers`, `GET/PATCH/DELETE /drawers/{id}`, `PUT/DELETE /drawers/{id}/shares/{user_id}` | Drawers and shares (owner) |
 | `GET /documents` | Readable documents, newest first; filters `contact_id`, `document_type_id`, `tag_id`, `drawer_id`, `lane`; `limit`, `cursor` |

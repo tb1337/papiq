@@ -5,7 +5,12 @@ from uuid import UUID
 
 from fastapi import APIRouter
 
-from papiq.adapters.inbound.rest.auth import PROTECTED, Authenticated, CurrentUser
+from papiq.adapters.inbound.rest.auth import (
+    PROTECTED,
+    Authenticated,
+    CurrentUser,
+    SessionPrincipal,
+)
 from papiq.adapters.inbound.rest.context import Context
 from papiq.adapters.inbound.rest.problems import problem_responses
 from papiq.adapters.inbound.rest.schemas import (
@@ -23,6 +28,9 @@ from papiq.core.services.users import Account
 router = APIRouter(prefix="/users", tags=["users"], dependencies=PROTECTED)
 
 ADMINS_ONLY = "Admins only."
+SESSION_ONLY = (
+    " Changes sign-in data, so it needs a session; API tokens are refused (403), as for `/auth/*`."
+)
 
 
 def _account(account: Account) -> AccountOut:
@@ -53,13 +61,14 @@ async def list_users(principal: Authenticated, context: Context) -> list[UserOut
     "",
     status_code=201,
     summary="Create a user",
-    description=ADMINS_ONLY + " Creates the user's private default drawer, too.",
+    description=ADMINS_ONLY + " Creates the user's private default drawer, too." + SESSION_ONLY,
     response_model=UserOut,
     responses=problem_responses(401, 403, 409, 422),
 )
-async def create_user(body: UserCreate, user: CurrentUser, context: Context) -> UserOut:
+async def create_user(body: UserCreate, admin: SessionPrincipal, context: Context) -> UserOut:
     password = None if body.password is None else body.password.get_secret_value()
-    return UserOut.of(await context.users.create_user(user, body.username, body.role, password))
+    created = await context.users.create_user(admin.id, body.username, body.role, password)
+    return UserOut.of(created)
 
 
 @router.get(
@@ -102,14 +111,15 @@ async def update_user(id: UUID, body: UserPatch, user: CurrentUser, context: Con
     status_code=204,
     summary="Reset a user's password",
     description=ADMINS_ONLY
-    + " Ends all the user's sessions; API tokens stay unless `revoke_tokens`.",
+    + " Ends all the user's sessions; API tokens stay unless `revoke_tokens`. Not for the "
+    "own account (403): that is `POST /auth/password`." + SESSION_ONLY,
     responses=problem_responses(401, 403, 404, 422),
 )
 async def reset_password(
-    id: UUID, body: PasswordReset, user: CurrentUser, context: Context
+    id: UUID, body: PasswordReset, admin: SessionPrincipal, context: Context
 ) -> None:
     await context.users.reset_password(
-        user, UserId(id), body.password.get_secret_value(), revoke_tokens=body.revoke_tokens
+        admin.id, UserId(id), body.password.get_secret_value(), revoke_tokens=body.revoke_tokens
     )
 
 
@@ -117,22 +127,24 @@ async def reset_password(
     "/{id}/totp",
     status_code=204,
     summary="Turn a user's TOTP off",
-    description=ADMINS_ONLY + " For a user who lost authenticator and recovery codes.",
+    description=ADMINS_ONLY
+    + " For a user who lost authenticator and recovery codes. Not for the own account (403): "
+    "that is `POST /auth/totp/disable`." + SESSION_ONLY,
     responses=problem_responses(401, 403, 404, 422),
 )
-async def disable_totp(id: UUID, user: CurrentUser, context: Context) -> None:
-    await context.users.disable_totp(user, UserId(id))
+async def disable_totp(id: UUID, admin: SessionPrincipal, context: Context) -> None:
+    await context.users.disable_totp(admin.id, UserId(id))
 
 
 @router.delete(
     "/{id}/oidc",
     summary="Remove a user's links to the identity provider",
-    description=ADMINS_ONLY,
+    description=ADMINS_ONLY + SESSION_ONLY,
     response_model=Removed,
     responses=problem_responses(401, 403, 404, 422),
 )
-async def unlink(id: UUID, user: CurrentUser, context: Context) -> Removed:
-    return Removed(removed=await context.users.unlink_external_identities(user, UserId(id)))
+async def unlink(id: UUID, admin: SessionPrincipal, context: Context) -> Removed:
+    return Removed(removed=await context.users.unlink_external_identities(admin.id, UserId(id)))
 
 
 @router.delete(
