@@ -15,6 +15,7 @@
 import base64
 import hashlib
 import hmac
+import ipaddress
 import secrets
 import unicodedata
 import uuid
@@ -352,7 +353,17 @@ def account_key(username: str) -> str:
 
 
 def source_key(address: str) -> str:
-    return "source:" + address
+    """IPv6 addresses count per /64 network, the smallest block one subscriber usually gets;
+    IPv4 addresses and anything else (not an address) count as they are."""
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return "source:" + address
+    if isinstance(parsed, ipaddress.IPv6Address):
+        if parsed.ipv4_mapped is not None:
+            return "source:" + str(parsed.ipv4_mapped)
+        return "source:" + str(ipaddress.ip_network((parsed, 64), strict=False))
+    return "source:" + str(parsed)
 
 
 @dataclass(kw_only=True)
