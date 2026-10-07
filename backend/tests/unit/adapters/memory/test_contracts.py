@@ -1,9 +1,13 @@
 """The in-memory adapters pass every contract suite."""
 
+from collections.abc import Sequence
+
 import pytest
 
 from papiq.adapters.outbound.memory import (
     FakeCipher,
+    FakeEmbeddings,
+    FakeLanguageModel,
     FakeOcr,
     FakeOidcProvider,
     FakeParser,
@@ -16,7 +20,16 @@ from papiq.adapters.outbound.memory import (
     MemoryObjectStore,
     MemoryUnitOfWorkFactory,
 )
-from papiq.core.ports import Clock, DeliveryRetry, EventBus, ObjectStore, UnitOfWorkFactory
+from papiq.core.domain.errors import EmbeddingsError, LanguageModelError
+from papiq.core.ports import (
+    Clock,
+    DeliveryRetry,
+    EmbeddingResult,
+    EventBus,
+    ObjectStore,
+    StructuredRequest,
+    UnitOfWorkFactory,
+)
 from papiq.core.ports.event_bus import DEFAULT_DELIVERY_RETRY
 from tests.contracts.clock import ClockContract
 from tests.contracts.event_bus import EventBusContract, EventBusFactory
@@ -29,6 +42,7 @@ from tests.contracts.identity import (
     TotpContract,
 )
 from tests.contracts.job_queue import JobQueueContract
+from tests.contracts.language_model import EmbeddingsContract, LanguageModelContract
 from tests.contracts.object_store import ObjectStoreContract
 from tests.contracts.processing import OcrContract, ParserContract, PreviewRendererContract
 from tests.contracts.unit_of_work import UnitOfWorkContract
@@ -158,4 +172,42 @@ def oidc_consent(fake_idp: FakeOidcProvider) -> Consent:
 
 
 class TestFakeOidcProvider(OidcProviderContract):
+    pass
+
+
+@pytest.fixture
+def language_model() -> FakeLanguageModel:
+    return FakeLanguageModel(lambda request: {"answer": "ok"})
+
+
+@pytest.fixture
+def failing_language_model() -> FakeLanguageModel:
+    def fail(request: StructuredRequest) -> str:
+        raise LanguageModelError("unreachable")
+
+    return FakeLanguageModel(fail)
+
+
+class TestFakeLanguageModel(LanguageModelContract):
+    pass
+
+
+class FailingEmbeddings(FakeEmbeddings):
+    async def embed(self, texts: Sequence[str]) -> EmbeddingResult:
+        if texts:
+            raise EmbeddingsError("unreachable")
+        return await super().embed(texts)
+
+
+@pytest.fixture
+def embeddings() -> FakeEmbeddings:
+    return FakeEmbeddings()
+
+
+@pytest.fixture
+def failing_embeddings() -> FakeEmbeddings:
+    return FailingEmbeddings()
+
+
+class TestFakeEmbeddings(EmbeddingsContract):
     pass
