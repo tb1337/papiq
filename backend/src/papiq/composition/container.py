@@ -347,6 +347,16 @@ class Services:
 LEASE_MARGIN = timedelta(minutes=2)
 
 
+def policy_of(settings: Settings) -> ClassificationPolicy:
+    """Thresholds and limits of classification and attribute extraction."""
+    return ClassificationPolicy(
+        accept=settings.confidence_threshold,
+        suggest_contact=settings.contact_suggest_threshold,
+        input_budget=settings.llm_input_budget,
+        max_tags=settings.llm_max_tags,
+    )
+
+
 def build_services(container: Container, settings: Settings | None = None) -> Services:
     """The use cases; tuning (retries, time limits, cleanup) from `settings`, or the defaults.
 
@@ -359,12 +369,7 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
     executors: dict[Step, StepExecutor] = {step: PlaceholderStep() for step in PIPELINE[1:]}
     executors[Step.OCR] = OcrStep(store, container.ocr, container.previews)
     executors[Step.PARSE] = ParseStep(store, container.parser)
-    policy = ClassificationPolicy(
-        accept=settings.confidence_threshold,
-        suggest_contact=settings.contact_suggest_threshold,
-        input_budget=settings.llm_input_budget,
-        max_tags=settings.llm_max_tags,
-    )
+    policy = policy_of(settings)
     model = container.language_model
     executors[Step.CLASSIFY] = ClassifyStep(uow, store, model, clock, policy)
     executors[Step.EXTRACT_ATTRIBUTES] = ExtractAttributesStep(uow, store, model, clock, policy)
