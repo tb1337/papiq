@@ -1,8 +1,9 @@
-"""`python -m papiq.composition [check | migrate | worker]`.
+"""`python -m papiq.composition [check | migrate | api | worker]`.
 
 - `check` (default): validate the configuration and print it without secrets.
 - `migrate`: validate, then bring the configured database to the newest schema. Run before the
   API and the worker start (in the image: `init-migrations`).
+- `api`: serve the REST API until SIGTERM or SIGINT. Only with `PAPIQ_ROLE` `all` or `api`.
 - `worker`: run the worker service until SIGTERM or SIGINT. Only with `PAPIQ_ROLE` `all` or
   `worker`.
 
@@ -17,6 +18,7 @@ from collections.abc import Sequence
 
 import structlog
 
+from papiq.composition.api import run_api
 from papiq.composition.database import migrate_database
 from papiq.composition.errors import ConfigurationError
 from papiq.composition.logging_setup import configure_logging
@@ -24,7 +26,7 @@ from papiq.composition.settings import find_unknown_variables, load_settings
 from papiq.composition.worker import run_worker
 
 # Services and the roles that run them.
-SERVICES = {"worker": {"all", "worker"}}
+SERVICES = {"api": {"all", "api"}, "worker": {"all", "worker"}}
 
 
 def main(argv: Sequence[str] = ()) -> int:
@@ -54,11 +56,12 @@ def main(argv: Sequence[str] = ()) -> int:
         )
         return 1
 
-    if command == "worker":
+    if command in SERVICES:
+        run = run_api if command == "api" else run_worker
         try:
-            asyncio.run(run_worker(settings))
+            asyncio.run(run(settings))
         except Exception:
-            log.exception("worker failed")
+            log.exception(f"{command} failed")
             return 1
         return 0
 

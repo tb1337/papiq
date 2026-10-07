@@ -14,6 +14,7 @@ from typing import Annotated, Any, Literal, get_args
 from pydantic import (
     AnyHttpUrl,
     BeforeValidator,
+    ByteSize,
     Field,
     SecretStr,
     ValidationError,
@@ -88,6 +89,11 @@ class Settings(BaseSettings):
     s3_access_key_id: SecretStr | None = None
     s3_secret_access_key: SecretStr | None = None
     s3_path_style: bool = True
+
+    # API (Uvicorn).
+    api_host: str = "0.0.0.0"
+    api_port: Annotated[int, Field(ge=1, le=65535)] = 8000
+    upload_max_size: Annotated[ByteSize, Field(gt=0)] = ByteSize(100 * 1024 * 1024)
 
     # Worker: background jobs, event delivery and cleanup.
     worker_concurrency: Annotated[int, Field(ge=1, le=64)] = 2

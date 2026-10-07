@@ -114,6 +114,39 @@ Receive → OCR → parse run as jobs (`pipeline.step`); the steps after parsing
   `uv run docling-tools models download layout tableformer -o <dir>`.
 - Previews: PDFium (pypdfium2) renders, Pillow encodes WebP.
 
+## REST API
+
+`python -m papiq.composition api` (with `PAPIQ_ROLE` `all` or `api`) serves
+`adapters/inbound/rest` with Uvicorn on `PAPIQ_API_HOST`:`PAPIQ_API_PORT`. All routes are below
+`/api/v1`; the OpenAPI document is `/api/v1/openapi.json`, the interactive docs `/api/v1/docs`.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /documents` | Upload (multipart: `file`, optional `drawer_id`); `202` with `id`, `status_url` |
+| `GET /documents/{id}` | Status: lane, processing state, current step, run, outcomes |
+| `GET /documents/{id}/log` | Processing log |
+| `POST /documents/{id}/retry` | Repeat the failed step (owner) |
+| `POST /documents/{id}/reprocess` | `{"from_step": "ocr"}`: process again from a step (owner) |
+| `GET /events` | Server-sent events of the documents the caller may read; `?document_id=` |
+| `GET /health` | Database and object store reachable; `200` or `503`, no authentication |
+
+- Uploads are streamed into a temporary file and hashed on the way; the limit
+  `PAPIQ_UPLOAD_MAX_SIZE` applies while receiving (`413`). The type is recognised from the
+  content (PDF, JPEG, PNG, TIFF; otherwise `415`). A file the owner already has: `409` with
+  `existing_document_id`.
+- Errors are problem details (RFC 9457, `application/problem+json`) and documented per endpoint.
+- Authentication comes with M4. Until then the dependency `current_user` answers every request
+  that needs a user with `401`; nothing in the running service can name a user. Tests replace
+  the dependency.
+- Event streams: the API subscribes to the event bus as `api.sse` and polls the outbox every
+  `PAPIQ_EVENTS_POLL_INTERVAL`. Each event goes to the streams of the users who may read the
+  document at that moment (other users once it is green). No replay: after reconnecting,
+  clients fetch the state. `document.deleted` is not streamed (decided in M8). One API instance
+  is assumed: several would share the `api.sse` subscription. While the API is down, its
+  subscription holds back the purge of the outbox.
+- On SIGTERM the event streams end at once, open requests get ten seconds, then the database
+  engine and the S3 client are closed.
+
 ## Worker
 
 `python -m papiq.composition worker` (with `PAPIQ_ROLE` `all` or `worker`) runs
@@ -165,6 +198,8 @@ Durations are seconds (`30`, `1.5`) or ISO 8601 (`PT1H`, `P7D`) and must be posi
 | `PAPIQ_S3_REGION` | `us-east-1` | |
 | `PAPIQ_S3_PATH_STYLE` | `true` | |
 | `PAPIQ_S3_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY` | required for `s3` | *secret* |
+| `PAPIQ_API_HOST`, `PAPIQ_API_PORT` | `0.0.0.0`, `8000` | Where the API listens |
+| `PAPIQ_UPLOAD_MAX_SIZE` | `100MiB` | Largest upload; bytes or with unit (`50MB`, `1GiB`) |
 | `PAPIQ_WORKER_CONCURRENCY` | `2` | Jobs at the same time |
 | `PAPIQ_WORKER_POLL_INTERVAL` | `1` | Seconds between looks for due jobs |
 | `PAPIQ_WORKER_SHUTDOWN_TIMEOUT` | `30` | Seconds running jobs get to finish on SIGTERM |
