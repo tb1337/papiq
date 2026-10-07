@@ -23,6 +23,7 @@ from papiq.core.domain.errors import (
     IdentityProviderError,
     InvalidTransitionError,
     NotFoundError,
+    OpenFieldsError,
     PermissionDeniedError,
     SecondFactorRequiredError,
     TooManyAttemptsError,
@@ -44,6 +45,9 @@ class Problem(BaseModel):
     detail: str | None = Field(default=None, examples=["document 0199… not found"])
     existing_document_id: UUID | None = Field(
         default=None, description="For a duplicate: the document that has the same file."
+    )
+    open_fields: list[str] | None = Field(
+        default=None, description="Confirming a document: the fields that need a decision."
     )
     second_factor_required: bool | None = Field(
         default=None,
@@ -122,6 +126,8 @@ def install(app: FastAPI) -> None:
     async def domain_error(request: Request, error: Exception) -> JSONResponse:
         if isinstance(error, DuplicateDocumentError):
             return problem(409, str(error), existing_document_id=error.existing)
+        if isinstance(error, OpenFieldsError):
+            return problem(422, str(error), open_fields=list(error.fields))
         if isinstance(error, SecondFactorRequiredError):
             return problem(401, str(error), second_factor_required=True)
         if isinstance(error, AuthenticationError):

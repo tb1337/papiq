@@ -1,0 +1,55 @@
+{
+  "description": "Private medical invoice; treatment date and invoice date differ.",
+  "expected": {
+    "lane": "green",
+    "contact": "Dr. med. Anna Beispiel",
+    "document_type": "Rechnung",
+    "tags": [
+      "Gesundheit"
+    ],
+    "document_date": "2026-01-20",
+    "attributes": {
+      "Betrag": {
+        "amount": "128.74",
+        "currency": "EUR"
+      },
+      "Rechnungsnummer": "2026/0042",
+      "Fällig am": "2026-02-19"
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Dr. med. Anna Beispiel",
+        "evidence": "Dr. med. Anna Beispiel"
+      },
+      "document_type": "Rechnung",
+      "new_document_type": null,
+      "tags": [
+        "Gesundheit"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-01-20",
+        "evidence": "Rechnungsdatum: 20.01.2026"
+      }
+    },
+    "attributes": {
+      "Betrag": {
+        "value": {
+          "amount": "128.74",
+          "currency": "EUR"
+        },
+        "evidence": "Rechnungsbetrag: 128,74 €"
+      },
+      "Rechnungsnummer": {
+        "value": "2026/0042",
+        "evidence": "Rechnungsnummer: 2026/0042"
+      },
+      "Fällig am": {
+        "value": "2026-02-19",
+        "evidence": "bis zum 19.02.2026"
+      }
+    }
+  }
+}

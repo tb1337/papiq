@@ -1,0 +1,60 @@
+{
+  "description": "Payment reminder: open amount plus fee, the total is expected.",
+  "expected": {
+    "lane": "green",
+    "contact": "Versandhaus Bergmann GmbH",
+    "document_type": "Mahnung",
+    "tags": [
+      "Einkauf"
+    ],
+    "document_date": "2026-06-10",
+    "attributes": {
+      "Betrag": {
+        "amount": "64.90",
+        "currency": "EUR"
+      },
+      "Rechnungsnummer": "VB-889911",
+      "Kundennummer": "88 77 66",
+      "Fällig am": "2026-06-24"
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Versandhaus Bergmann GmbH",
+        "evidence": "Versandhaus Bergmann GmbH"
+      },
+      "document_type": "Mahnung",
+      "new_document_type": null,
+      "tags": [
+        "Einkauf"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-06-10",
+        "evidence": "Musterstadt, 10.06.2026"
+      }
+    },
+    "attributes": {
+      "Betrag": {
+        "value": {
+          "amount": "64.90",
+          "currency": "EUR"
+        },
+        "evidence": "Zu zahlen | 64,90 €"
+      },
+      "Rechnungsnummer": {
+        "value": "VB-889911",
+        "evidence": "Rechnungsnummer: VB-889911"
+      },
+      "Kundennummer": {
+        "value": "88 77 66",
+        "evidence": "Kundennummer: 88 77 66"
+      },
+      "Fällig am": {
+        "value": "2026-06-24",
+        "evidence": "bis zum 24.06.2026"
+      }
+    }
+  }
+}

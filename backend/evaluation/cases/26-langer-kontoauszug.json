@@ -1,0 +1,45 @@
+{
+  "description": "A long statement (about 30,000 characters): the prompt shortens it, the balance is at the end.",
+  "expected": {
+    "lane": "green",
+    "contact": "Sparkasse Musterstadt",
+    "document_type": "Kontoauszug",
+    "tags": [
+      "Bank"
+    ],
+    "document_date": "2026-04-30",
+    "attributes": {
+      "Kontostand": {
+        "amount": "5432.10",
+        "currency": "EUR"
+      }
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Sparkasse Musterstadt",
+        "evidence": "Sparkasse Musterstadt"
+      },
+      "document_type": "Kontoauszug",
+      "new_document_type": null,
+      "tags": [
+        "Bank"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-04-30",
+        "evidence": "erstellt am 30.04.2026"
+      }
+    },
+    "attributes": {
+      "Kontostand": {
+        "value": {
+          "amount": "5432.10",
+          "currency": "EUR"
+        },
+        "evidence": "Neuer Kontostand | 5.432,10 EUR"
+      }
+    }
+  }
+}

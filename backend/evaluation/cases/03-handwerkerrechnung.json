@@ -1,0 +1,52 @@
+{
+  "description": "Electrician's invoice with one total.",
+  "expected": {
+    "lane": "green",
+    "contact": "Elektro Krause GmbH",
+    "document_type": "Rechnung",
+    "tags": [
+      "Handwerker",
+      "Wohnung"
+    ],
+    "document_date": "2026-02-12",
+    "attributes": {
+      "Betrag": {
+        "amount": "476.00",
+        "currency": "EUR"
+      },
+      "Rechnungsnummer": "2026-017"
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Elektro Krause GmbH",
+        "evidence": "Elektro Krause GmbH"
+      },
+      "document_type": "Rechnung",
+      "new_document_type": null,
+      "tags": [
+        "Handwerker",
+        "Wohnung"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-02-12",
+        "evidence": "Datum: 12.02.2026"
+      }
+    },
+    "attributes": {
+      "Betrag": {
+        "value": {
+          "amount": "476.00",
+          "currency": "EUR"
+        },
+        "evidence": "Summe inkl. 19 % MwSt.: 476,00 EUR"
+      },
+      "Rechnungsnummer": {
+        "value": "2026-017",
+        "evidence": "Rechnung Nr. 2026-017"
+      }
+    }
+  }
+}

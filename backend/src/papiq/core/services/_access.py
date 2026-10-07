@@ -1,6 +1,6 @@
 """Loading entities together with the caller's rights."""
 
-from papiq.core.domain.documents import Document
+from papiq.core.domain.documents import Document, DocumentChanges, Unset
 from papiq.core.domain.drawers import Drawer
 from papiq.core.domain.errors import AuthenticationError, NotFoundError, PermissionDeniedError
 from papiq.core.domain.ids import DocumentId, DrawerId, UserId
@@ -44,3 +44,15 @@ async def visible_drawer(uow: UnitOfWork, user: User, id: DrawerId) -> Drawer:
     if drawer is None or drawer_access(user, drawer) is None:
         raise NotFoundError("drawer", id)
     return drawer
+
+
+async def check_references(uow: UnitOfWork, changes: DocumentChanges) -> None:
+    """NotFoundError if a contact, type or tag the change refers to does not exist."""
+    if not isinstance(changes.contact_id, Unset) and changes.contact_id is not None:
+        await uow.contacts.get(changes.contact_id)
+    if not isinstance(changes.document_type_id, Unset) and changes.document_type_id is not None:
+        await uow.document_types.get(changes.document_type_id)
+    if not isinstance(changes.tag_ids, Unset):
+        for tag in changes.tag_ids:
+            if await uow.tags.find(tag) is None:
+                raise NotFoundError("tag", tag)

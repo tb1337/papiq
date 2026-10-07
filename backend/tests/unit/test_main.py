@@ -33,6 +33,24 @@ def test_valid_configuration_exits_zero_and_masks_secrets(
     assert events[1]["meilisearch_api_key"] == "**********"
 
 
+def test_external_language_models_are_reported(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("PAPIQ_LLM_BASE_URL", "https://api.example.com/v1")
+    monkeypatch.setenv("PAPIQ_LLM_MODEL", "large")
+    monkeypatch.setenv("PAPIQ_EMBEDDING_BASE_URL", "http://10.30.2.15:11434/v1")
+    monkeypatch.setenv("PAPIQ_EMBEDDING_MODEL", "small")
+
+    assert main() == 0
+
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    warnings = [e for e in events if e["level"] == "warning"]
+    assert [(e["variable"], e["host"]) for e in warnings] == [
+        ("PAPIQ_LLM_BASE_URL", "api.example.com")
+    ]
+    assert "outside the local network" in warnings[0]["event"]
+
+
 def test_invalid_configuration_exits_one_with_message(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

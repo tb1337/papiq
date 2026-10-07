@@ -1,0 +1,52 @@
+{
+  "description": "Health insurance premium adjustment.",
+  "expected": {
+    "lane": "green",
+    "contact": "Gesundkasse BKK",
+    "document_type": "Versicherung",
+    "tags": [
+      "Krankenversicherung",
+      "Versicherung"
+    ],
+    "document_date": "2025-11-15",
+    "attributes": {
+      "Versicherungsnummer": "K123456789",
+      "Beitrag": {
+        "amount": "512.34",
+        "currency": "EUR"
+      }
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Gesundkasse BKK",
+        "evidence": "Gesundkasse BKK"
+      },
+      "document_type": "Versicherung",
+      "new_document_type": null,
+      "tags": [
+        "Krankenversicherung",
+        "Versicherung"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2025-11-15",
+        "evidence": "Musterstadt, 15.11.2025"
+      }
+    },
+    "attributes": {
+      "Versicherungsnummer": {
+        "value": "K123456789",
+        "evidence": "Versichertennummer: K123456789"
+      },
+      "Beitrag": {
+        "value": {
+          "amount": "512.34",
+          "currency": "EUR"
+        },
+        "evidence": "beträgt 512,34 €"
+      }
+    }
+  }
+}

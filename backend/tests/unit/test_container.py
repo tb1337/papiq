@@ -11,6 +11,7 @@ from papiq.adapters.outbound.filesystem import FilesystemObjectStore
 from papiq.adapters.outbound.memory import ManualClock
 from papiq.adapters.outbound.ocrmypdf import OcrmypdfEngine
 from papiq.adapters.outbound.oidc import AuthlibOidcProvider
+from papiq.adapters.outbound.openai_compat import OpenAiCompatEmbeddings, OpenAiCompatLanguageModel
 from papiq.adapters.outbound.s3 import S3ObjectStore
 from papiq.adapters.outbound.sql import Database, SqlEventBus, SqlUnitOfWorkFactory, migrate
 from papiq.adapters.outbound.system import SystemClock
@@ -118,6 +119,7 @@ def test_services_take_their_tuning_from_the_settings() -> None:
         step_retry_delay="10",
         ocr_timeout="120",
         parse_timeout="300",
+        llm_timeout="100",
         cleanup_interval="60",
         retention="P1D",
     )
@@ -125,6 +127,9 @@ def test_services_take_their_tuning_from_the_settings() -> None:
     pipeline = services.pipeline
     assert pipeline._retry == RetryPolicy(max_attempts=5, delay=timedelta(seconds=10))
     assert pipeline._lease == timedelta(minutes=5) + container.LEASE_MARGIN
+    # A classification step may ask the model twice.
+    longer = build_services(build_memory_container(), settings(llm_timeout="400")).pipeline
+    assert longer._lease == timedelta(seconds=800) + container.LEASE_MARGIN
     assert isinstance(pipeline._executors[Step.OCR], OcrStep)
     assert isinstance(pipeline._executors[Step.PARSE], ParseStep)
     maintenance = services.maintenance
@@ -174,10 +179,38 @@ def test_optional_ports_are_only_selected_when_configured(
 
     with pytest.raises(AdapterNotAvailableError, match="search_index: adapter 'meilisearch'"):
         build_container(settings(meilisearch_url="http://meilisearch:7700"))
-    with pytest.raises(AdapterNotAvailableError, match="llm: adapter 'openai-compatible'"):
-        build_container(settings(llm_base_url="http://ollama:11434/v1", llm_model="m"))
-    with pytest.raises(AdapterNotAvailableError, match="embeddings: adapter 'openai-compatible'"):
-        build_container(settings(embedding_base_url="http://ollama:11434/v1", embedding_model="m"))
+
+
+def test_language_model_and_embeddings_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(container.PERSISTENCE, "sqlite", fake_persistence)
+    for table, name in ((container.OCR_ENGINES, "ocrmypdf"), (container.PARSERS, "docling")):
+        monkeypatch.setitem(table, name, lambda _: object())
+
+    built = build_container(
+        settings(
+            llm_base_url="http://ollama:11434/v1",
+            llm_model="qwen3",
+            llm_api_key="sk-1",
+            llm_temperature=0.1,
+            llm_seed=3,
+            llm_timeout=timedelta(minutes=2),
+            llm_response_format="json_object",
+            embedding_base_url="http://ollama:11434/v1",
+            embedding_model="bge-m3",
+            embedding_timeout=timedelta(seconds=20),
+        )
+    )
+    model = built.language_model
+    assert isinstance(model, OpenAiCompatLanguageModel)
+    assert (model.model, model.endpoint) == ("qwen3", "ollama:11434")
+    assert model._url == "http://ollama:11434/v1/chat/completions"
+    assert model._headers == {"Authorization": "Bearer sk-1"}
+    assert (model._temperature, model._seed, model._timeout) == (0.1, 3, 120)
+    assert model._format == "json_object"
+    embeddings = built.embeddings
+    assert isinstance(embeddings, OpenAiCompatEmbeddings)
+    assert embeddings.model == "bge-m3"
+    assert (embeddings._headers, embeddings._timeout) == ({}, 20)
 
 
 async def test_memory_container_runs_the_core() -> None:
@@ -203,7 +236,11 @@ async def test_memory_container_runs_the_core() -> None:
     )
     while await services.pipeline.run_next_job():
         pass
-    assert (await services.documents.get(user.id, document.id)).lane is Lane.GREEN
+    # Without a language model, a person classifies the document.
+    stored = await services.documents.get(user.id, document.id)
+    assert stored.lane is Lane.YELLOW
+    log = await services.documents.processing_log(user.id, document.id)
+    assert "no language model" in (log[3].result.reason or "")
     await built.event_bus.dispatch()
     assert received[0].type == "document.received"
     assert received[-1].type == "document.lane_changed"

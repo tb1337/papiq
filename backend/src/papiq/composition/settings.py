@@ -36,7 +36,7 @@ FILE_SUFFIX = "_FILE"
 DEVELOPMENT_SECRET_KEY = "ZGV2LWtleS1kZXYta2V5LWRldi1rZXktZGV2LWtleS0="
 
 # Choices are written in lower case; `PAPIQ_ROLE=API` is accepted.
-_LOWERCASE_FIELDS = {"role", "log_format", "db_type", "storage_type"}
+_LOWERCASE_FIELDS = {"role", "log_format", "db_type", "storage_type", "llm_response_format"}
 # Credentials in URLs (`http://user:password@host`) must not reach logs or error messages.
 _URL_USERINFO = re.compile(r"(?<=://)[^/@\s]+@")
 
@@ -149,12 +149,28 @@ class Settings(BaseSettings):
     meilisearch_api_key: SecretStr | None = None
 
     # Language model and embeddings: OpenAI-compatible endpoints (Ollama, cloud).
+    # The base URL includes the version path, e.g. `http://ollama:11434/v1`.
     llm_base_url: AnyHttpUrl | None = None
     llm_model: str | None = None
     llm_api_key: SecretStr | None = None
+    llm_temperature: Annotated[float, Field(ge=0, le=2)] = 0.0
+    llm_seed: int | None = None
+    llm_timeout: Seconds = timedelta(minutes=5)
+    # `json_object` for providers without JSON Schema support; the answer is checked anyway.
+    llm_response_format: Literal["json_schema", "json_object"] = "json_schema"
+    # Characters of document text in a prompt; longer documents are shortened.
+    llm_input_budget: Annotated[int, Field(ge=1000, le=1_000_000)] = 12_000
+    # Tags listed in a prompt; with more, those named in the text come first.
+    llm_max_tags: Annotated[int, Field(ge=1, le=10_000)] = 200
     embedding_base_url: AnyHttpUrl | None = None
     embedding_model: str | None = None
     embedding_api_key: SecretStr | None = None
+    embedding_timeout: Seconds = timedelta(minutes=1)
+
+    # Classification: a field is accepted (ok) from this confidence on; an existing contact is
+    # suggested from the second.
+    confidence_threshold: Annotated[float, Field(gt=0, le=1)] = 0.9
+    contact_suggest_threshold: Annotated[float, Field(gt=0, le=1)] = 0.75
 
     @model_validator(mode="before")
     @classmethod
@@ -223,6 +239,11 @@ class Settings(BaseSettings):
             url, model = f"{prefix}_base_url", f"{prefix}_model"
             if (getattr(self, url) is None) != (getattr(self, model) is None):
                 problems.append(f"{_env(url)} and {_env(model)} must be set together")
+        if self.contact_suggest_threshold > self.confidence_threshold:
+            problems.append(
+                f"{_env('contact_suggest_threshold')} must not be above "
+                f"{_env('confidence_threshold')}"
+            )
         if problems:
             # Not a ValueError: pydantic would wrap it; the message is complete already.
             raise ConfigurationError(_report(problems))
