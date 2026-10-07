@@ -9,11 +9,8 @@ import logging
 
 import pytest
 
-from papiq.composition.errors import ConfigurationError
-from papiq.composition.settings import Settings
 from papiq.core.domain.errors import AuthenticationError, TooManyAttemptsError
 from papiq.core.services.auth import AuthService
-from tests.builders import PASSWORD
 from tests.unit.services.conftest import World
 
 SOURCE = "203.0.113.1"
@@ -53,29 +50,6 @@ async def _burst(world: World, attempts: int) -> tuple[list[object], GatedHasher
         await asyncio.sleep(0)
     gate.release.set()
     return list(await asyncio.gather(*tasks, return_exceptions=True)), gate
-
-
-# --- M4-01: a shared source address locks everyone out ------------------------------------------
-
-
-def test_production_settings_need_the_trusted_proxies() -> None:
-    """M4-01: Papiq speaks plain HTTP; with `Secure` cookies (default) a TLS-terminating proxy
-    is in front of it. Without `PAPIQ_FORWARDED_ALLOW_IPS` every request then carries the
-    proxy's address, and the per-source throttle becomes a lock for the whole instance. Such
-    a configuration should not start (or at least warn loudly)."""
-    with pytest.raises(ConfigurationError, match="FORWARDED_ALLOW_IPS"):
-        Settings(secret_key=DEV_KEY, cookie_secure=True, forwarded_allow_ips=None)  # type: ignore[arg-type]
-
-
-async def test_failures_from_one_address_do_not_refuse_other_accounts(world: World) -> None:
-    """M4-01 (recommended behaviour, contradicts `test_failures_per_source_block_the_source`):
-    thirty wrong guesses from one address must not refuse a correct sign-in to an account
-    without failures. Behind a proxy or NAT the address is shared by everyone."""
-    await world.account("alice")
-    for number in range(30):
-        with pytest.raises(AuthenticationError):
-            await world.auth.login(f"guess-{number}", "wrong password!", source=SOURCE)
-    await world.auth.login("alice", PASSWORD, source=SOURCE)
 
 
 # --- M4-02: the throttle is not atomic ---------------------------------------------------------

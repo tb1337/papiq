@@ -57,7 +57,11 @@ whether it is active. A deactivated user has no rights and cannot authenticate.
   the same time and read the same. Failures are counted per account (also for unknown names;
   from the sixth on, the account backs off from 1 second, doubling up to 15 minutes; no hard
   lock) and per source address (30 within 15 minutes block it for 15 minutes); the counts are
-  in the database. Success clears the account's count.
+  in the database. A blocked account refuses every attempt (`429`), also a correct password, so
+  TOTP codes cannot be guessed. A blocked source refuses only wrong sign-ins (`429` instead of
+  `401`, not counted for the source again); a correct sign-in from there succeeds, so failures
+  from an address many users share (a proxy, NAT) lock nobody out. Success clears the
+  account's count.
 - TOTP (RFC 6238, pyotp), optional per user: set up with a new secret, which takes effect when a
   code confirms it; then ten recovery codes (80 bits each) are shown once and stored as SHA-256
   hashes. Codes of the previous and next 30-second step are accepted, each step only once. The
@@ -302,7 +306,7 @@ Durations are seconds (`30`, `1.5`) or ISO 8601 (`PT1H`, `P7D`) and must be posi
 | `PAPIQ_S3_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY` | required for `s3` | *secret* |
 | `PAPIQ_API_HOST`, `PAPIQ_API_PORT` | `0.0.0.0`, `8000` | Where the API listens |
 | `PAPIQ_UPLOAD_MAX_SIZE` | `100MiB` | Largest upload; bytes or with unit (`50MB`, `1GiB`) |
-| `PAPIQ_FORWARDED_ALLOW_IPS` | unset | Reverse proxies whose `X-Forwarded-For` is trusted (comma-separated, `*`); unset: none |
+| `PAPIQ_FORWARDED_ALLOW_IPS` | unset; required with `PAPIQ_COOKIE_SECURE=true` | Reverse proxies whose `X-Forwarded-For` is trusted (comma-separated). Secure cookies mean a TLS-terminating proxy in front of Papiq: name its address, or the per-source throttle sees only the proxy. `*` only if the proxy sets the header itself, replacing what clients send |
 | `PAPIQ_SECRET_KEY` | required for `all`, `api` | *secret*; 32 bytes base64 (`openssl rand -base64 32`); encrypts TOTP secrets. Keep it: without it, TOTP secrets cannot be read |
 | `PAPIQ_ADMIN_USERNAME`, `PAPIQ_ADMIN_PASSWORD` | unset | The first admin, see Identity; password *secret*; set both or neither |
 | `PAPIQ_SESSION_IDLE_TIMEOUT` | `P1D` | A session ends when unused this long |

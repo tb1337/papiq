@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from papiq.composition.__main__ import main
-from tests.builders import PASSWORD, SECRET_KEY
+from tests.builders import PASSWORD, SECRET_KEY, TRUSTED_PROXY
 
 
 def test_valid_configuration_exits_zero_and_masks_secrets(
@@ -99,6 +99,7 @@ def test_the_worker_stops_cleanly_on_sigterm(tmp_path: Path) -> None:
         "PAPIQ_STORAGE_PATH": str(tmp_path / "objects"),
         "PAPIQ_LOG_LEVEL": "INFO",
         "PAPIQ_SECRET_KEY": SECRET_KEY,
+        "PAPIQ_FORWARDED_ALLOW_IPS": TRUSTED_PROXY,
     }
     command = [sys.executable, "-m", "papiq.composition"]
     subprocess.run([*command, "migrate"], env=environment, check=True, capture_output=True)
@@ -139,6 +140,7 @@ def test_the_api_serves_health_and_stops_on_sigterm(tmp_path: Path) -> None:
         "PAPIQ_API_HOST": "127.0.0.1",
         "PAPIQ_API_PORT": str(port),
         "PAPIQ_SECRET_KEY": SECRET_KEY,
+        "PAPIQ_FORWARDED_ALLOW_IPS": TRUSTED_PROXY,
         "PAPIQ_ADMIN_USERNAME": "admin",
         "PAPIQ_ADMIN_PASSWORD_FILE": str(password_file),
     }

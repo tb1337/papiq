@@ -409,3 +409,18 @@ def test_inconsistent_oidc_settings(
     message = error_message(monkeypatch, values)
     assert expected in message
     assert "client-secret" not in message
+
+
+def test_secure_cookies_need_the_trusted_proxies(monkeypatch: pytest.MonkeyPatch) -> None:
+    """M4-01: Papiq speaks plain HTTP; with `Secure` cookies (default) a TLS-terminating proxy
+    is in front of it. Without `PAPIQ_FORWARDED_ALLOW_IPS` every request then carries the
+    proxy's address, and the per-source throttle would hit everyone at once."""
+    monkeypatch.delenv("PAPIQ_FORWARDED_ALLOW_IPS")
+    message = error_message(monkeypatch, {})
+    assert "PAPIQ_FORWARDED_ALLOW_IPS is required with PAPIQ_COOKIE_SECURE=true" in message
+    with pytest.raises(ConfigurationError, match="FORWARDED_ALLOW_IPS"):
+        Settings(cookie_secure=True, forwarded_allow_ips=None)
+    set_env(monkeypatch, {"PAPIQ_COOKIE_SECURE": "false"})
+    assert load_settings().forwarded_allow_ips is None  # development over plain HTTP
+    set_env(monkeypatch, {"PAPIQ_COOKIE_SECURE": "true", "PAPIQ_ROLE": "worker"})
+    assert load_settings().forwarded_allow_ips is None  # no cookies in the worker

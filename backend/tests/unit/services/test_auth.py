@@ -148,17 +148,50 @@ async def test_the_backoff_is_capped_at_fifteen_minutes(world: World) -> None:
     assert info.value.retry_after == timedelta(minutes=15)
 
 
-async def test_failures_per_source_block_the_source(world: World) -> None:
-    await world.account("alice")
+async def test_a_blocked_source_refuses_only_wrong_sign_ins(world: World) -> None:
+    """M4-01: thirty failures block the address for wrong sign-ins only (429 instead of 401,
+    not counted for the address again); a correct sign-in from there still works."""
+    alice = await world.account("alice")
+    await world.account("bob")
     for number in range(30):
         with pytest.raises(AuthenticationError):
             await world.auth.login(f"guess-{number}", "wrong password!", source="192.0.2.7")
     with pytest.raises(TooManyAttemptsError) as info:
-        await world.auth.login("alice", PASSWORD, source="192.0.2.7")
+        await world.auth.login("bob", "wrong password!", source="192.0.2.7")
     assert info.value.retry_after == timedelta(minutes=15)
+    async with world.uow() as uow:
+        failures = await uow.login_failures.find("source:192.0.2.7")
+        assert failures is not None and failures.failures == 30  # not counted again
+        bob = await uow.login_failures.find("account:bob")
+        assert bob is not None and bob.failures == 1  # the account counts as before
+    signed_in = await world.auth.login("alice", PASSWORD, source="192.0.2.7")
+    assert signed_in.user.id == alice.id
     await world.auth.login("alice", PASSWORD, source="198.51.100.1")
     world.clock.advance(timedelta(minutes=15))
-    await world.auth.login("alice", PASSWORD, source="192.0.2.7")
+    with pytest.raises(AuthenticationError):
+        await world.auth.login("bob", "wrong password!", source="192.0.2.7")
+
+
+async def test_failures_from_one_address_do_not_refuse_other_accounts(world: World) -> None:
+    """M4-01: thirty wrong guesses from one address must not refuse a correct sign-in to an
+    account without failures. Behind a proxy or NAT the address is shared by everyone."""
+    await world.account("alice")
+    for number in range(30):
+        with pytest.raises(AuthenticationError):
+            await world.auth.login(f"guess-{number}", "wrong password!", source="203.0.113.1")
+    await world.auth.login("alice", PASSWORD, source="203.0.113.1")
+
+
+async def test_a_blocked_source_refuses_wrong_codes(world: World) -> None:
+    user = await world.account("alice")
+    secret, _ = await enable_totp(world, user)
+    for number in range(30):
+        with pytest.raises(AuthenticationError):
+            await world.auth.login(f"guess-{number}", "wrong password!", source="192.0.2.7")
+    with pytest.raises(TooManyAttemptsError):
+        await world.auth.login("alice", PASSWORD, code="000000", source="192.0.2.7")
+    code = world.totp.code(secret, world.clock.now())
+    await world.auth.login("alice", PASSWORD, code=code, source="192.0.2.7")
 
 
 # --- sessions -----------------------------------------------------------------------------------
