@@ -224,6 +224,7 @@ async def test_others_see_a_document_only_through_a_share_once_green(api: Api) -
     assert (await api.client.get(url, headers=auth(reader))).status_code == 404  # processing
     await api.drain()
     assert (await api.client.get(url, headers=auth(reader))).status_code == 200
+    assert (await api.client.get(f"{url}/log", headers=auth(reader))).status_code == 403
     for path in (url, f"{url}/log"):
         missing = await api.client.get(path, headers=auth(stranger))
         assert missing.status_code == 404

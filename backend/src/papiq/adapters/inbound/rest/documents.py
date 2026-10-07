@@ -113,9 +113,9 @@ async def get_document(id: UUID, user: CurrentUser, context: Context) -> Documen
 @router.get(
     "/{id}/log",
     summary="Processing log of a document",
-    description="Every execution of every step, oldest first.",
+    description="Owner only. Every execution of every step, oldest first.",
     response_model=list[LogEntry],
-    responses=problem_responses(401, 404, 422),
+    responses=problem_responses(401, 403, 404, 422),
 )
 async def processing_log(id: UUID, user: CurrentUser, context: Context) -> list[LogEntry]:
     return [
