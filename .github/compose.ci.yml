@@ -1,0 +1,12 @@
+# Overrides .devcontainer/compose.yml for the CI job `integration`: the tests run on the runner,
+# so the services publish their ports there.
+services:
+  postgres:
+    ports:
+      - 5432:5432
+  garage:
+    ports:
+      - 3900:3900
+  meilisearch:
+    ports:
+      - 7700:7700

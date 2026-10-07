@@ -28,6 +28,7 @@ uv run pytest                    # all tests; integration tests skip if a servic
 uv run pytest -m unit            # no external services
 uv run pytest -m integration     # needs Postgres, Garage, Meilisearch, OCR programs, Docling models
 uv run pytest -m "not docling"   # without the slow Docling tests
+uv run pytest -n auto            # in parallel (pytest-xdist), as CI does
 uv run python -m papiq.composition   # validate PAPIQ_ configuration
 uv run python -m papiq.composition migrate   # bring the configured database to the newest schema
 uv run python -m papiq.composition api       # serve the REST API until SIGTERM

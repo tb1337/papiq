@@ -58,7 +58,7 @@ cd backend
 uv run ruff check . && uv run ruff format --check .
 uv run mypy
 uv run lint-imports
-uv run pytest
+uv run pytest                    # add -n auto to run the tests in parallel
 ```
 
 No language model runs in the devcontainer. To use an Ollama on the host, set
