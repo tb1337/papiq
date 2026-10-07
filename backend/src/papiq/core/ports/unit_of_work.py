@@ -3,6 +3,13 @@ from types import TracebackType
 from typing import Protocol, Self
 
 from papiq.core.ports.event_bus import Outbox
+from papiq.core.ports.identity import (
+    ApiTokenRepository,
+    CredentialRepository,
+    ExternalIdentityRepository,
+    LoginFailureRepository,
+    SessionRepository,
+)
 from papiq.core.ports.job_queue import JobQueue
 from papiq.core.ports.repository import (
     AttributeDefinitionRepository,
@@ -17,7 +24,7 @@ from papiq.core.ports.repository import (
 
 
 class UnitOfWork(Protocol):
-    """One transaction over repositories, processing log, outbox and job queue.
+    """One transaction over repositories, processing log, outbox, job queue and identity.
 
     State change, events and jobs are committed together or not at all:
 
@@ -53,6 +60,16 @@ class UnitOfWork(Protocol):
     def outbox(self) -> Outbox: ...
     @property
     def jobs(self) -> JobQueue: ...
+    @property
+    def credentials(self) -> CredentialRepository: ...
+    @property
+    def sessions(self) -> SessionRepository: ...
+    @property
+    def api_tokens(self) -> ApiTokenRepository: ...
+    @property
+    def external_identities(self) -> ExternalIdentityRepository: ...
+    @property
+    def login_failures(self) -> LoginFailureRepository: ...
 
     async def __aenter__(self) -> Self: ...
 

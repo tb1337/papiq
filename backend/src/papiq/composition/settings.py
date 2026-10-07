@@ -26,6 +26,7 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
+from papiq.adapters.outbound.crypto import decode_key
 from papiq.composition.errors import ConfigurationError
 
 ENV_PREFIX = "PAPIQ_"
@@ -94,6 +95,19 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: Annotated[int, Field(ge=1, le=65535)] = 8000
     upload_max_size: Annotated[ByteSize, Field(gt=0)] = ByteSize(100 * 1024 * 1024)
+    # Addresses of reverse proxies whose X-Forwarded-For is trusted (comma-separated, `*` for
+    # all); the client address counts failed sign-ins per source.
+    forwarded_allow_ips: str | None = None
+
+    # Identity. The secret key (32 bytes, base64) encrypts TOTP secrets; required for the API.
+    secret_key: SecretStr | None = None
+    # The first admin: created at API start while there is no admin at all.
+    admin_username: str | None = None
+    admin_password: SecretStr | None = None
+    session_idle_timeout: Seconds = timedelta(days=1)
+    session_max_age: Seconds = timedelta(days=30)
+    # `false` only for development over plain HTTP: the session cookie loses `Secure`.
+    cookie_secure: bool = True
 
     # Worker: background jobs, event delivery and cleanup.
     worker_concurrency: Annotated[int, Field(ge=1, le=64)] = 2
@@ -155,6 +169,23 @@ class Settings(BaseSettings):
                 "s3_bucket",
                 "s3_access_key_id",
                 "s3_secret_access_key",
+            )
+        if self.role in ("all", "api") and self.secret_key is None:
+            problems.append(f"{_env('secret_key')} is required when {_env('role')}={self.role}")
+        if self.secret_key is not None:
+            try:
+                decode_key(self.secret_key.get_secret_value())
+            except ValueError as error:
+                problems.append(
+                    f"{_env('secret_key')}: {error}; create one with `openssl rand -base64 32`"
+                )
+        if (self.admin_username is None) != (self.admin_password is None):
+            problems.append(
+                f"{_env('admin_username')} and {_env('admin_password')} must be set together"
+            )
+        if self.session_max_age < self.session_idle_timeout:
+            problems.append(
+                f"{_env('session_max_age')} must not be shorter than {_env('session_idle_timeout')}"
             )
         for prefix in ("llm", "embedding"):
             url, model = f"{prefix}_base_url", f"{prefix}_model"

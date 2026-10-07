@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from papiq.adapters.outbound.crypto import Argon2PasswordHasher, PyotpTotp
 from papiq.adapters.outbound.docling import DoclingParser
 from papiq.adapters.outbound.filesystem import FilesystemObjectStore
 from papiq.adapters.outbound.memory import ManualClock
@@ -34,7 +35,7 @@ from tests.contracts.processing import SAMPLES
 
 
 def settings(**values: Any) -> Settings:
-    return Settings(**values)
+    return Settings(**{"secret_key": builders.SECRET_KEY, **values})
 
 
 async def _no_op() -> None:
@@ -166,7 +167,8 @@ def test_optional_ports_are_only_selected_when_configured(
     assert built.search_index is None
     assert built.language_model is None
     assert built.embeddings is None
-    assert built.identity is None  # until M4
+    assert isinstance(built.password_hasher, Argon2PasswordHasher)
+    assert isinstance(built.totp, PyotpTotp)
 
     with pytest.raises(AdapterNotAvailableError, match="search_index: adapter 'meilisearch'"):
         build_container(settings(meilisearch_url="http://meilisearch:7700"))

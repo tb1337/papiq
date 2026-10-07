@@ -1,11 +1,15 @@
-"""The cleanup job removes old finished jobs and delivered events and schedules itself."""
+"""The cleanup job removes old finished jobs, delivered events, ended sessions and stale counts
+of failed sign-ins, and schedules itself."""
 
 from datetime import datetime, timedelta
 
+import pytest
+
 from papiq.adapters.outbound.memory import MemoryEventBus
+from papiq.core.domain.errors import AuthenticationError
 from papiq.core.domain.jobs import JobStatus
 from papiq.core.services.maintenance import CLEANUP_JOB, MaintenanceService
-from tests.builders import incoming
+from tests.builders import PASSWORD, incoming
 from tests.unit.services.conftest import World
 
 INTERVAL = timedelta(hours=1)
@@ -85,3 +89,17 @@ async def test_a_failed_cleanup_is_tried_again_later(world: World) -> None:
         world.clock.now() + INTERVAL,
         "OSError('disk full')",
     )
+
+
+async def test_cleanup_removes_ended_sessions_and_old_failures(world: World) -> None:
+    service = maintenance(world)
+    await world.account("alice")
+    signed_in = await world.auth.login("alice", PASSWORD)
+    with pytest.raises(AuthenticationError):
+        await world.auth.login("alice", "wrong password!")
+    await service.schedule()
+    world.clock.advance(timedelta(days=1, minutes=1))  # session idle, failure past its window
+    assert await service.run_next_job()
+    async with world.uow() as uow:
+        assert await uow.sessions.find_by_token(signed_in.session.token_hash) is None
+        assert await uow.login_failures.find("account:alice") is None

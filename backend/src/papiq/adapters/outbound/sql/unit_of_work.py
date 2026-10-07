@@ -21,6 +21,13 @@ from sqlalchemy import func, insert, select
 
 from papiq.adapters.outbound.sql import events, tables
 from papiq.adapters.outbound.sql.database import Database
+from papiq.adapters.outbound.sql.identity import (
+    SqlApiTokenRepository,
+    SqlCredentialRepository,
+    SqlExternalIdentityRepository,
+    SqlLoginFailureRepository,
+    SqlSessionRepository,
+)
 from papiq.adapters.outbound.sql.job_queue import SqlJobQueue
 from papiq.adapters.outbound.sql.repositories import (
     SqlAttributeRepository,
@@ -85,6 +92,11 @@ class SqlUnitOfWork:
         self.processing_log = SqlProcessingLog(self._tx)
         self.outbox = SqlOutbox(self._tx)
         self.jobs = SqlJobQueue(self._tx)
+        self.credentials = SqlCredentialRepository(self._tx)
+        self.sessions = SqlSessionRepository(self._tx)
+        self.api_tokens = SqlApiTokenRepository(self._tx)
+        self.external_identities = SqlExternalIdentityRepository(self._tx)
+        self.login_failures = SqlLoginFailureRepository(self._tx)
 
     async def __aenter__(self) -> Self:
         await self._tx.open()

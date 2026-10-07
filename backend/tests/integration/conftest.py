@@ -1,3 +1,4 @@
+import os
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -8,11 +9,14 @@ import pytest
 from papiq.adapters.outbound.s3 import S3ObjectStore
 from papiq.composition.settings import Settings, load_settings
 from tests import probes
+from tests.builders import SECRET_KEY
 
 
 @pytest.fixture(scope="session")
 def settings() -> Settings:
-    """The configuration from the environment: in the devcontainer, the compose services."""
+    """The configuration from the environment: in the devcontainer, the compose services. The
+    secret key the API requires is not what these tests are about; a test key fills in."""
+    os.environ.setdefault("PAPIQ_SECRET_KEY", SECRET_KEY)
     return load_settings()
 
 

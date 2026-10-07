@@ -306,3 +306,62 @@ def test_invalid_worker_settings_name_the_variable(
     monkeypatch: pytest.MonkeyPatch, name: str, value: str
 ) -> None:
     assert name in error_message(monkeypatch, {name: value})
+
+
+def test_the_api_needs_a_valid_secret_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PAPIQ_SECRET_KEY")
+    for role in ("all", "api"):
+        message = error_message(monkeypatch, {"PAPIQ_ROLE": role})
+        assert f"PAPIQ_SECRET_KEY is required when PAPIQ_ROLE={role}" in message
+    set_env(monkeypatch, {"PAPIQ_ROLE": "worker"})
+    assert load_settings().secret_key is None
+    message = error_message(monkeypatch, {"PAPIQ_SECRET_KEY": "too-short"})
+    assert "PAPIQ_SECRET_KEY" in message and "openssl rand -base64 32" in message
+    assert "too-short" not in message
+
+
+def test_identity_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    password = tmp_path / "admin"
+    password.write_text("a long admin password\n")
+    set_env(
+        monkeypatch,
+        {
+            "PAPIQ_ADMIN_USERNAME": "root",
+            "PAPIQ_ADMIN_PASSWORD_FILE": str(password),
+            "PAPIQ_SESSION_IDLE_TIMEOUT": "PT8H",
+            "PAPIQ_SESSION_MAX_AGE": "P7D",
+            "PAPIQ_COOKIE_SECURE": "false",
+            "PAPIQ_FORWARDED_ALLOW_IPS": "172.18.0.2",
+        },
+    )
+    settings = load_settings()
+    assert settings.admin_password is not None
+    assert settings.admin_password.get_secret_value() == "a long admin password"
+    assert settings.session_idle_timeout == timedelta(hours=8)
+    assert settings.session_max_age == timedelta(days=7)
+    assert settings.cookie_secure is False
+    assert settings.forwarded_allow_ips == "172.18.0.2"
+    described = settings.describe()
+    assert described["admin_password"] == "**********"
+    assert described["secret_key"] == "**********"
+
+
+def test_identity_defaults() -> None:
+    settings = load_settings()
+    assert settings.session_idle_timeout == timedelta(days=1)
+    assert settings.session_max_age == timedelta(days=30)
+    assert settings.cookie_secure is True
+    assert settings.admin_username is None
+
+
+def test_inconsistent_identity_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    message = error_message(
+        monkeypatch,
+        {
+            "PAPIQ_ADMIN_USERNAME": "root",
+            "PAPIQ_SESSION_IDLE_TIMEOUT": "P2D",
+            "PAPIQ_SESSION_MAX_AGE": "P1D",
+        },
+    )
+    assert "PAPIQ_ADMIN_USERNAME and PAPIQ_ADMIN_PASSWORD must be set together" in message
+    assert "PAPIQ_SESSION_MAX_AGE must not be shorter than PAPIQ_SESSION_IDLE_TIMEOUT" in message

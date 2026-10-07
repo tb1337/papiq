@@ -5,6 +5,8 @@ from collections.abc import Iterator
 import pytest
 import structlog
 
+from tests.builders import SECRET_KEY
+
 
 @pytest.fixture(autouse=True)
 def clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -12,6 +14,8 @@ def clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in list(os.environ):
         if name.upper().startswith("PAPIQ_"):
             monkeypatch.delenv(name)
+    # Required for the API; tests that check the requirement remove it.
+    monkeypatch.setenv("PAPIQ_SECRET_KEY", SECRET_KEY)
 
 
 @pytest.fixture(autouse=True)

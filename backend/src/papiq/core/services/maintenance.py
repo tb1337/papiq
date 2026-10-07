@@ -1,4 +1,5 @@
-"""Housekeeping as a recurring job: remove finished jobs and delivered events.
+"""Housekeeping as a recurring job: remove finished jobs, delivered events, ended sessions and
+stale counts of failed sign-ins.
 
 The cleanup is a job in the job queue under a fixed dedup key, so with several workers only one
 of them runs it at a time. After each run it schedules the next one, in the same transaction
@@ -9,11 +10,15 @@ import logging
 from datetime import timedelta
 
 from papiq.core.domain.errors import ConcurrencyError
+from papiq.core.domain.identity import ACCOUNT_THROTTLE, SOURCE_THROTTLE
 from papiq.core.ports import Clock, EventBus, UnitOfWorkFactory
 
 log = logging.getLogger(__name__)
 
 CLEANUP_JOB = "maintenance.cleanup"
+
+# Failed sign-ins older than this count no more (see the throttle windows).
+_FAILURE_RETENTION = max(ACCOUNT_THROTTLE.window, SOURCE_THROTTLE.window)
 
 
 class MaintenanceService:
@@ -25,15 +30,18 @@ class MaintenanceService:
         *,
         interval: timedelta,
         retention: timedelta,
+        session_idle: timedelta = timedelta(days=1),
         lease: timedelta = timedelta(minutes=5),
     ) -> None:
         """Every `interval`, remove finished jobs and delivered events older than
-        `retention`."""
+        `retention`, sessions that expired or were idle for `session_idle`, and counts of
+        failed sign-ins that no longer matter."""
         self._uow = uow
         self._clock = clock
         self._bus = event_bus
         self._interval = interval
         self._retention = retention
+        self._session_idle = session_idle
         self._lease = lease
 
     async def schedule(self) -> None:
@@ -59,6 +67,8 @@ class MaintenanceService:
             events = await self._bus.purge(before=before)
             async with self._uow() as uow:
                 jobs = await uow.jobs.purge(before=before)
+                sessions = await uow.sessions.purge(now=now, idle_before=now - self._session_idle)
+                failures = await uow.login_failures.purge(before=now - _FAILURE_RETENTION)
                 await uow.jobs.complete(job)
                 await uow.jobs.enqueue(CLEANUP_JOB, {}, run_at=next_run, dedup_key=CLEANUP_JOB)
                 await uow.commit()
@@ -71,5 +81,13 @@ class MaintenanceService:
                 await uow.jobs.reschedule(job, run_at=next_run, error=repr(error))
                 await uow.commit()
             return True
-        log.info("cleanup done", extra={"jobs_removed": jobs, "events_removed": events})
+        log.info(
+            "cleanup done",
+            extra={
+                "jobs_removed": jobs,
+                "events_removed": events,
+                "sessions_removed": sessions,
+                "login_failures_removed": failures,
+            },
+        )
         return True
