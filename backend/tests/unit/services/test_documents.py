@@ -187,9 +187,12 @@ async def test_only_the_owner_deletes(world: World, scene: Scene) -> None:
     assert event.document_id == scene.document.id
 
 
-async def test_processing_log_is_readable_with_the_document(world: World, scene: Scene) -> None:
-    entries = await world.documents.processing_log(scene.reader.id, scene.document.id)
+async def test_only_the_owner_reads_the_processing_log(world: World, scene: Scene) -> None:
+    entries = await world.documents.processing_log(scene.owner.id, scene.document.id)
     assert [entry.step for entry in entries] == list(Step)
+    for user in (scene.reader, scene.writer):
+        with pytest.raises(PermissionDeniedError, match="only the owner"):
+            await world.documents.processing_log(user.id, scene.document.id)
     with pytest.raises(NotFoundError):
         await world.documents.processing_log(scene.stranger.id, scene.document.id)
 

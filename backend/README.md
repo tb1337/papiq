@@ -134,7 +134,7 @@ Receive → OCR → parse run as jobs (`pipeline.step`); the steps after parsing
 | --- | --- |
 | `POST /documents` | Upload (multipart: `file`, optional `drawer_id`); `202` with `id`, `status_url` |
 | `GET /documents/{id}` | Status: lane, processing state, current step, run, outcomes |
-| `GET /documents/{id}/log` | Processing log |
+| `GET /documents/{id}/log` | Processing log (owner) |
 | `POST /documents/{id}/retry` | Repeat the failed step (owner) |
 | `POST /documents/{id}/reprocess` | `{"from_step": "ocr"}`: process again from a step (owner) |
 | `GET /events` | Server-sent events of the documents the caller may read; `?document_id=` |

@@ -53,8 +53,12 @@ class DocumentService:
             return readers
 
     async def processing_log(self, actor: UserId, id: DocumentId) -> list[StepRun]:
+        """Owner only: the log may hold technical details of failed runs."""
         async with self._uow() as uow:
-            await readable_document(uow, await load_actor(uow, actor), id)
+            user = await load_actor(uow, actor)
+            document, _ = await readable_document(uow, user, id)
+            if not is_document_owner(user, document):
+                raise PermissionDeniedError(f"only the owner reads the processing log of {id}")
             return await uow.processing_log.list_for(id)
 
     async def update_metadata(
