@@ -1,6 +1,7 @@
 """Contract suites for identity: the repositories in the unit of work and the cryptography
 ports."""
 
+import asyncio
 import base64
 import hashlib
 from collections.abc import Callable
@@ -11,12 +12,14 @@ import pytest
 
 from papiq.core.domain.errors import AuthenticationError, ConcurrencyError, ConflictError
 from papiq.core.domain.identity import (
+    ACCOUNT_THROTTLE,
     ApiToken,
     Credential,
     ExternalIdentity,
     LoginFailures,
     LoginMethod,
     Session,
+    ThrottleRule,
     TokenScope,
     TotpSetting,
     hash_token,
@@ -241,55 +244,75 @@ class IdentityRepositoriesContract:
 
     # --- failed sign-ins ------------------------------------------------------------------------
 
-    async def test_login_failures(self, uow_factory: UnitOfWorkFactory) -> None:
-        recent = LoginFailures(key="account:alice", failures=3, first_failure_at=NOW)
-        blocked = LoginFailures(
-            key="source:192.0.2.1",
-            failures=30,
-            first_failure_at=NOW - 2 * HOUR,
-            blocked_until=NOW + HOUR,
-        )
-        stale = LoginFailures(key="account:bob", failures=1, first_failure_at=NOW - 2 * HOUR)
-        async with uow_factory() as uow:
-            for failures in (recent, blocked, stale):
-                await uow.login_failures.add(failures)
-            await uow.commit()
-        async with uow_factory() as uow:
-            found = await uow.login_failures.find("account:alice")
-            assert found == recent
+    async def test_attempts_are_reserved_and_released(self, uow_factory: UnitOfWorkFactory) -> None:
+        rule = ThrottleRule(free=2, window=HOUR, base=timedelta(minutes=1), limit=HOUR)
+
+        async def reserve(at: timedelta = timedelta(0)) -> timedelta | None:
+            async with uow_factory() as uow:
+                wait = await uow.login_failures.reserve("account:alice", rule, NOW + at)
+                await uow.commit()
+            return wait
+
+        async def stored() -> LoginFailures:
+            async with uow_factory() as uow:
+                found = await uow.login_failures.find("account:alice")
             assert found is not None
-            found.failures = 4
-            await uow.login_failures.update(found)
-            assert await uow.login_failures.purge(before=NOW - HOUR) == 1
+            return found
+
+        assert await reserve() is None
+        assert await reserve() is None
+        assert (await stored()).blocked_until is None
+        assert await reserve() is None  # the third: blocks for a minute as if it fails
+        assert (await stored()).blocked_until == NOW + timedelta(minutes=1)
+        assert await reserve(timedelta(seconds=20)) == timedelta(seconds=40)
+        assert (await stored()).failures == 3  # a refused attempt is not counted
+        async with uow_factory() as uow:
+            await uow.login_failures.release("account:alice", rule)  # it did not fail
+            await uow.commit()
+        released = await stored()
+        assert released.failures == 2 and released.blocked_until is None
+        assert await reserve(timedelta(minutes=2)) is None
+        assert (await stored()).blocked_until == NOW + timedelta(minutes=3)
+        assert await reserve(2 * HOUR) is None  # the window has passed: counting starts anew
+        fresh = await stored()
+        assert fresh.failures == 1 and fresh.first_failure_at == NOW + 2 * HOUR
+        assert fresh.blocked_until is None
+
+    async def test_concurrent_reservations_are_all_counted(
+        self, uow_factory: UnitOfWorkFactory
+    ) -> None:
+        rule = ThrottleRule(free=3, window=HOUR, base=HOUR, limit=HOUR)
+
+        async def reserve() -> timedelta | None:
+            async with uow_factory() as uow:
+                wait = await uow.login_failures.reserve("source:192.0.2.1", rule, NOW)
+                await uow.commit()
+            return wait
+
+        results = await asyncio.gather(*(reserve() for _ in range(10)))
+        assert results.count(None) == 4  # three free ones, the fourth blocks
+        async with uow_factory() as uow:
+            found = await uow.login_failures.find("source:192.0.2.1")
+        assert found is not None and found.failures == 4
+
+    async def test_login_failures_are_removed_and_purged(
+        self, uow_factory: UnitOfWorkFactory
+    ) -> None:
+        rule = ThrottleRule(free=0, window=HOUR, base=3 * HOUR, limit=3 * HOUR)
+        async with uow_factory() as uow:
+            await uow.login_failures.reserve("account:alice", ACCOUNT_THROTTLE, NOW)
+            await uow.login_failures.reserve("account:bob", ACCOUNT_THROTTLE, NOW - 2 * HOUR)
+            await uow.login_failures.reserve("source:192.0.2.1", rule, NOW - 2 * HOUR)
             await uow.commit()
         async with uow_factory() as uow:
-            assert await uow.login_failures.find("account:bob") is None
-            assert await uow.login_failures.find("source:192.0.2.1") == blocked
-            stored = await uow.login_failures.find("account:alice")
-            assert stored is not None
-            assert stored.failures == 4
+            assert await uow.login_failures.purge(before=NOW - HOUR) == 1  # bob only
             await uow.login_failures.remove("account:alice")
+            await uow.login_failures.release("account:nobody", rule)  # missing: no-op
             await uow.commit()
         async with uow_factory() as uow:
             assert await uow.login_failures.find("account:alice") is None
-
-    async def test_concurrent_failures_conflict(self, uow_factory: UnitOfWorkFactory) -> None:
-        async with uow_factory() as uow:
-            await uow.login_failures.add(LoginFailures.first("account:carol", NOW))
-            await uow.commit()
-        async with uow_factory() as uow:
-            first = await uow.login_failures.find("account:carol")
-        async with uow_factory() as uow:
-            second = await uow.login_failures.find("account:carol")
-            assert second is not None
-            second.failures += 1
-            await uow.login_failures.update(second)
-            await uow.commit()
-        assert first is not None
-        with pytest.raises(ConcurrencyError):
-            async with uow_factory() as uow:
-                await uow.login_failures.update(first)
-                await uow.commit()
+            assert await uow.login_failures.find("account:bob") is None
+            assert await uow.login_failures.find("source:192.0.2.1") is not None  # blocked
 
     async def test_removing_a_user_with_identity_data(self, uow_factory: UnitOfWorkFactory) -> None:
         """The services remove identity data first; the repositories then remove the user."""

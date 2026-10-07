@@ -1,6 +1,6 @@
 """In-memory identity repositories, on the tables of the in-memory unit of work."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from papiq.adapters.outbound.memory.rows import MemoryRepository
@@ -10,6 +10,7 @@ from papiq.core.domain.identity import (
     ExternalIdentity,
     LoginFailures,
     Session,
+    ThrottleRule,
     failure_id,
 )
 from papiq.core.domain.ids import ApiTokenId, ExternalIdentityId, SessionId, UserId
@@ -84,8 +85,28 @@ class MemoryExternalIdentityRepository(MemoryRepository[ExternalIdentityId, Exte
 
 
 class MemoryLoginFailureRepository(MemoryRepository[UUID, LoginFailures]):
+    """Atomic, since nothing in a call waits for anything else."""
+
     async def find(self, key: str) -> LoginFailures | None:  # type: ignore[override]
         return await super().find(failure_id(key))
+
+    async def reserve(self, key: str, rule: ThrottleRule, now: datetime) -> timedelta | None:
+        failures = await self.find(key)
+        if failures is None:
+            failures = LoginFailures.first(key, now)
+            wait = failures.reserve(rule, now)
+            await self.add(failures)
+            return wait
+        wait = failures.reserve(rule, now)
+        if wait is None:
+            await self.update(failures)
+        return wait
+
+    async def release(self, key: str, rule: ThrottleRule) -> None:
+        failures = await self.find(key)
+        if failures is not None:
+            failures.release(rule)
+            await self.update(failures)
 
     async def remove(self, key: str) -> None:
         self._remove_rows([row for row in self._all() if row.key == key])

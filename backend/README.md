@@ -57,7 +57,9 @@ whether it is active. A deactivated user has no rights and cannot authenticate.
   the same time and read the same. Failures are counted per account (also for unknown names;
   from the sixth on, the account backs off from 1 second, doubling up to 15 minutes; no hard
   lock) and per source address (30 within 15 minutes block it for 15 minutes); the counts are
-  in the database. A blocked account refuses every attempt (`429`), also a correct password, so
+  in the database. Every attempt is counted atomically before it is checked (an upsert),
+  blocking as if it fails, and taken back if it does not fail, so attempts that arrive
+  together cannot pass the throttle at once. A blocked account refuses every attempt (`429`), also a correct password, so
   TOTP codes cannot be guessed. A blocked source refuses only wrong sign-ins (`429` instead of
   `401`, not counted for the source again); a correct sign-in from there succeeds, so failures
   from an address many users share (a proxy, NAT) lock nobody out. Success clears the

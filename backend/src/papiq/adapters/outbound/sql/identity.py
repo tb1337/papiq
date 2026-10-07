@@ -2,10 +2,24 @@
 providers and failed sign-ins. Updates are optimistic as in `repositories`; `touch` updates
 only a timestamp and leaves the version alone."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import ColumnElement, Row, Table, and_, delete, insert, or_, select, update
+from sqlalchemy import (
+    ColumnElement,
+    Row,
+    Table,
+    and_,
+    case,
+    delete,
+    insert,
+    literal,
+    or_,
+    select,
+    update,
+)
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from papiq.adapters.outbound.sql import tables as t
 from papiq.adapters.outbound.sql.transaction import Transaction
@@ -17,6 +31,7 @@ from papiq.core.domain.identity import (
     LoginFailures,
     LoginMethod,
     Session,
+    ThrottleRule,
     TokenScope,
     TotpSetting,
 )
@@ -327,21 +342,53 @@ class SqlLoginFailureRepository:
             version=row.version,
         )
 
-    async def add(self, failures: LoginFailures) -> None:
+    async def reserve(self, key: str, rule: ThrottleRule, now: datetime) -> timedelta | None:
+        """One upsert counts the attempt unless the key is blocked; Postgres keeps the row
+        locked and SQLite the database until the unit ends, so the block set next is seen by
+        every later attempt."""
+        table = t.login_failures
+        insert_ = sqlite_insert if self._tx.database.is_sqlite else postgresql_insert
+        at = literal(now, table.c.first_failure_at.type)
+        new_window = table.c.first_failure_at <= now - rule.window
+        statement = (
+            insert_(table)
+            .values(key=key, failures=1, first_failure_at=now, blocked_until=None, version=1)
+            .on_conflict_do_update(
+                index_elements=[table.c.key],
+                set_={
+                    "failures": case((new_window, 1), else_=table.c.failures + 1),
+                    "first_failure_at": case((new_window, at), else_=table.c.first_failure_at),
+                    "version": table.c.version + 1,
+                },
+                where=or_(table.c.blocked_until.is_(None), table.c.blocked_until <= now),
+            )
+            .returning(table.c.failures)
+        )
+        counted = (await self._tx.write(statement)).first()
+        if counted is None:
+            found = await self._tx.read(select(table.c.blocked_until).where(table.c.key == key))
+            blocked_until: datetime = found.scalar_one()
+            return blocked_until - now
+        block = rule.block(counted.failures)
         await self._tx.write(
-            insert(t.login_failures).values(**_failure_values(failures), version=failures.version)
+            update(table)
+            .where(table.c.key == key)
+            .values(blocked_until=None if block is None else now + block)
         )
+        return None
 
-    async def update(self, failures: LoginFailures) -> None:
-        await _versioned_update(
-            self._tx,
-            t.login_failures,
-            "login failures",
-            ("key", failures.key),
-            failures.version,
-            _failure_values(failures),
-        )
-        failures.version += 1
+    async def release(self, key: str, rule: ThrottleRule) -> None:
+        table = t.login_failures
+        remaining = (
+            await self._tx.write(
+                update(table)
+                .where(table.c.key == key, table.c.failures > 0)
+                .values(failures=table.c.failures - 1, version=table.c.version + 1)
+                .returning(table.c.failures)
+            )
+        ).first()
+        if remaining is not None and rule.block(remaining.failures) is None:
+            await self._tx.write(update(table).where(table.c.key == key).values(blocked_until=None))
 
     async def remove(self, key: str) -> None:
         await self._tx.write(delete(t.login_failures).where(t.login_failures.c.key == key))
@@ -353,12 +400,3 @@ class SqlLoginFailureRepository:
             or_(table.c.blocked_until.is_(None), table.c.blocked_until < before),
         )
         return (await self._tx.write(statement)).rowcount
-
-
-def _failure_values(failures: LoginFailures) -> dict[str, Any]:
-    return {
-        "key": failures.key,
-        "failures": failures.failures,
-        "first_failure_at": failures.first_failure_at,
-        "blocked_until": failures.blocked_until,
-    }

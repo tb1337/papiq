@@ -3,7 +3,9 @@
 Sign-in (`login`):
 - Unknown and deactivated users are checked against a dummy hash, so all failures take the
   same time and give the same answer.
-- Failures are counted per account (also for unknown names) and per source address. While the
+- Failures are counted per account (also for unknown names) and per source address. Each
+  attempt is counted atomically before it is checked, as if it fails, and taken back if it
+  does not fail; so attempts that arrive together cannot pass the throttle at once. While the
   account is blocked, every attempt is refused with TooManyAttemptsError before anything is
   checked (also a correct password: this stops guessing TOTP codes). While the source is
   blocked, the attempt is still checked: a correct sign-in succeeds and counts nothing, a wrong
@@ -20,7 +22,6 @@ changes (except the caller's own, which is renewed). API tokens survive a passwo
 unless the caller asks to revoke them. Deactivated users are rejected however they come.
 """
 
-import asyncio
 import logging
 import secrets
 from collections.abc import Callable, Sequence
@@ -42,7 +43,6 @@ from papiq.core.domain.identity import (
     SOURCE_THROTTLE,
     ApiToken,
     Credential,
-    LoginFailures,
     LoginMethod,
     Session,
     ThrottleRule,
@@ -72,7 +72,6 @@ from papiq.core.services._access import load_actor
 log = logging.getLogger(__name__)
 
 TOTP_ISSUER = "Papiq"
-_RECORD_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -157,11 +156,7 @@ class AuthService:
     ) -> SignedIn:
         """Sign in with password and, if the account has TOTP, a code or a recovery code."""
         now = self._clock.now()
-        throttles = _throttles(username, source)
-        await self._check_throttles(throttles[:1], now)
-        source_blocked = await self._blocked(throttles[1:], now)
-        if source_blocked is not None:
-            throttles = throttles[:1]  # count for the account only
+        reserved, source_blocked = await self._reserve(_throttles(username, source), now)
 
         async with self._uow() as uow:
             user = await uow.users.find_by_username(username)
@@ -171,19 +166,22 @@ class AuthService:
             stored or await self._dummy(), normalize_password(password)
         )
         if user is None or credential is None or stored is None or not valid or not user.active:
-            await self._fail(throttles, now)
+            _log_failure(reserved)
             if source_blocked is not None:
                 raise TooManyAttemptsError(source_blocked)
             raise AuthenticationError("invalid username or password")
 
         if credential.totp_enabled and not code and not recovery_code:
+            async with self._uow() as uow:
+                await _release(uow, reserved)  # no failure: the code is still to come
+                await uow.commit()
             raise SecondFactorRequiredError("a one-time code is required")
         new_hash = None
         if self._hasher.needs_rehash(stored):
             new_hash = await self._hasher.hash(normalize_password(password))
         return await self._complete_login(
             user.id,
-            throttles,
+            reserved,
             now,
             code=code,
             recovery_code=recovery_code,
@@ -194,7 +192,7 @@ class AuthService:
     async def _complete_login(
         self,
         user_id: UserId,
-        throttles: Sequence[tuple[str, ThrottleRule]],
+        reserved: Sequence[tuple[str, ThrottleRule]],
         now: datetime,
         *,
         code: str | None,
@@ -213,10 +211,12 @@ class AuthService:
                     credential.password_hash = new_hash
                 await uow.credentials.update(credential)
                 signed_in = await self._start_session(uow, user, LoginMethod.PASSWORD, now)
-                await uow.login_failures.remove(throttles[0][0])
+                account, *others = reserved
+                await uow.login_failures.remove(account[0])  # success clears the account
+                await _release(uow, others)
                 await uow.commit()
         if not valid:
-            await self._fail(throttles, now)
+            _log_failure(reserved)
             if source_blocked is not None:
                 raise TooManyAttemptsError(source_blocked)
             raise AuthenticationError("invalid one-time code")
@@ -296,11 +296,10 @@ class AuthService:
         async with self._uow() as uow:
             user = await load_actor(uow, actor)
             credential = await uow.credentials.find(actor)
-        throttles = _throttles(user.username, None)
-        await self._check_throttles(throttles, now)
+        reserved, _ = await self._reserve(_throttles(user.username, None), now)
         stored = None if credential is None else credential.password_hash
         if stored is None or not await self._hasher.verify(stored, normalize_password(current)):
-            await self._fail(throttles, now)
+            _log_failure(reserved)
             raise PermissionDeniedError("the current password is wrong")
         new_hash = await self._hasher.hash(check_new_password(new, user.username))
 
@@ -312,6 +311,7 @@ class AuthService:
             credential.password_hash = new_hash
             credential.password_changed_at = now
             await uow.credentials.update(credential)
+            await _release(uow, reserved)
             await uow.sessions.remove_for_user(actor)
             if revoke_tokens:
                 await uow.api_tokens.remove_for_user(actor)
@@ -389,20 +389,22 @@ class AuthService:
         now = self._clock.now()
         async with self._uow() as uow:
             user = await load_actor(uow, actor)
-        throttles = _throttles(user.username, None)
-        await self._check_throttles(throttles, now)
+        reserved, _ = await self._reserve(_throttles(user.username, None), now)
         async with self._uow() as uow:
             await load_actor(uow, actor)
             credential = await _credential(uow, actor)
             if not credential.totp_enabled:
+                await _release(uow, reserved)
+                await uow.commit()
                 raise ConflictError("TOTP is off")
             valid = self._second_factor(credential, code, code, now)
             if valid:
                 change(credential)
                 await uow.credentials.update(credential)
+                await _release(uow, reserved)
                 await uow.commit()
         if not valid:
-            await self._fail(throttles, now)
+            _log_failure(reserved)
             raise PermissionDeniedError("the code is not valid")
 
     # --- API tokens -----------------------------------------------------------------------------
@@ -480,48 +482,26 @@ class AuthService:
             self._dummy_hash = await self._hasher.hash(secrets.token_urlsafe(16))
         return self._dummy_hash
 
-    async def _blocked(
+    async def _reserve(
         self, throttles: Sequence[tuple[str, ThrottleRule]], now: datetime
-    ) -> timedelta | None:
-        """How long the first blocked of `throttles` stays blocked, if one is."""
-        try:
-            await self._check_throttles(throttles, now)
-        except TooManyAttemptsError as error:
-            return error.retry_after
-        return None
-
-    async def _check_throttles(
-        self, throttles: Sequence[tuple[str, ThrottleRule]], now: datetime
-    ) -> None:
+    ) -> tuple[list[tuple[str, ThrottleRule]], timedelta | None]:
+        """Count the attempt before it is checked: under the account (TooManyAttemptsError
+        while it is blocked; nothing is counted then) and under the source, if given. Returns
+        what was counted, to be released if the attempt does not fail, and how long the source
+        stays blocked (then it is not counted)."""
+        (account, rule), *sources = throttles
         async with self._uow() as uow:
-            for key, _ in throttles:
-                failures = await uow.login_failures.find(key)
-                wait = None if failures is None else failures.retry_after(now)
-                if wait is not None:
-                    raise TooManyAttemptsError(wait)
-
-    async def _fail(self, throttles: Sequence[tuple[str, ThrottleRule]], now: datetime) -> None:
-        """Count a failure under every key. Concurrent failures may conflict; then counting is
-        tried again, and at worst one failure goes uncounted."""
-        for key, rule in throttles:
-            for attempt in range(_RECORD_ATTEMPTS):
-                try:
-                    async with self._uow() as uow:
-                        failures = await uow.login_failures.find(key)
-                        if failures is None:
-                            failures = LoginFailures.first(key, now)
-                            failures.record(rule, now)
-                            await uow.login_failures.add(failures)
-                        else:
-                            failures.record(rule, now)
-                            await uow.login_failures.update(failures)
-                        await uow.commit()
-                    break
-                except (ConcurrencyError, ConflictError):
-                    if attempt + 1 == _RECORD_ATTEMPTS:
-                        log.warning("could not count a failed sign-in", extra={"key": key})
-                    await asyncio.sleep(0)
-        log.info("sign-in failed", extra={"keys": [key for key, _ in throttles]})
+            wait = await uow.login_failures.reserve(account, rule, now)
+            if wait is not None:
+                raise TooManyAttemptsError(wait)
+            reserved = [(account, rule)]
+            source_blocked = None
+            for key, source_rule in sources:
+                source_blocked = await uow.login_failures.reserve(key, source_rule, now)
+                if source_blocked is None:
+                    reserved.append((key, source_rule))
+            await uow.commit()
+        return reserved, source_blocked
 
 
 def _turn_off_totp(credential: Credential) -> None:
@@ -535,6 +515,15 @@ def _throttles(username: str, source: str | None) -> list[tuple[str, ThrottleRul
     if source:
         throttles.append((source_key(source), SOURCE_THROTTLE))
     return throttles
+
+
+async def _release(uow: UnitOfWork, reserved: Sequence[tuple[str, ThrottleRule]]) -> None:
+    for key, rule in reserved:
+        await uow.login_failures.release(key, rule)
+
+
+def _log_failure(reserved: Sequence[tuple[str, ThrottleRule]]) -> None:
+    log.info("sign-in failed", extra={"keys": [key for key, _ in reserved]})
 
 
 async def _credential(uow: UnitOfWork, user: UserId) -> Credential:

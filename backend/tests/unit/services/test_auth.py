@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta
 
 import pytest
@@ -14,10 +15,12 @@ from papiq.core.domain.errors import (
 from papiq.core.domain.identity import TokenScope, csrf_token, hash_token
 from papiq.core.domain.ids import ApiTokenId, new_id
 from papiq.core.domain.users import User
+from papiq.core.services.auth import AuthService
 from tests.builders import PASSWORD
 from tests.unit.services.conftest import World
 
 NEW_PASSWORD = "another long passphrase"
+SOURCE = "203.0.113.1"
 
 
 async def set_active(world: World, user: User, active: bool) -> None:
@@ -192,6 +195,55 @@ async def test_a_blocked_source_refuses_wrong_codes(world: World) -> None:
         await world.auth.login("alice", PASSWORD, code="000000", source="192.0.2.7")
     code = world.totp.code(secret, world.clock.now())
     await world.auth.login("alice", PASSWORD, code=code, source="192.0.2.7")
+
+
+class GatedHasher:
+    """Verifies only once `release` is set, so that many sign-ins can be in flight at once;
+    counts how many callers wait."""
+
+    def __init__(self, inner: object) -> None:
+        self._inner = inner
+        self.release = asyncio.Event()
+        self.waiting = 0
+
+    async def hash(self, password: str) -> str:
+        return await self._inner.hash(password)  # type: ignore[attr-defined, no-any-return]
+
+    async def verify(self, hash: str, password: str) -> bool:
+        self.waiting += 1
+        await self.release.wait()
+        return await self._inner.verify(hash, password)  # type: ignore[attr-defined, no-any-return]
+
+    def needs_rehash(self, hash: str) -> bool:
+        return self._inner.needs_rehash(hash)  # type: ignore[attr-defined, no-any-return]
+
+
+async def _burst(world: World, attempts: int) -> tuple[list[object], GatedHasher]:
+    gate = GatedHasher(world.hasher)
+    auth = AuthService(world.uow, world.clock, hasher=gate, cipher=world.cipher, totp=world.totp)
+    tasks = [
+        asyncio.create_task(auth.login("alice", "wrong password!", source=SOURCE))
+        for _ in range(attempts)
+    ]
+    # Let every attempt either be refused or reach the (blocked) hash.
+    while gate.waiting + sum(task.done() for task in tasks) < attempts:
+        await asyncio.sleep(0)
+    gate.release.set()
+    return list(await asyncio.gather(*tasks, return_exceptions=True)), gate
+
+
+# --- M4-02: attempts that arrive together ---------------------------------------------------------
+
+
+async def test_a_concurrent_burst_does_not_bypass_the_throttle(world: World) -> None:
+    """M4-02: the throttle is checked before the hash and counted after it. Attempts that
+    arrive together all pass the check. Of 60 concurrent attempts against one account from
+    one address, at least 60 - 30 (source cap) must be refused."""
+    await world.account("alice")
+    attempts = 60
+    results, _ = await _burst(world, attempts)
+    refused = sum(isinstance(result, TooManyAttemptsError) for result in results)
+    assert refused >= attempts - 30, f"{refused} of {attempts} concurrent attempts were refused"
 
 
 # --- sessions -----------------------------------------------------------------------------------
