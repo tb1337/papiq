@@ -374,3 +374,14 @@ async def test_auth_answers_are_not_stored(api: Api) -> None:
         assert answer.headers["cache-control"] == "no-store", answer.request.url
     other = await api.client.get(f"{PREFIX}/drawers", headers=auth(user))
     assert "cache-control" not in other.headers
+
+
+async def test_token_expiry_may_have_any_offset(api: Api) -> None:
+    async with api.sign_in(await api.user()) as session:
+        response = await session.client.post(
+            f"{PREFIX}/auth/tokens",
+            json={"name": "cli", "scope": "read", "expires_at": "2030-01-01T02:00:00+02:00"},
+            headers=session.headers,
+        )
+    assert response.status_code == 201, response.text
+    assert response.json()["expires_at"] == "2030-01-01T00:00:00Z"
