@@ -59,6 +59,7 @@ from papiq.core.domain.master_data import Contact, DocumentType, MasterData, Tag
 from papiq.core.domain.pipeline import Lane, StepRun
 from papiq.core.domain.users import User
 from papiq.core.domain.validation import name_key, require_utc
+from papiq.core.ports.repository import DocumentFilter
 
 
 class MemoryUnitOfWork:
@@ -205,6 +206,10 @@ class MemoryNamedRepository[K: UUID, E: MasterData](MemoryRepository[K, E]):
         key = name_key(name)
         return next((_copy(row) for row in self._all() if name_key(row.name) == key), None)
 
+    async def remove(self, id: K) -> None:
+        await self.get(id)
+        self._uow._write(self._table, id, _REMOVED)
+
 
 class MemoryUserRepository(MemoryRepository[UserId, User]):
     async def find_by_username(self, username: str) -> User | None:
@@ -250,6 +255,26 @@ class MemoryDocumentRepository(MemoryRepository[DocumentId, Document]):
         if self._uow._row(self._table, id) is _REMOVED:
             raise NotFoundError(self._table.name, id)
         self._uow._write(self._table, id, _REMOVED)
+
+    async def query_visible(
+        self,
+        user: UserId,
+        filter: DocumentFilter,
+        *,
+        before: DocumentId | None = None,
+        limit: int,
+    ) -> list[Document]:
+        matching = [
+            document
+            for document in await self.list_visible_to(user)
+            if (before is None or document.id < before)
+            and (filter.contact is None or document.contact_id == filter.contact)
+            and (filter.document_type is None or document.document_type_id == filter.document_type)
+            and filter.tags <= document.tag_ids
+            and (filter.drawer is None or document.drawer_id == filter.drawer)
+            and (filter.lanes is None or document.lane in filter.lanes)
+        ]
+        return sorted(matching, key=lambda document: document.id, reverse=True)[:limit]
 
     async def exists(
         self,

@@ -10,6 +10,7 @@ from papiq.core.domain.errors import (
 )
 from papiq.core.domain.ids import DrawerId, UserId, new_id
 from papiq.core.domain.users import Role
+from tests.builders import incoming
 from tests.unit.services.conftest import World
 
 
@@ -98,3 +99,27 @@ async def test_sharing_rules(world: World) -> None:
     drawer = await world.drawers.create(owner.id, "Household")
     with pytest.raises(NotFoundError):
         await world.drawers.share(owner.id, drawer.id, UserId(new_id()), ShareLevel.READ)
+
+
+async def test_drawers_are_read_and_deleted(world: World) -> None:
+    owner, reader, stranger = await world.user(), await world.user(), await world.user()
+    drawer = await world.drawers.create(owner.id, "Archive")
+    await world.drawers.share(owner.id, drawer.id, reader.id, ShareLevel.READ)
+    assert (await world.drawers.get(reader.id, drawer.id)).id == drawer.id
+    with pytest.raises(NotFoundError):
+        await world.drawers.get(stranger.id, drawer.id)
+    with pytest.raises(PermissionDeniedError):
+        await world.drawers.delete(reader.id, drawer.id)
+    with pytest.raises(NotFoundError):
+        await world.drawers.delete(stranger.id, drawer.id)
+    with pytest.raises(ConflictError):
+        await world.drawers.delete(owner.id, (await world.default_drawer(owner)).id)
+    await world.pipeline().receive(
+        owner.id, incoming(b"%PDF-1.7 x"), filename="x.pdf", drawer=drawer.id
+    )
+    with pytest.raises(ConflictError):
+        await world.drawers.delete(owner.id, drawer.id)
+    empty = await world.drawers.create(owner.id, "Empty")
+    await world.drawers.delete(owner.id, empty.id)
+    with pytest.raises(NotFoundError):
+        await world.drawers.get(owner.id, empty.id)

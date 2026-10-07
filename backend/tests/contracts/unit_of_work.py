@@ -5,15 +5,15 @@ from decimal import Decimal
 import pytest
 
 from papiq.core.domain.attributes import AttributeDefinition, AttributeType, Money, Url
-from papiq.core.domain.documents import DocumentChanges
+from papiq.core.domain.documents import Document, DocumentChanges
 from papiq.core.domain.drawers import Drawer, ShareLevel
 from papiq.core.domain.errors import ConcurrencyError, ConflictError, NotFoundError
-from papiq.core.domain.ids import DrawerId, new_id
+from papiq.core.domain.ids import DocumentId, DrawerId, new_id
 from papiq.core.domain.master_data import Contact, DocumentType, Tag
 from papiq.core.domain.permissions import can_read_document
-from papiq.core.domain.pipeline import Outcome, Step, StepResult, StepRun
+from papiq.core.domain.pipeline import Lane, Outcome, Step, StepResult, StepRun
 from papiq.core.domain.users import User
-from papiq.core.ports import UnitOfWorkFactory
+from papiq.core.ports import DocumentFilter, UnitOfWorkFactory
 from tests import builders
 from tests.builders import FAILED, NOW, OK, UNCERTAIN
 
@@ -34,6 +34,14 @@ async def owner_with_drawer(uow_factory: UnitOfWorkFactory) -> tuple[User, Drawe
     drawer = builders.default_drawer(owner)
     await seed(uow_factory, owner, drawers=(drawer,))
     return owner, drawer
+
+
+def _repository_of(item: object) -> str:
+    return {
+        Contact: "contacts",
+        DocumentType: "document_types",
+        Tag: "tags",
+    }[type(item)]
 
 
 class UnitOfWorkContract:
@@ -488,7 +496,84 @@ class UnitOfWorkContract:
                 }
                 visible = {document.id for document in await uow.documents.list_visible_to(user.id)}
                 assert visible == expected, user.username
+                queried = await uow.documents.query_visible(user.id, DocumentFilter(), limit=100)
+                assert {document.id for document in queried} == expected, user.username
+                for lane in (Lane.YELLOW, Lane.RED, None):
+                    only = DocumentFilter(lanes=frozenset({lane}), drawer=shared.id)
+                    found = await uow.documents.query_visible(user.id, only, limit=100)
+                    assert {d.id for d in found} <= expected, user.username
         assert len(expected) == 0  # the stranger sees nothing
+
+    async def test_query_filters_and_pages(self, uow_factory: UnitOfWorkFactory) -> None:
+        owner, drawer = await owner_with_drawer(uow_factory)
+        other = builders.drawer(owner, "Other")
+        await seed(uow_factory, drawers=(other,))
+        contact = Contact.create(name="ACME", now=NOW)
+        invoice = DocumentType.create(name="Invoice", now=NOW)
+        tax, paid = Tag.create(name="tax", now=NOW), Tag.create(name="paid", now=NOW)
+        documents = []
+        for number in range(6):
+            document = builders.processed(
+                owner,
+                other if number == 5 else drawer,
+                {Step.CLASSIFY: UNCERTAIN} if number == 4 else None,
+            )
+            tags = frozenset({tax.id, paid.id} if number < 2 else {tax.id} if number < 4 else set())
+            document.apply_changes(
+                DocumentChanges(
+                    contact_id=contact.id if number % 2 == 0 else None,
+                    document_type_id=invoice.id if number < 3 else None,
+                    tag_ids=tags,
+                ),
+                {},
+                NOW,
+            )
+            documents.append(document)
+        processing = builders.document(owner, drawer)
+        async with uow_factory() as uow:
+            for item in (contact, invoice, tax, paid):
+                await getattr(uow, _repository_of(item)).add(item)
+            for document in [*documents, processing]:
+                await uow.documents.add(document)
+            await uow.commit()
+
+        numbers = {document.id: number for number, document in enumerate(documents)}
+
+        def ids(found: list[Document]) -> list[int]:
+            return [numbers.get(document.id, -1) for document in found]
+
+        async with uow_factory() as uow:
+            query = uow.documents.query_visible
+            everything = await query(owner.id, DocumentFilter(), limit=100)
+            all_ids = [d.id for d in [*documents, processing]]
+            assert [d.id for d in everything] == sorted(all_ids, reverse=True)
+            assert set(ids(await query(owner.id, DocumentFilter(contact=contact.id), limit=9))) == {
+                0,
+                2,
+                4,
+            }
+            by_type = DocumentFilter(document_type=invoice.id)
+            assert set(ids(await query(owner.id, by_type, limit=9))) == {0, 1, 2}
+            both_tags = DocumentFilter(tags=frozenset({tax.id, paid.id}))
+            assert set(ids(await query(owner.id, both_tags, limit=9))) == {0, 1}
+            assert set(ids(await query(owner.id, DocumentFilter(drawer=other.id), limit=9))) == {5}
+            yellow = DocumentFilter(lanes=frozenset({Lane.YELLOW}))
+            assert set(ids(await query(owner.id, yellow, limit=9))) == {4}
+            in_processing = await query(owner.id, DocumentFilter(lanes=frozenset({None})), limit=9)
+            assert [d.id for d in in_processing] == [processing.id]
+            combined = DocumentFilter(
+                contact=contact.id, document_type=invoice.id, tags=frozenset({paid.id})
+            )
+            assert set(ids(await query(owner.id, combined, limit=9))) == {0}
+
+            # Pages of two, following the last id.
+            pages: list[DocumentId] = []
+            before = None
+            while page := await query(owner.id, DocumentFilter(), before=before, limit=2):
+                assert len(page) <= 2
+                pages += [d.id for d in page]
+                before = page[-1].id
+            assert pages == [d.id for d in everything]
 
     async def test_removing_a_document_removes_its_processing_log(
         self, uow_factory: UnitOfWorkFactory
@@ -594,6 +679,22 @@ class UnitOfWorkContract:
                 await uow.users.remove(owner.id)
             with pytest.raises(NotFoundError):
                 await uow.drawers.remove(drawer.id)
+
+    async def test_master_data_is_removed(self, uow_factory: UnitOfWorkFactory) -> None:
+        tag, contact = Tag.create(name="old", now=NOW), Contact.create(name="Gone", now=NOW)
+        async with uow_factory() as uow:
+            await uow.tags.add(tag)
+            await uow.contacts.add(contact)
+            await uow.commit()
+        async with uow_factory() as uow:
+            await uow.tags.remove(tag.id)
+            await uow.contacts.remove(contact.id)
+            await uow.commit()
+        async with uow_factory() as uow:
+            assert await uow.tags.find(tag.id) is None
+            assert await uow.contacts.find_by_name("gone") is None
+            with pytest.raises(NotFoundError):
+                await uow.tags.remove(tag.id)
 
     async def test_documents_exist_by_reference(self, uow_factory: UnitOfWorkFactory) -> None:
         owner, drawer = await owner_with_drawer(uow_factory)

@@ -105,7 +105,7 @@ class World:
 
     @property
     def documents(self) -> DocumentService:
-        return DocumentService(self.uow, self.clock)
+        return DocumentService(self.uow, self.clock, self.object_store)
 
     def pipeline(self, executors: Mapping[Step, StepExecutor] | None = None) -> PipelineService:
         return PipelineService(
