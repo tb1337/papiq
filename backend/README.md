@@ -31,9 +31,11 @@ adapter must pass.
   lanes, domain events, jobs and the permission rules. IDs are UUIDv7, timestamps are UTC.
 - `core/ports`: repositories, processing log, outbox and job queue share one `UnitOfWork`, so
   a state change, its events and follow-up jobs are committed together (transactional outbox).
-  `EventBus` delivers committed events at least once. Further ports: `ObjectStore`, `Clock`,
-  `Ocr`, `DocumentParser`, `PreviewRenderer`; LLM, embeddings, search and identity are designed
-  in their milestones.
+  `EventBus` delivers committed events at least once. The identity repositories (credentials,
+  sessions, API tokens, external identities, failed sign-ins) are part of the unit of work too.
+  Further ports: `ObjectStore`, `Clock`, `Ocr`, `DocumentParser`, `PreviewRenderer`,
+  `PasswordHasher`, `SecretCipher`, `Totp`; LLM, embeddings and search are designed in their
+  milestones.
 - `core/services`: use cases (users, drawers, master data, documents, pipeline, maintenance).
   Each runs in one unit of work and checks the caller's rights. Classification, attributes,
   rules and filing are placeholders until M5 and M7.
@@ -41,6 +43,43 @@ adapter must pass.
 `papiq.composition.container.build_memory_container()` wires all designed ports to their
 in-memory adapters (fakes for OCR, parser and previews); `build_services()` creates the use
 cases on top.
+
+## Identity
+
+`core/domain/identity.py` and `core/services/auth.py`; `User` itself only knows its role and
+whether it is active. A deactivated user has no rights and cannot authenticate.
+
+- Passwords: Argon2id (`adapters/outbound/crypto`, RFC 9106 low-memory profile: 3 passes,
+  64 MiB, 4 lanes), at most four hashes at a time, in a worker thread. Normalised to Unicode
+  NFKC; 12 to 256 characters, not the username, no rules on character classes. Hashes with
+  older parameters are replaced at the next sign-in.
+- Sign-in: unknown and deactivated users are checked against a dummy hash, so all failures take
+  the same time and read the same. Failures are counted per account (also for unknown names;
+  from the sixth on, the account backs off from 1 second, doubling up to 15 minutes; no hard
+  lock) and per source address (30 within 15 minutes block it for 15 minutes); the counts are
+  in the database. Success clears the account's count.
+- TOTP (RFC 6238, pyotp), optional per user: set up with a new secret, which takes effect when a
+  code confirms it; then ten recovery codes (80 bits each) are shown once and stored as SHA-256
+  hashes. Codes of the previous and next 30-second step are accepted, each step only once. The
+  secret is encrypted with AES-256-GCM (`PAPIQ_SECRET_KEY`), bound to the user id. Turning TOTP
+  off needs a code or a recovery code, or an admin.
+- Sessions: random 256-bit tokens, stored as SHA-256. They end after `PAPIQ_SESSION_IDLE_TIMEOUT`
+  without use, after `PAPIQ_SESSION_MAX_AGE`, at sign-out, at deactivation and when the password
+  changes or is reset (the caller's own session is renewed). Every sign-in starts a new session.
+  Last use is written at most once a minute. The CSRF token of a session is derived from its
+  token (HMAC), so nothing more is stored.
+- API tokens: `papiq_` plus 256 random bits, stored as SHA-256; scope `read` or `read_write`,
+  a name, optional expiry, last use. Shown once. They survive a password change unless the
+  caller (or the admin resetting it) asks to revoke them, and are refused while the account is
+  deactivated.
+- Accounts: admins create users (optionally with a password), change roles, reset passwords,
+  deactivate, turn TOTP off and remove links to identity providers. Deleting a user needs that
+  they own no documents and their drawers are empty; it removes their drawers, the shares to
+  them and their sign-in data. The last active admin cannot be demoted, deactivated or deleted.
+- The first admin: `PAPIQ_ADMIN_USERNAME` and `PAPIQ_ADMIN_PASSWORD[_FILE]` create an admin at
+  API start while there is no admin at all. Afterwards they are ignored; they never change an
+  existing account. A name taken by another user stops the start.
+- The cleanup job also removes ended sessions and failure counts past their window.
 
 ## Persistence
 
@@ -211,6 +250,12 @@ Durations are seconds (`30`, `1.5`) or ISO 8601 (`PT1H`, `P7D`) and must be posi
 | `PAPIQ_S3_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY` | required for `s3` | *secret* |
 | `PAPIQ_API_HOST`, `PAPIQ_API_PORT` | `0.0.0.0`, `8000` | Where the API listens |
 | `PAPIQ_UPLOAD_MAX_SIZE` | `100MiB` | Largest upload; bytes or with unit (`50MB`, `1GiB`) |
+| `PAPIQ_FORWARDED_ALLOW_IPS` | unset | Reverse proxies whose `X-Forwarded-For` is trusted (comma-separated, `*`); unset: none |
+| `PAPIQ_SECRET_KEY` | required for `all`, `api` | *secret*; 32 bytes base64 (`openssl rand -base64 32`); encrypts TOTP secrets. Keep it: without it, TOTP secrets cannot be read |
+| `PAPIQ_ADMIN_USERNAME`, `PAPIQ_ADMIN_PASSWORD` | unset | The first admin, see Identity; password *secret*; set both or neither |
+| `PAPIQ_SESSION_IDLE_TIMEOUT` | `P1D` | A session ends when unused this long |
+| `PAPIQ_SESSION_MAX_AGE` | `P30D` | A session ends this long after sign-in; not shorter than the idle timeout |
+| `PAPIQ_COOKIE_SECURE` | `true` | `false` only for development over plain HTTP |
 | `PAPIQ_WORKER_CONCURRENCY` | `2` | Jobs at the same time |
 | `PAPIQ_WORKER_POLL_INTERVAL` | `1` | Seconds between looks for due jobs |
 | `PAPIQ_WORKER_SHUTDOWN_TIMEOUT` | `30` | Seconds running jobs get to finish on SIGTERM |
