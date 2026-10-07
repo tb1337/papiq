@@ -277,6 +277,8 @@ meaning took part.
   gives one vector per document. A vector is made again only when model or section texts change.
 - **Embeddings.** The query is embedded at request time (`PAPIQ_SEARCH_EMBED_TIMEOUT`); if the
   endpoint is down or slow, the search falls back to words (`semantic: false`).
+  The model is `snowflake-arctic-embed2` with `PAPIQ_EMBEDDING_QUERY_PREFIX=query:` (compared with
+  `bge-m3` and `qwen3-embedding:0.6b` in `evaluation/search/reports`).
   `PAPIQ_EMBEDDING_DIMENSIONS` is the length of the vectors and required with Meilisearch and an
   embedding endpoint; vectors of another length are refused (the query then goes by words).
   Changing the model means a rebuild. Some models want a prefix for queries
