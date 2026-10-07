@@ -1,5 +1,5 @@
-"""Helpers for tests of the REST API: a test-only way to name the caller, a real Uvicorn
-server, and a reader for server-sent events."""
+"""Helpers for tests of the REST API: real API tokens for test users, a real Uvicorn server,
+and a reader for server-sent events."""
 
 import asyncio
 import contextlib
@@ -8,35 +8,35 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
-from uuid import UUID
 
-import httpx
+import httpx2
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 
-from papiq.adapters.inbound.rest import PREFIX, close_event_streams, current_user
-from papiq.adapters.inbound.rest.problems import AuthenticationRequiredError
+from papiq.adapters.inbound.rest import PREFIX, close_event_streams
+from papiq.core.domain.identity import TokenScope
 from papiq.core.domain.ids import UserId
 from papiq.core.domain.users import User
+from papiq.core.services.auth import AuthService
 
-USER_HEADER = "x-test-user"
-
-
-async def header_user(request: Request) -> UserId:
-    """Replaces `current_user` in tests only: the caller is named in a header."""
-    value = request.headers.get(USER_HEADER)
-    if value is None:
-        raise AuthenticationRequiredError("no test user")
-    return UserId(UUID(value))
+# API tokens of the test users, issued through the real AuthService.
+_TOKENS: dict[UserId, str] = {}
 
 
-def allow_test_users(app: FastAPI) -> FastAPI:
-    app.dependency_overrides[current_user] = header_user
-    return app
+async def issue_token(auth_service: AuthService, user: User) -> str:
+    """A `read_write` token for `user`, remembered for `auth(user)`."""
+    _, token = await auth_service.create_api_token(user.id, "tests", TokenScope.READ_WRITE)
+    _TOKENS[user.id] = token
+    return token
 
 
 def auth(user: User) -> dict[str, str]:
-    return {USER_HEADER: str(user.id)}
+    """Headers that authenticate `user` with their test token."""
+    return bearer(_TOKENS[user.id])
+
+
+def bearer(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
 
 
 @asynccontextmanager
@@ -71,14 +71,14 @@ class Stream:
         return {event["document_id"] for event in self.events}
 
 
-async def listen(client: httpx.AsyncClient, user: User, stream: Stream, **params: str) -> None:
+async def listen(client: httpx2.AsyncClient, user: User, stream: Stream, **params: str) -> None:
     """Collect events into `stream` until the server ends the stream or goes away."""
-    with contextlib.suppress(httpx.ReadError, httpx.RemoteProtocolError):
+    with contextlib.suppress(httpx2.ReadError, httpx2.RemoteProtocolError):
         await _listen(client, user, stream, params)
 
 
 async def _listen(
-    client: httpx.AsyncClient, user: User, stream: Stream, params: dict[str, str]
+    client: httpx2.AsyncClient, user: User, stream: Stream, params: dict[str, str]
 ) -> None:
     async with client.stream(
         "GET", f"{PREFIX}/events", headers=auth(user), params=params

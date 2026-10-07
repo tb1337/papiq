@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from uuid import UUID
 
-import httpx
+import httpx2
 import pytest
 
 from papiq.adapters.inbound.rest import PREFIX
@@ -15,7 +15,8 @@ from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import UnprocessableDocumentError
 from papiq.core.domain.pipeline import Step
 from papiq.core.services.objects import original_key
-from tests.api import USER_HEADER, auth
+from tests.api import auth, issue_token
+from tests.builders import PASSWORD
 from tests.contracts.processing import SAMPLES
 from tests.unit.adapters.rest.conftest import MAX_UPLOAD, Api, make_app
 
@@ -306,31 +307,8 @@ async def test_only_the_owner_controls_processing(api: Api) -> None:
     assert missing.status_code == 404
 
 
-@pytest.mark.parametrize(
-    ("method", "path"),
-    [
-        ("POST", DOCUMENTS),
-        ("GET", f"{DOCUMENTS}/{UUID(int=1)}"),
-        ("GET", f"{DOCUMENTS}/{UUID(int=1)}/log"),
-        ("POST", f"{DOCUMENTS}/{UUID(int=1)}/retry"),
-        ("POST", f"{DOCUMENTS}/{UUID(int=1)}/reprocess"),
-        ("GET", f"{PREFIX}/events"),
-    ],
-)
-async def test_without_authentication_everything_is_refused(
-    api: Api, method: str, path: str
-) -> None:
-    del api.app.dependency_overrides[next(iter(api.app.dependency_overrides))]
-    response = await api.client.request(method, path)
-    assert response.status_code == 401
-    assert response.headers["content-type"] == PROBLEM
-    assert response.headers["www-authenticate"] == "Bearer"
-    assert "M4" in response.json()["detail"]
-
-
 async def test_unauthenticated_uploads_are_not_read(api: Api) -> None:
     """The user is checked before the body is received."""
-    del api.app.dependency_overrides[next(iter(api.app.dependency_overrides))]
     read = False
 
     async def body() -> AsyncIterator[bytes]:
@@ -347,13 +325,15 @@ async def test_unauthenticated_uploads_are_not_read(api: Api) -> None:
 
 async def test_the_limit_is_configured() -> None:
     container = build_memory_container()
-    app = make_app(container, build_services(container), max_upload=10)
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://papiq"
+    services = build_services(container)
+    app = make_app(container, services, max_upload=10)
+    owner = await services.users.bootstrap_admin("root", PASSWORD)
+    assert owner is not None
+    await issue_token(services.auth, owner)
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app), base_url="http://papiq"
     ) as client:
-        response = await client.post(
-            DOCUMENTS, files=pdf(), headers={USER_HEADER: str(UUID(int=1))}
-        )
+        response = await client.post(DOCUMENTS, files=pdf(), headers=auth(owner))
     assert response.status_code == 413
 
 
@@ -363,10 +343,10 @@ async def test_unexpected_errors_are_problems_without_details(
     async def broken(*args: object, **kwargs: object) -> object:
         raise OSError("s3://secret-bucket/originals unreachable")
 
-    monkeypatch.setattr(api.services.documents, "get", broken)
+    monkeypatch.setattr(api.services.documents, "view", broken)
     owner = await api.user()
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=api.app, raise_app_exceptions=False),
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=api.app, raise_app_exceptions=False),
         base_url="http://papiq",
     ) as client:
         response = await client.get(f"{DOCUMENTS}/{UUID(int=1)}", headers=auth(owner))
@@ -374,3 +354,20 @@ async def test_unexpected_errors_are_problems_without_details(
     assert response.headers["content-type"] == PROBLEM
     assert response.json()["detail"] == "an unexpected error occurred"
     assert "secret" not in response.text
+
+
+async def test_uploads_have_their_own_limit() -> None:
+    """M4-04: the general limit for request bodies (1 MiB) does not apply to uploads."""
+    container = build_memory_container()
+    services = build_services(container)
+    app = make_app(container, services, max_upload=2 * 1024 * 1024)
+    owner = await services.users.bootstrap_admin("root", PASSWORD)
+    assert owner is not None
+    await issue_token(services.auth, owner)
+    content = b"%PDF-1.7\n%" + b"0" * (2 * 1024 * 1024 - 64 * 1024) + b"\n%%EOF\n"
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app), base_url="http://papiq"
+    ) as client:
+        files = {"file": ("big.pdf", content, "application/pdf")}
+        response = await client.post(DOCUMENTS, files=files, headers=auth(owner))
+    assert response.status_code == 202, response.text

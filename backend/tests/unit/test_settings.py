@@ -4,7 +4,12 @@ from pathlib import Path
 import pytest
 
 from papiq.composition.errors import ConfigurationError
-from papiq.composition.settings import Settings, find_unknown_variables, load_settings
+from papiq.composition.settings import (
+    DEVELOPMENT_SECRET_KEY,
+    Settings,
+    find_unknown_variables,
+    load_settings,
+)
 
 POSTGRES = {
     "PAPIQ_DB_TYPE": "postgres",
@@ -306,3 +311,142 @@ def test_invalid_worker_settings_name_the_variable(
     monkeypatch: pytest.MonkeyPatch, name: str, value: str
 ) -> None:
     assert name in error_message(monkeypatch, {name: value})
+
+
+def test_the_api_needs_a_valid_secret_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PAPIQ_SECRET_KEY")
+    for role in ("all", "api"):
+        message = error_message(monkeypatch, {"PAPIQ_ROLE": role})
+        assert f"PAPIQ_SECRET_KEY is required when PAPIQ_ROLE={role}" in message
+    set_env(monkeypatch, {"PAPIQ_ROLE": "worker"})
+    assert load_settings().secret_key is None
+    message = error_message(monkeypatch, {"PAPIQ_SECRET_KEY": "too-short"})
+    assert "PAPIQ_SECRET_KEY" in message and "openssl rand -base64 32" in message
+    assert "too-short" not in message
+
+
+def test_identity_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    password = tmp_path / "admin"
+    password.write_text("a long admin password\n")
+    set_env(
+        monkeypatch,
+        {
+            "PAPIQ_ADMIN_USERNAME": "root",
+            "PAPIQ_ADMIN_PASSWORD_FILE": str(password),
+            "PAPIQ_SESSION_IDLE_TIMEOUT": "PT8H",
+            "PAPIQ_SESSION_MAX_AGE": "P7D",
+            "PAPIQ_COOKIE_SECURE": "false",
+            "PAPIQ_FORWARDED_ALLOW_IPS": "172.18.0.2",
+        },
+    )
+    settings = load_settings()
+    assert settings.admin_password is not None
+    assert settings.admin_password.get_secret_value() == "a long admin password"
+    assert settings.session_idle_timeout == timedelta(hours=8)
+    assert settings.session_max_age == timedelta(days=7)
+    assert settings.cookie_secure is False
+    assert settings.forwarded_allow_ips == "172.18.0.2"
+    described = settings.describe()
+    assert described["admin_password"] == "**********"
+    assert described["secret_key"] == "**********"
+
+
+def test_identity_defaults() -> None:
+    settings = load_settings()
+    assert settings.session_idle_timeout == timedelta(days=1)
+    assert settings.session_max_age == timedelta(days=30)
+    assert settings.cookie_secure is True
+    assert settings.admin_username is None
+
+
+def test_inconsistent_identity_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    message = error_message(
+        monkeypatch,
+        {
+            "PAPIQ_ADMIN_USERNAME": "root",
+            "PAPIQ_SESSION_IDLE_TIMEOUT": "P2D",
+            "PAPIQ_SESSION_MAX_AGE": "P1D",
+        },
+    )
+    assert "PAPIQ_ADMIN_USERNAME and PAPIQ_ADMIN_PASSWORD must be set together" in message
+    assert "PAPIQ_SESSION_MAX_AGE must not be shorter than PAPIQ_SESSION_IDLE_TIMEOUT" in message
+
+
+OIDC = {
+    "PAPIQ_OIDC_ISSUER": "https://idp.example/realms/home",
+    "PAPIQ_OIDC_CLIENT_ID": "papiq",
+    "PAPIQ_OIDC_CLIENT_SECRET": "client-secret",
+    "PAPIQ_PUBLIC_URL": "https://papiq.example",
+}
+
+
+def test_oidc_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert not load_settings().oidc_enabled
+    set_env(monkeypatch, OIDC | {"PAPIQ_OIDC_AUTO_CREATE": "true"})
+    settings = load_settings()
+    assert settings.oidc_enabled
+    assert settings.oidc_issuer == "https://idp.example/realms/home"  # exactly as given
+    assert settings.oidc_scopes == "openid profile email"
+    assert settings.oidc_display_name == "Single sign-on"
+    assert settings.oidc_auto_create is True
+    assert settings.describe()["oidc_client_secret"] == "**********"
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        (
+            {"PAPIQ_OIDC_ISSUER": "https://idp.example"},
+            "PAPIQ_OIDC_ISSUER, PAPIQ_OIDC_CLIENT_ID, PAPIQ_OIDC_CLIENT_SECRET must be set "
+            "together",
+        ),
+        (OIDC | {"PAPIQ_OIDC_ISSUER": "http://idp.example"}, "PAPIQ_OIDC_ISSUER: must be an https"),
+        (OIDC | {"PAPIQ_OIDC_SCOPES": "profile email"}, "PAPIQ_OIDC_SCOPES: must contain 'openid'"),
+        (
+            {key: value for key, value in OIDC.items() if key != "PAPIQ_PUBLIC_URL"},
+            "PAPIQ_PUBLIC_URL is required with OIDC",
+        ),
+    ],
+)
+def test_inconsistent_oidc_settings(
+    monkeypatch: pytest.MonkeyPatch, values: dict[str, str], expected: str
+) -> None:
+    message = error_message(monkeypatch, values)
+    assert expected in message
+    assert "client-secret" not in message
+
+
+def test_secure_cookies_need_the_trusted_proxies(monkeypatch: pytest.MonkeyPatch) -> None:
+    """M4-01: Papiq speaks plain HTTP; with `Secure` cookies (default) a TLS-terminating proxy
+    is in front of it. Without `PAPIQ_FORWARDED_ALLOW_IPS` every request then carries the
+    proxy's address, and the per-source throttle would hit everyone at once."""
+    monkeypatch.delenv("PAPIQ_FORWARDED_ALLOW_IPS")
+    message = error_message(monkeypatch, {})
+    assert "PAPIQ_FORWARDED_ALLOW_IPS is required with PAPIQ_COOKIE_SECURE=true" in message
+    with pytest.raises(ConfigurationError, match="FORWARDED_ALLOW_IPS"):
+        Settings(cookie_secure=True, forwarded_allow_ips=None)
+    set_env(monkeypatch, {"PAPIQ_COOKIE_SECURE": "false"})
+    assert load_settings().forwarded_allow_ips is None  # development over plain HTTP
+    set_env(monkeypatch, {"PAPIQ_COOKIE_SECURE": "true", "PAPIQ_ROLE": "worker"})
+    assert load_settings().forwarded_allow_ips is None  # no cookies in the worker
+
+
+def test_request_bodies_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert load_settings().request_max_size == 1024 * 1024
+    set_env(monkeypatch, {"PAPIQ_REQUEST_MAX_SIZE": "64KiB"})
+    assert load_settings().request_max_size == 64 * 1024
+
+
+def test_the_development_key_is_refused_with_secure_cookies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M4-11: the devcontainer's key is public; production (secure cookies) must not use it."""
+    dev_env = Path(__file__).parents[3] / ".devcontainer" / "dev.env"
+    assert f"PAPIQ_SECRET_KEY={DEVELOPMENT_SECRET_KEY}" in dev_env.read_text().splitlines()
+    message = error_message(monkeypatch, {"PAPIQ_SECRET_KEY": DEVELOPMENT_SECRET_KEY})
+    assert "PAPIQ_SECRET_KEY is the development key" in message
+    assert DEVELOPMENT_SECRET_KEY not in message
+    urlsafe = DEVELOPMENT_SECRET_KEY.replace("+", "-").replace("/", "_").rstrip("=")
+    assert "development key" in error_message(monkeypatch, {"PAPIQ_SECRET_KEY": urlsafe})
+    set_env(monkeypatch, {"PAPIQ_COOKIE_SECURE": "false"})
+    assert load_settings().secret_key is not None  # fine for development

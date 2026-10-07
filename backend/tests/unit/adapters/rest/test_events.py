@@ -2,14 +2,17 @@
 documents they may read."""
 
 import asyncio
+from datetime import timedelta
 
-import httpx
+import httpx2
 
 from papiq.adapters.inbound.rest import PREFIX, close_event_streams
+from papiq.composition.container import build_memory_container, build_services
 from papiq.core.domain.drawers import ShareLevel
-from tests.api import Stream, auth, listen, serving, until
+from tests.api import Stream, auth, issue_token, listen, serving, until
+from tests.builders import PASSWORD
 from tests.contracts.processing import SAMPLES
-from tests.unit.adapters.rest.conftest import Api
+from tests.unit.adapters.rest.conftest import Api, make_app
 
 EVENTS = f"{PREFIX}/events"
 
@@ -19,7 +22,7 @@ async def test_events_reach_only_users_who_may_read_the_document(api: Api) -> No
     shared = await api.services.drawers.create(owner.id, "Shared")
     await api.services.drawers.share(owner.id, shared.id, reader.id, ShareLevel.READ)
 
-    async with serving(api.app) as url, httpx.AsyncClient(base_url=url, timeout=10) as client:
+    async with serving(api.app) as url, httpx2.AsyncClient(base_url=url, timeout=10) as client:
         streams = {user.id: Stream() for user in (owner, reader, stranger)}
         tasks = [
             asyncio.create_task(listen(client, user, streams[user.id]))
@@ -60,7 +63,7 @@ async def test_events_reach_only_users_who_may_read_the_document(api: Api) -> No
 
 async def test_a_stream_for_one_document(api: Api) -> None:
     owner, stranger = await api.user(), await api.user()
-    async with serving(api.app) as url, httpx.AsyncClient(base_url=url, timeout=10) as client:
+    async with serving(api.app) as url, httpx2.AsyncClient(base_url=url, timeout=10) as client:
         files = {"file": ("scan.pdf", (SAMPLES / "scan.pdf").read_bytes(), "x/y")}
         first = (await client.post(f"{PREFIX}/documents", files=files, headers=auth(owner))).json()
         other = {"file": ("photo.jpg", (SAMPLES / "photo.jpg").read_bytes(), "x/y")}
@@ -81,3 +84,20 @@ async def test_a_stream_for_one_document(api: Api) -> None:
         assert {event["document_id"] for event in stream.events} == {first["id"]}
         close_event_streams(api.app)
         await asyncio.wait_for(task, timeout=5)
+
+
+async def test_a_stream_ends_when_its_token_is_revoked() -> None:
+    container = build_memory_container()
+    services = build_services(container)
+    app = make_app(container, services, recheck=timedelta(milliseconds=200))
+    user = await services.users.bootstrap_admin("root", PASSWORD)
+    assert user is not None
+    await issue_token(services.auth, user)
+    [token] = await services.auth.list_api_tokens(user.id)
+    async with serving(app) as url, httpx2.AsyncClient(base_url=url, timeout=10) as client:
+        stream = Stream()
+        task = asyncio.create_task(listen(client, user, stream))
+        await asyncio.wait_for(stream.ready.wait(), timeout=5)
+        assert stream.status == 200
+        await services.auth.revoke_api_token(user.id, token.id)
+        await asyncio.wait_for(task, timeout=5)  # the server ended the stream

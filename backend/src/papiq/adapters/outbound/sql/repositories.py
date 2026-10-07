@@ -8,7 +8,7 @@ the new version; on SQLite, writers are serialized by the write lock.
 """
 
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from datetime import timedelta
 from decimal import Decimal
 from typing import Any, ClassVar
@@ -49,6 +49,7 @@ from papiq.core.domain.pipeline import (
 )
 from papiq.core.domain.users import Role, User
 from papiq.core.domain.validation import name_key
+from papiq.core.ports.repository import DocumentFilter
 
 type Values = dict[str, Any]
 
@@ -96,6 +97,12 @@ class SqlRepository[K: UUID, E]:
 
     async def list_all(self) -> list[E]:
         return await self._load(true())
+
+    async def remove(self, id: K) -> None:
+        """Child tables go with the row (ON DELETE CASCADE)."""
+        result = await self._tx.write(delete(self.table).where(self.table.c.id == id))
+        if result.rowcount == 0:
+            raise NotFoundError(self.kind, id)
 
     async def _load(self, where: ColumnElement[bool]) -> list[E]:
         rows = (await self._tx.read(select(self.table).where(where))).all()
@@ -162,6 +169,7 @@ class SqlUserRepository(SqlRepository[UserId, User]):
             "username_key": name_key(entity.username),
             "role": entity.role.value,
             "created_at": entity.created_at,
+            "active": entity.active,
             "version": entity.version,
         }
 
@@ -171,6 +179,7 @@ class SqlUserRepository(SqlRepository[UserId, User]):
             username=row.username,
             role=Role(row.role),
             created_at=row.created_at,
+            active=row.active,
             version=row.version,
         )
 
@@ -228,6 +237,19 @@ class SqlDrawerRepository(SqlRepository[DrawerId, Drawer]):
 
     async def _delete_children(self, ids: list[DrawerId]) -> None:
         await self._tx.write(delete(t.drawer_shares).where(t.drawer_shares.c.drawer_id.in_(ids)))
+
+
+def _visible_to(user: UserId) -> ColumnElement[bool]:
+    """The rule of `papiq.core.domain.permissions`: own documents, and green documents in
+    drawers the user owns or that are shared with them."""
+    documents = t.documents
+    return or_(
+        documents.c.owner_id == user,
+        and_(
+            documents.c.lane == Lane.GREEN.value,
+            documents.c.drawer_id.in_(accessible_drawer_ids(user)),
+        ),
+    )
 
 
 def accessible_drawer_ids(user: UserId) -> Any:
@@ -349,22 +371,108 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
         return found[0] if found else None
 
     async def list_visible_to(self, user: UserId) -> list[Document]:
-        documents = t.documents
-        return await self._load(
-            or_(
-                documents.c.owner_id == user,
-                and_(
-                    documents.c.lane == Lane.GREEN.value,
-                    documents.c.drawer_id.in_(accessible_drawer_ids(user)),
-                ),
-            )
-        )
+        return await self._load(_visible_to(user))
 
-    async def remove(self, id: DocumentId) -> None:
-        """Tags, attribute values and the processing log go with it (ON DELETE CASCADE)."""
-        result = await self._tx.write(delete(t.documents).where(t.documents.c.id == id))
-        if result.rowcount == 0:
-            raise NotFoundError(self.kind, id)
+    async def attribute_in_use(
+        self,
+        attribute: AttributeId,
+        *,
+        values: Collection[str] | None = None,
+        outside_types: Collection[DocumentTypeId] | None = None,
+    ) -> bool:
+        documents, values_table = t.documents, t.document_attributes
+        statement = (
+            select(values_table.c.document_id)
+            .join(documents, documents.c.id == values_table.c.document_id)
+            .where(values_table.c.attribute_id == attribute)
+        )
+        if values is not None:
+            statement = statement.where(values_table.c.value_text.in_(list(values)))
+        if outside_types is not None:
+            statement = statement.where(
+                or_(
+                    documents.c.document_type_id.is_(None),
+                    documents.c.document_type_id.not_in(list(outside_types)),
+                )
+            )
+        found = await self._tx.read(statement.limit(1))
+        return found.first() is not None
+
+    async def query_visible(
+        self,
+        user: UserId,
+        filter: DocumentFilter,
+        *,
+        before: DocumentId | None = None,
+        limit: int,
+    ) -> list[Document]:
+        documents = t.documents
+        criteria = [_visible_to(user)]
+        if before is not None:
+            criteria.append(documents.c.id < before)
+        if filter.contact is not None:
+            criteria.append(documents.c.contact_id == filter.contact)
+        if filter.document_type is not None:
+            criteria.append(documents.c.document_type_id == filter.document_type)
+        if filter.drawer is not None:
+            criteria.append(documents.c.drawer_id == filter.drawer)
+        for tag in sorted(filter.tags):
+            tags = t.document_tags
+            criteria.append(
+                documents.c.id.in_(select(tags.c.document_id).where(tags.c.tag_id == tag))
+            )
+        if filter.lanes is not None:
+            values = [lane.value for lane in filter.lanes if lane is not None]
+            lane_criteria = [documents.c.lane.in_(values)]
+            if None in filter.lanes:
+                lane_criteria.append(documents.c.lane.is_(None))
+            criteria.append(or_(*lane_criteria))
+        rows = (
+            await self._tx.read(
+                select(documents).where(*criteria).order_by(documents.c.id.desc()).limit(limit)
+            )
+        ).all()
+        return await self._entities(rows)
+
+    async def exists(
+        self,
+        *,
+        owner: UserId | None = None,
+        drawer: DrawerId | None = None,
+        contact: ContactId | None = None,
+        document_type: DocumentTypeId | None = None,
+        tag: TagId | None = None,
+        attribute: AttributeId | None = None,
+        sha256: Sha256 | None = None,
+    ) -> bool:
+        documents = t.documents
+        criteria: list[ColumnElement[bool]] = []
+        if owner is not None:
+            criteria.append(documents.c.owner_id == owner)
+        if drawer is not None:
+            criteria.append(documents.c.drawer_id == drawer)
+        if contact is not None:
+            criteria.append(documents.c.contact_id == contact)
+        if document_type is not None:
+            criteria.append(documents.c.document_type_id == document_type)
+        if tag is not None:
+            tags = t.document_tags
+            criteria.append(
+                documents.c.id.in_(select(tags.c.document_id).where(tags.c.tag_id == tag))
+            )
+        if attribute is not None:
+            values = t.document_attributes
+            criteria.append(
+                documents.c.id.in_(
+                    select(values.c.document_id).where(values.c.attribute_id == attribute)
+                )
+            )
+        if sha256 is not None:
+            criteria.append(documents.c.sha256 == sha256.hex)
+        if not criteria:
+            raise ValueError("exists needs at least one criterion")
+        found = await self._tx.read(select(documents.c.id).where(*criteria).limit(1))
+        return found.first() is not None
 
     async def _entities(self, rows: Sequence[Row[Any]]) -> list[Document]:
         ids = [row.id for row in rows]

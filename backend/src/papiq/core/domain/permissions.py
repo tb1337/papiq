@@ -11,6 +11,7 @@
   documents or drawers.
 - Deleting, retrying and reprocessing a document is up to its owner; so is reading its
   processing log, which may hold technical details of failed runs.
+- A deactivated user has no rights at all.
 """
 
 from papiq.core.domain.documents import Document
@@ -20,6 +21,8 @@ from papiq.core.domain.users import User
 
 
 def drawer_access(user: User, drawer: Drawer) -> ShareLevel | None:
+    if not user.active:
+        return None
     if drawer.owner_id == user.id:
         return ShareLevel.READ_WRITE
     return drawer.shares.get(user.id)
@@ -29,6 +32,8 @@ def document_access(user: User, document: Document, drawer: Drawer) -> ShareLeve
     """Access of `user` to `document`, which lies in `drawer`."""
     if document.drawer_id != drawer.id:
         raise ValueError(f"document {document.id} is not in drawer {drawer.id}")
+    if not user.active:
+        return None
     if document.owner_id == user.id:
         return ShareLevel.READ_WRITE
     if document.lane is not Lane.GREEN:
@@ -51,24 +56,24 @@ def can_file_into(user: User, drawer: Drawer) -> bool:
 
 
 def can_move_document(user: User, document: Document, target: Drawer) -> bool:
-    if user.is_admin:
+    if user.is_active_admin:
         return True
     return is_document_owner(user, document) and can_file_into(user, target)
 
 
 def can_manage_drawer(user: User, drawer: Drawer) -> bool:
     """Rename and share a drawer."""
-    return drawer.owner_id == user.id
+    return user.active and drawer.owner_id == user.id
 
 
 def is_document_owner(user: User, document: Document) -> bool:
     """Delete, retry and reprocess a document."""
-    return document.owner_id == user.id
+    return user.active and document.owner_id == user.id
 
 
 def can_manage_master_data(user: User) -> bool:
-    return user.is_admin
+    return user.is_active_admin
 
 
 def can_manage_users(user: User) -> bool:
-    return user.is_admin
+    return user.is_active_admin

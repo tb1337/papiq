@@ -58,3 +58,23 @@ def test_exceptions_are_rendered(capsys: pytest.CaptureFixture[str]) -> None:
 
     record = json.loads(capsys.readouterr().err.splitlines()[0])
     assert "RuntimeError: boom" in record["exception"]
+
+
+def test_the_access_log_hides_the_oidc_callback_query(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging(settings(log_format="json"))
+    access = logging.getLogger("uvicorn.access")
+    access.info(
+        '%s - "%s %s HTTP/%s" %d',
+        "192.0.2.1:5000",
+        "GET",
+        "/api/v1/auth/oidc/callback?code=secret-code&state=secret-state",
+        "1.1",
+        303,
+    )
+    access.info(
+        '%s - "%s %s HTTP/%s" %d', "192.0.2.1:5000", "GET", "/api/v1/documents?x=1", "1.1", 200
+    )
+    output = capsys.readouterr().err
+    assert "secret" not in output
+    assert "/api/v1/auth/oidc/callback" in output
+    assert "/api/v1/documents?x=1" in output

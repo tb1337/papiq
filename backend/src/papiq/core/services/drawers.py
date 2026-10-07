@@ -1,5 +1,5 @@
 from papiq.core.domain.drawers import Drawer, ShareLevel
-from papiq.core.domain.errors import ConflictError, PermissionDeniedError
+from papiq.core.domain.errors import ConflictError, NotFoundError, PermissionDeniedError
 from papiq.core.domain.ids import DrawerId, UserId
 from papiq.core.domain.permissions import can_manage_drawer
 from papiq.core.domain.users import User
@@ -18,6 +18,22 @@ class DrawerService:
         async with self._uow() as uow:
             await load_actor(uow, actor)
             return await uow.drawers.list_accessible(actor)
+
+    async def get(self, actor: UserId, id: DrawerId) -> Drawer:
+        """A drawer the user owns or that is shared with them; NotFoundError otherwise."""
+        async with self._uow() as uow:
+            return await visible_drawer(uow, await load_actor(uow, actor), id)
+
+    async def delete(self, actor: UserId, id: DrawerId) -> None:
+        """Owner only; not the default drawer, and only while it holds no documents."""
+        async with self._uow() as uow:
+            drawer = await _managed_drawer(uow, await load_actor(uow, actor), id)
+            if drawer.is_default:
+                raise ConflictError("the default drawer cannot be deleted")
+            if await uow.documents.exists(drawer=id):
+                raise ConflictError(f"drawer '{drawer.name}' is not empty")
+            await uow.drawers.remove(id)
+            await uow.commit()
 
     async def create(self, actor: UserId, name: str) -> Drawer:
         async with self._uow() as uow:
@@ -40,7 +56,10 @@ class DrawerService:
     async def share(self, actor: UserId, id: DrawerId, user: UserId, level: ShareLevel) -> Drawer:
         async with self._uow() as uow:
             drawer = await _managed_drawer(uow, await load_actor(uow, actor), id)
-            await uow.users.get(user)
+            recipient = await uow.users.find(user)
+            if recipient is None or not recipient.active:
+                # As in the user list: deactivated users are not there for others.
+                raise NotFoundError("user", user)
             drawer.share(user, level)
             await uow.drawers.update(drawer)
             await uow.commit()

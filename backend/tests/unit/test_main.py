@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from papiq.composition.__main__ import main
+from tests.builders import PASSWORD, SECRET_KEY, TRUSTED_PROXY
 
 
 def test_valid_configuration_exits_zero_and_masks_secrets(
@@ -97,6 +98,8 @@ def test_the_worker_stops_cleanly_on_sigterm(tmp_path: Path) -> None:
         "PAPIQ_DB_SQLITE_PATH": str(tmp_path / "papiq.db"),
         "PAPIQ_STORAGE_PATH": str(tmp_path / "objects"),
         "PAPIQ_LOG_LEVEL": "INFO",
+        "PAPIQ_SECRET_KEY": SECRET_KEY,
+        "PAPIQ_FORWARDED_ALLOW_IPS": TRUSTED_PROXY,
     }
     command = [sys.executable, "-m", "papiq.composition"]
     subprocess.run([*command, "migrate"], env=environment, check=True, capture_output=True)
@@ -125,14 +128,21 @@ def free_port() -> int:
 
 
 def test_the_api_serves_health_and_stops_on_sigterm(tmp_path: Path) -> None:
-    """In a process of its own: start on SQLite and the filesystem, ask /health, SIGTERM."""
+    """In a process of its own: start on SQLite and the filesystem, ask /health, SIGTERM. The
+    first admin is created from the configuration; the password never shows in the log."""
     port = free_port()
+    password_file = tmp_path / "admin-password"
+    password_file.write_text(PASSWORD + "\n")
     environment = {key: value for key, value in os.environ.items() if not key.startswith("PAPIQ_")}
     environment |= {
         "PAPIQ_DB_SQLITE_PATH": str(tmp_path / "papiq.db"),
         "PAPIQ_STORAGE_PATH": str(tmp_path / "objects"),
         "PAPIQ_API_HOST": "127.0.0.1",
         "PAPIQ_API_PORT": str(port),
+        "PAPIQ_SECRET_KEY": SECRET_KEY,
+        "PAPIQ_FORWARDED_ALLOW_IPS": TRUSTED_PROXY,
+        "PAPIQ_ADMIN_USERNAME": "admin",
+        "PAPIQ_ADMIN_PASSWORD_FILE": str(password_file),
     }
     command = [sys.executable, "-m", "papiq.composition"]
     subprocess.run([*command, "migrate"], env=environment, check=True, capture_output=True)
@@ -150,7 +160,19 @@ def test_the_api_serves_health_and_stops_on_sigterm(tmp_path: Path) -> None:
                     health = json.load(answer)
             except OSError:
                 time.sleep(0.1)
+        login = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/v1/auth/login",
+            data=json.dumps({"username": "admin", "password": PASSWORD}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with opener.open(login, timeout=5) as answer:
+            signed_in = json.load(answer)
+            cookie = answer.headers["Set-Cookie"]
         process.send_signal(signal.SIGTERM)
         output = process.stderr.read()
         assert process.wait(timeout=30) == 0, output
     assert health == {"status": "ok", "checks": {"database": "ok", "object_store": "ok"}}
+    assert signed_in["user"]["role"] == "admin"
+    assert cookie.startswith("__Host-papiq_session=") and "Secure" in cookie
+    assert "first admin created" in output
+    assert PASSWORD not in output

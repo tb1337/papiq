@@ -1,3 +1,4 @@
+import os
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -8,11 +9,16 @@ import pytest
 from papiq.adapters.outbound.s3 import S3ObjectStore
 from papiq.composition.settings import Settings, load_settings
 from tests import probes
+from tests.builders import SECRET_KEY, TRUSTED_PROXY
 
 
 @pytest.fixture(scope="session")
 def settings() -> Settings:
-    """The configuration from the environment: in the devcontainer, the compose services."""
+    """The configuration from the environment: in the devcontainer, the compose services. The
+    secret key and the trusted proxies the API requires are not what these tests are about;
+    test values fill in."""
+    os.environ.setdefault("PAPIQ_SECRET_KEY", SECRET_KEY)
+    os.environ.setdefault("PAPIQ_FORWARDED_ALLOW_IPS", TRUSTED_PROXY)
     return load_settings()
 
 

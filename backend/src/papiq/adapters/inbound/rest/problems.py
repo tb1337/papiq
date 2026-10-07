@@ -4,6 +4,7 @@ Domain errors map to HTTP statuses here; every endpoint documents the problems i
 """
 
 import logging
+import math
 from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
@@ -16,11 +17,15 @@ from starlette.exceptions import HTTPException
 
 from papiq.adapters.inbound.rest.upload import MalformedUploadError, UploadTooLargeError
 from papiq.core.domain.errors import (
+    AuthenticationError,
     ConflictError,
     DuplicateDocumentError,
+    IdentityProviderError,
     InvalidTransitionError,
     NotFoundError,
     PermissionDeniedError,
+    SecondFactorRequiredError,
+    TooManyAttemptsError,
     UnsupportedMediaTypeError,
     ValidationError,
 )
@@ -40,20 +45,23 @@ class Problem(BaseModel):
     existing_document_id: UUID | None = Field(
         default=None, description="For a duplicate: the document that has the same file."
     )
-
-
-class AuthenticationRequiredError(Exception):
-    """No authenticated user."""
+    second_factor_required: bool | None = Field(
+        default=None,
+        description="Sign-in: the password was right; send it again with `code` or "
+        "`recovery_code`.",
+    )
 
 
 # status: (title, example detail)
 _PROBLEMS: dict[int, tuple[str, str]] = {
     400: ("Bad Request", "expected multipart/form-data with a boundary"),
     401: ("Unauthorized", "authentication is required"),
+    429: ("Too Many Requests", "too many failed attempts; try again later"),
+    502: ("Bad Gateway", "the identity provider cannot be reached"),
     403: ("Forbidden", "only the owner controls processing of this document"),
     404: ("Not Found", "document 01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b not found"),
     409: ("Conflict", "duplicate of document 01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b"),
-    413: ("Content Too Large", "the file is larger than 104857600 bytes"),
+    413: ("Content Too Large", "the request body is larger than 1048576 bytes"),
     415: ("Unsupported Media Type", "unsupported file type"),
     422: ("Unprocessable Content", "from_step: Input should be 'ocr', 'parse', ..."),
     500: ("Internal Server Error", "an unexpected error occurred"),
@@ -114,8 +122,13 @@ def install(app: FastAPI) -> None:
     async def domain_error(request: Request, error: Exception) -> JSONResponse:
         if isinstance(error, DuplicateDocumentError):
             return problem(409, str(error), existing_document_id=error.existing)
-        if isinstance(error, AuthenticationRequiredError):
+        if isinstance(error, SecondFactorRequiredError):
+            return problem(401, str(error), second_factor_required=True)
+        if isinstance(error, AuthenticationError):
             return problem(401, str(error), headers={"WWW-Authenticate": "Bearer"})
+        if isinstance(error, TooManyAttemptsError):
+            seconds = max(1, math.ceil(error.retry_after.total_seconds()))
+            return problem(429, str(error), headers={"Retry-After": str(seconds)})
         return problem(status_of(error), str(error))
 
     async def validation_error(request: Request, error: Exception) -> JSONResponse:
@@ -144,7 +157,9 @@ def install(app: FastAPI) -> None:
 
 # Most specific first.
 _STATUSES: list[tuple[type[Exception], int]] = [
-    (AuthenticationRequiredError, 401),
+    (AuthenticationError, 401),
+    (TooManyAttemptsError, 429),
+    (IdentityProviderError, 502),
     (UnsupportedMediaTypeError, 415),
     (ValidationError, 422),
     (NotFoundError, 404),

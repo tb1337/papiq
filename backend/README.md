@@ -31,9 +31,11 @@ adapter must pass.
   lanes, domain events, jobs and the permission rules. IDs are UUIDv7, timestamps are UTC.
 - `core/ports`: repositories, processing log, outbox and job queue share one `UnitOfWork`, so
   a state change, its events and follow-up jobs are committed together (transactional outbox).
-  `EventBus` delivers committed events at least once. Further ports: `ObjectStore`, `Clock`,
-  `Ocr`, `DocumentParser`, `PreviewRenderer`; LLM, embeddings, search and identity are designed
-  in their milestones.
+  `EventBus` delivers committed events at least once. The identity repositories (credentials,
+  sessions, API tokens, external identities, failed sign-ins) are part of the unit of work too.
+  Further ports: `ObjectStore`, `Clock`, `Ocr`, `DocumentParser`, `PreviewRenderer`,
+  `PasswordHasher`, `SecretCipher`, `Totp`, `OidcProvider`; LLM, embeddings and search are designed in their
+  milestones.
 - `core/services`: use cases (users, drawers, master data, documents, pipeline, maintenance).
   Each runs in one unit of work and checks the caller's rights. Classification, attributes,
   rules and filing are placeholders until M5 and M7.
@@ -41,6 +43,63 @@ adapter must pass.
 `papiq.composition.container.build_memory_container()` wires all designed ports to their
 in-memory adapters (fakes for OCR, parser and previews); `build_services()` creates the use
 cases on top.
+
+## Identity
+
+`core/domain/identity.py` and `core/services/auth.py`; `User` itself only knows its role and
+whether it is active. A deactivated user has no rights and cannot authenticate.
+
+- Passwords: Argon2id (`adapters/outbound/crypto`, RFC 9106 low-memory profile: 3 passes,
+  64 MiB, 4 lanes), at most four hashes at a time, in a worker thread. Normalised to Unicode
+  NFKC; 12 to 256 characters, not the username, no rules on character classes. Hashes with
+  older parameters are replaced at the next sign-in.
+- Sign-in: unknown and deactivated users are checked against a dummy hash, so all failures take
+  the same time and read the same. Failures are counted per account (also for unknown names;
+  from the sixth on, the account backs off from 1 second, doubling up to 15 minutes; no hard
+  lock) and per source address (30 within 15 minutes block it for 15 minutes; IPv6 addresses
+  count per /64 network); the counts are
+  in the database. Every attempt is counted atomically before it is checked (an upsert),
+  blocking as if it fails, and taken back if it does not fail, so attempts that arrive
+  together cannot pass the throttle at once. A blocked account refuses every attempt (`429`), also a correct password, so
+  TOTP codes cannot be guessed. A blocked source refuses only wrong sign-ins (`429` instead of
+  `401`, not counted for the source again); a correct sign-in from there succeeds, so failures
+  from an address many users share (a proxy, NAT) lock nobody out. Success clears the
+  account's count.
+- TOTP (RFC 6238, pyotp), optional per user: set up with a new secret, which takes effect when a
+  code confirms it; then ten recovery codes (80 bits each) are shown once and stored as SHA-256
+  hashes. Codes of the previous and next 30-second step are accepted, each step only once. The
+  secret is encrypted with AES-256-GCM (`PAPIQ_SECRET_KEY`), bound to the user id. Turning TOTP
+  off needs a code or a recovery code, or an admin.
+- Sessions: random 256-bit tokens, stored as SHA-256. They end after `PAPIQ_SESSION_IDLE_TIMEOUT`
+  without use, after `PAPIQ_SESSION_MAX_AGE`, at sign-out, at deactivation and when the password
+  changes or is reset (the caller's own session is renewed). Every sign-in starts a new session.
+  Last use is written at most once a minute. The CSRF token of a session is derived from its
+  token (HMAC), so nothing more is stored.
+- API tokens: `papiq_` plus 256 random bits, stored as SHA-256; scope `read` or `read_write`,
+  a name, optional expiry, last use. Shown once. They survive a password change unless the
+  caller (or the admin resetting it) asks to revoke them, and are refused while the account is
+  deactivated.
+- Accounts: admins create users (optionally with a password), change roles, reset passwords,
+  deactivate, turn TOTP off and remove links to identity providers. Deleting a user needs that
+  they own no documents and their drawers are empty; it removes their drawers, the shares to
+  them and their sign-in data. The last active admin cannot be demoted, deactivated or deleted.
+- The first admin: `PAPIQ_ADMIN_USERNAME` and `PAPIQ_ADMIN_PASSWORD[_FILE]` create an admin at
+  API start while there is no admin at all. Afterwards they are ignored; they never change an
+  existing account. A name taken by another user stops the start.
+- OpenID Connect (optional, one provider; `core/services/oidc.py`, `adapters/outbound/oidc`):
+  Authorization Code Flow with PKCE (S256) through Authlib over httpx2. State, nonce, verifier
+  and the target path are sealed (AES-GCM, `PAPIQ_SECRET_KEY`) into a value for a short-lived
+  cookie, which binds the flow to the browser that began it; it expires after ten minutes. The
+  ID token is checked with joserfc: signature with an asymmetric algorithm the provider
+  announces, issuer, audience (`azp` with several), expiry and issue time (one minute of
+  leeway), nonce. Endpoints and keys come from the discovery document, whose issuer must equal
+  `PAPIQ_OIDC_ISSUER`; keys are fetched again once for an unknown key id. Accounts are linked by
+  issuer and subject, never by e-mail; a signed-in user links their account through the same
+  flow. Unknown accounts are refused unless `PAPIQ_OIDC_AUTO_CREATE` creates a user named by
+  `PAPIQ_OIDC_USERNAME_CLAIM` (a taken name is refused). No local TOTP is asked for: the
+  provider handles that. Unlinking needs a local password. The redirect after the callback goes
+  only to a path on this site.
+- The cleanup job also removes ended sessions and failure counts past their window.
 
 ## Persistence
 
@@ -120,6 +179,12 @@ Receive → OCR → parse run as jobs (`pipeline.step`); the steps after parsing
   `uv run docling-tools models download layout tableformer -o <dir>`.
 - Previews: PDFium (pypdfium2) renders, Pillow encodes WebP. PDFium is not thread-safe; all
   its use in a process shares one lock.
+- Deleting a document queues `documents.remove_files` in the same transaction: the worker
+  removes its derivatives and its original, unless a document of any owner still has the same
+  file (failures are repeated up to five times, from one minute, doubling). The removal and an
+  upload of the same file lock the original's key (`UnitOfWork.lock`: a Postgres advisory lock,
+  on SQLite the write lock); under that lock the upload stores the original again if it is
+  gone, so no document is left without its original.
 - Known gap: an original is stored before its document is created; if creating fails (e.g.
   the drawer's rights changed meanwhile), the object stays without a document. Removing such
   objects is left to a later cleanup of the object store.
@@ -130,10 +195,40 @@ Receive → OCR → parse run as jobs (`pipeline.step`); the steps after parsing
 `adapters/inbound/rest` with Uvicorn on `PAPIQ_API_HOST`:`PAPIQ_API_PORT`. All routes are below
 `/api/v1`; the OpenAPI document is `/api/v1/openapi.json`, the interactive docs `/api/v1/docs`.
 
+Authentication: a session cookie from `POST /auth/login` or the OIDC callback, or a personal
+API token as `Authorization: Bearer papiq_…` (a Bearer header wins over a cookie). Every route
+depends on it except the five public ones (sign-in, OIDC start, info and callback, health); a
+test calls every registered route without credentials and expects `401`. Requests that change
+something need, with a session, the header `X-CSRF-Token` (from the sign-in answer or
+`GET /auth/me`) and, with a token, the scope `read_write`; otherwise `403`. Changing sign-in
+data needs a session, so a leaked API token cannot take over an account: the own password,
+TOTP, tokens, sessions and links (`/auth/*`), and the admin endpoints that create users with a
+password, reset passwords, turn TOTP off and remove links. Admins cannot reset their own
+password or TOTP there; that goes through `/auth/*` with the current password or a code. Event streams check every 30
+seconds that their session or token still holds and end otherwise.
+
+The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax`, `Path=/`, for
+`PAPIQ_SESSION_MAX_AGE`; with `PAPIQ_COOKIE_SECURE=false` it is `papiq_session` without
+`Secure`. Sign-in accepts JSON only, so a form on another site cannot sign anyone in.
+
 | Endpoint | Purpose |
 | --- | --- |
+| `POST /auth/login` | Username, password, optional `code` or `recovery_code`; sets the cookie, returns the CSRF token |
+| `POST /auth/logout`, `GET /auth/me` | Sign out; who is calling and how |
+| `POST /auth/password` | Change the own password: other sessions end, `revoke_tokens` optional |
+| `DELETE /auth/sessions` | End all other sessions |
+| `POST /auth/totp`, `/totp/confirm`, `/totp/disable`, `/totp/recovery-codes` | TOTP |
+| `GET/POST /auth/tokens`, `DELETE /auth/tokens/{id}` | Own API tokens |
+| `GET /auth/oidc`, `/auth/oidc/login`, `/auth/oidc/callback`; `POST/DELETE /auth/oidc/link` | OpenID Connect |
+| `GET /users`, `GET/PATCH/DELETE /users/{id}` | Accounts: list (others see active users' names), role and state, delete (admins) |
+| `POST /users`, `POST /users/{id}/password`, `DELETE /users/{id}/totp`, `DELETE /users/{id}/oidc` | Create with password, reset password, turn TOTP off, remove links (admins, session only, not the own account) |
+| `/contacts`, `/document-types`, `/tags`, `/attributes` (`GET`, `POST`, `GET/PATCH/DELETE /{id}`) | Master data: read by all, changed by admins, deleted only when unused. Attributes: name, choices and scope change, the data type does not; removing a used choice or narrowing the scope past documents with values is `409` |
+| `GET/POST /drawers`, `GET/PATCH/DELETE /drawers/{id}`, `PUT/DELETE /drawers/{id}/shares/{user_id}` | Drawers and shares (owner) |
+| `GET /documents` | Readable documents, newest first; filters `contact_id`, `document_type_id`, `tag_id`, `drawer_id`, `lane`; `limit`, `cursor` |
 | `POST /documents` | Upload (multipart: `file`, optional `drawer_id`); `202` with `id`, `status_url` |
-| `GET /documents/{id}` | Status: lane, processing state, current step, run, outcomes |
+| `GET/PATCH/DELETE /documents/{id}` | Metadata and state with the caller's access; change (write access); delete (owner) |
+| `POST /documents/{id}/move` | Into another drawer (owner, or an admin without read access) |
+| `GET /documents/{id}/original`, `/archive`, `/preview` | Files (read access) |
 | `GET /documents/{id}/log` | Processing log (owner) |
 | `POST /documents/{id}/retry` | Repeat the failed step (owner) |
 | `POST /documents/{id}/reprocess` | `{"from_step": "ocr"}`: process again from a step (owner) |
@@ -145,9 +240,21 @@ Receive → OCR → parse run as jobs (`pipeline.step`); the steps after parsing
   content (PDF, JPEG, PNG, TIFF; otherwise `415`). A file the owner already has: `409` with
   `existing_document_id`.
 - Errors are problem details (RFC 9457, `application/problem+json`) and documented per endpoint.
-- Authentication comes with M4. Until then the dependency `current_user` answers every request
-  that needs a user with `401`; nothing in the running service can name a user. Tests replace
-  the dependency.
+- Documents and drawers the caller may not see are `404` with the same answer as missing ones;
+  lists, filters and pages only ever contain readable documents (the repository query follows
+  the permission rule, and the service checks every result again). Yellow, red and unfinished
+  documents are the owner's only.
+- Every answer below `/auth` carries `Cache-Control: no-store` (CSRF tokens, TOTP secrets,
+  recovery codes, API tokens), also errors and redirects. The OpenAPI document, the docs and
+  `/health` stay public.
+- Request bodies other than uploads are bounded by `PAPIQ_REQUEST_MAX_SIZE`, by
+  `Content-Length` before anything is read and by the bytes received otherwise (`413`);
+  FastAPI would otherwise read a JSON body of any size into memory.
+- Downloads go through a temporary file and carry `X-Content-Type-Options: nosniff`,
+  `Content-Security-Policy: sandbox` and `Cache-Control: private, no-store`.
+- `401` (with `WWW-Authenticate: Bearer`), `429` (with `Retry-After`) and `502` (identity
+  provider) are problems like all errors. The access log shows the OIDC callback without its
+  query (code and state).
 - Event streams: the API subscribes to the event bus as `api.sse` and polls the outbox every
   `PAPIQ_EVENTS_POLL_INTERVAL`. Each event goes to the streams of the users who may read the
   document at that moment (other users once it is green). No replay: after reconnecting,
@@ -169,7 +276,8 @@ Receive → OCR → parse run as jobs (`pipeline.step`); the steps after parsing
 - The cleanup (`maintenance.cleanup`, one job with a fixed dedup key; it goes before pipeline
   steps when due) runs every
   `PAPIQ_CLEANUP_INTERVAL` and removes finished jobs and delivered events older than
-  `PAPIQ_RETENTION`.
+  `PAPIQ_RETENTION`, ended sessions and stale counts of failed sign-ins. The same loop runs
+  the removal of a deleted document's files.
 - SIGTERM or SIGINT: no new jobs; running jobs may finish within
   `PAPIQ_WORKER_SHUTDOWN_TIMEOUT`, then they are cancelled and their jobs released to run again
   at once. Finally the database engine and the S3 client are closed.
@@ -186,7 +294,10 @@ contradictory configuration stops the start with a message naming the variables.
 
 Secrets (marked *secret*) can also be passed as `PAPIQ_<NAME>_FILE=/run/secrets/...` (Docker
 secrets): the file content, without one trailing newline, is the value. Setting both
-`PAPIQ_<NAME>` and `PAPIQ_<NAME>_FILE` is an error.
+`PAPIQ_<NAME>` and `PAPIQ_<NAME>_FILE` is an error. In production, pass at least
+`PAPIQ_SECRET_KEY_FILE` and `PAPIQ_ADMIN_PASSWORD_FILE` that way. The key and the admin
+password in `.devcontainer/dev.env` are public; with secure cookies the start refuses the
+development key.
 
 Variables for the variant that is not selected (for example `PAPIQ_DB_HOST` with
 `PAPIQ_DB_TYPE=sqlite`) are not required, but must still be well-formed if set.
@@ -211,6 +322,19 @@ Durations are seconds (`30`, `1.5`) or ISO 8601 (`PT1H`, `P7D`) and must be posi
 | `PAPIQ_S3_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY` | required for `s3` | *secret* |
 | `PAPIQ_API_HOST`, `PAPIQ_API_PORT` | `0.0.0.0`, `8000` | Where the API listens |
 | `PAPIQ_UPLOAD_MAX_SIZE` | `100MiB` | Largest upload; bytes or with unit (`50MB`, `1GiB`) |
+| `PAPIQ_REQUEST_MAX_SIZE` | `1MiB` | Largest body of every other request (JSON); larger ones get `413` |
+| `PAPIQ_FORWARDED_ALLOW_IPS` | unset; required with `PAPIQ_COOKIE_SECURE=true` | Reverse proxies whose `X-Forwarded-For` is trusted (comma-separated). Secure cookies mean a TLS-terminating proxy in front of Papiq: name its address, or the per-source throttle sees only the proxy. `*` only if the proxy sets the header itself, replacing what clients send |
+| `PAPIQ_SECRET_KEY` | required for `all`, `api` | *secret*; 32 bytes base64 (`openssl rand -base64 32`); encrypts TOTP secrets. Keep it: without it, TOTP secrets cannot be read |
+| `PAPIQ_ADMIN_USERNAME`, `PAPIQ_ADMIN_PASSWORD` | unset | The first admin, see Identity; password *secret*; set both or neither |
+| `PAPIQ_SESSION_IDLE_TIMEOUT` | `P1D` | A session ends when unused this long |
+| `PAPIQ_SESSION_MAX_AGE` | `P30D` | A session ends this long after sign-in; not shorter than the idle timeout |
+| `PAPIQ_COOKIE_SECURE` | `true` | `false` only for development over plain HTTP |
+| `PAPIQ_PUBLIC_URL` | unset | Where browsers reach Papiq (`https://papiq.example.org`); required with OIDC |
+| `PAPIQ_OIDC_ISSUER`, `_CLIENT_ID`, `_CLIENT_SECRET` | unset | OpenID Connect; set all three or none; the issuer is https and compared exactly; secret *secret*. Register `<PAPIQ_PUBLIC_URL>/api/v1/auth/oidc/callback` as redirect URI |
+| `PAPIQ_OIDC_SCOPES` | `openid profile email` | Must contain `openid` |
+| `PAPIQ_OIDC_DISPLAY_NAME` | `Single sign-on` | Name of the provider for the sign-in page |
+| `PAPIQ_OIDC_AUTO_CREATE` | `false` | Create a user at the first sign-in of an unknown provider account |
+| `PAPIQ_OIDC_USERNAME_CLAIM` | `preferred_username` | ID token claim that names such a user |
 | `PAPIQ_WORKER_CONCURRENCY` | `2` | Jobs at the same time |
 | `PAPIQ_WORKER_POLL_INTERVAL` | `1` | Seconds between looks for due jobs |
 | `PAPIQ_WORKER_SHUTDOWN_TIMEOUT` | `30` | Seconds running jobs get to finish on SIGTERM |

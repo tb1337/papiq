@@ -157,3 +157,19 @@ def test_moving_is_for_the_owner_and_admins(
     assert not can_move_document(owner, document, foreign)
     assert not can_move_document(writer, document, shared)
     assert can_move_document(builders.admin(), document, foreign)
+
+
+def test_deactivated_users_have_no_rights() -> None:
+    owner, admin = builders.user(), builders.admin()
+    drawer = builders.default_drawer(owner)
+    document = builders.processed(owner, drawer)
+    owner.active = admin.active = False
+    assert drawer_access(owner, drawer) is None
+    assert not can_read_document(owner, document, drawer)
+    assert not can_write_document(owner, document, drawer)
+    assert not can_file_into(owner, drawer)
+    assert not can_manage_drawer(owner, drawer)
+    assert not is_document_owner(owner, document)
+    assert not can_move_document(admin, document, drawer)
+    assert not can_manage_master_data(admin)
+    assert not can_manage_users(admin)

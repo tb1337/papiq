@@ -13,6 +13,8 @@ Common rules for every adapter:
 - `get` raises NotFoundError, `find` returns None.
 """
 
+from collections.abc import Collection
+from dataclasses import dataclass
 from typing import Protocol
 
 from papiq.core.domain.attributes import AttributeDefinition
@@ -28,7 +30,7 @@ from papiq.core.domain.ids import (
     UserId,
 )
 from papiq.core.domain.master_data import Contact, DocumentType, Tag
-from papiq.core.domain.pipeline import StepRun
+from papiq.core.domain.pipeline import Lane, StepRun
 from papiq.core.domain.users import User
 
 
@@ -51,10 +53,19 @@ class NamedRepository[K, E](Repository[K, E], Protocol):
         """Case-insensitive lookup."""
         ...
 
+    async def remove(self, id: K) -> None:
+        """Delete it; NotFoundError if missing. No document may refer to it."""
+        ...
+
 
 class UserRepository(Repository[UserId, User], Protocol):
     async def find_by_username(self, username: str) -> User | None:
         """Case-insensitive lookup."""
+        ...
+
+    async def remove(self, id: UserId) -> None:
+        """Delete the user; NotFoundError if missing. Documents, drawers, shares and identity
+        data that refer to the user must be removed first."""
         ...
 
 
@@ -65,6 +76,11 @@ class DrawerRepository(Repository[DrawerId, Drawer], Protocol):
 
     async def list_accessible(self, user: UserId) -> list[Drawer]:
         """Drawers the user owns or that are shared with them."""
+        ...
+
+    async def remove(self, id: DrawerId) -> None:
+        """Delete the drawer and its shares; NotFoundError if missing. It must hold no
+        documents."""
         ...
 
 
@@ -82,6 +98,18 @@ class AttributeDefinitionRepository(
 ): ...
 
 
+@dataclass(frozen=True, kw_only=True)
+class DocumentFilter:
+    """Criteria for listing documents; all given ones must match. `tags`: every one of them.
+    `lanes`: one of them, where None stands for documents still in processing."""
+
+    contact: ContactId | None = None
+    document_type: DocumentTypeId | None = None
+    tags: frozenset[TagId] = frozenset()
+    drawer: DrawerId | None = None
+    lanes: frozenset[Lane | None] | None = None
+
+
 class DocumentRepository(Repository[DocumentId, Document], Protocol):
     async def find_by_sha256(self, owner: UserId, sha256: Sha256) -> Document | None: ...
 
@@ -91,8 +119,47 @@ class DocumentRepository(Repository[DocumentId, Document], Protocol):
         """
         ...
 
+    async def attribute_in_use(
+        self,
+        attribute: AttributeId,
+        *,
+        values: Collection[str] | None = None,
+        outside_types: Collection[DocumentTypeId] | None = None,
+    ) -> bool:
+        """Whether any document has a value for `attribute`; with `values`, a text value that
+        is one of them; with `outside_types`, on a document whose type is none of them (a
+        document without type counts as outside)."""
+        ...
+
+    async def query_visible(
+        self,
+        user: UserId,
+        filter: DocumentFilter,
+        *,
+        before: DocumentId | None = None,
+        limit: int,
+    ) -> list[Document]:
+        """Documents the user may read (as `list_visible_to`) that match `filter`, newest first
+        (by id, descending), only those with an id below `before`, at most `limit`."""
+        ...
+
     async def remove(self, id: DocumentId) -> None:
         """Delete the document and its processing log; NotFoundError if it does not exist."""
+        ...
+
+    async def exists(
+        self,
+        *,
+        owner: UserId | None = None,
+        drawer: DrawerId | None = None,
+        contact: ContactId | None = None,
+        document_type: DocumentTypeId | None = None,
+        tag: TagId | None = None,
+        attribute: AttributeId | None = None,
+        sha256: Sha256 | None = None,
+    ) -> bool:
+        """Whether any document matches all given criteria, regardless of who may read it
+        (for checks before deleting what documents refer to). At least one is required."""
         ...
 
 

@@ -1,5 +1,6 @@
 """Errors raised by the core. Inbound adapters map them to their protocol (e.g. HTTP status)."""
 
+from datetime import timedelta
 from uuid import UUID
 
 
@@ -51,3 +52,24 @@ class UnprocessableDocumentError(DomainError):
 
 class UnsupportedMediaTypeError(ValidationError):
     """The file type is not supported."""
+
+
+class AuthenticationError(DomainError):
+    """The caller could not be authenticated: wrong or missing credentials, an expired or
+    revoked session or token, a deactivated account. The message never says which."""
+
+
+class SecondFactorRequiredError(AuthenticationError):
+    """The password was right; the account needs a TOTP or recovery code as well."""
+
+
+class TooManyAttemptsError(DomainError):
+    """Too many failed sign-ins; further attempts are refused for `retry_after`."""
+
+    def __init__(self, retry_after: timedelta) -> None:
+        super().__init__("too many failed attempts; try again later")
+        self.retry_after = retry_after
+
+
+class IdentityProviderError(DomainError):
+    """The identity provider could not be reached or answered with something unusable."""

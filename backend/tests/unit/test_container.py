@@ -5,10 +5,12 @@ from typing import Any
 
 import pytest
 
+from papiq.adapters.outbound.crypto import Argon2PasswordHasher, PyotpTotp
 from papiq.adapters.outbound.docling import DoclingParser
 from papiq.adapters.outbound.filesystem import FilesystemObjectStore
 from papiq.adapters.outbound.memory import ManualClock
 from papiq.adapters.outbound.ocrmypdf import OcrmypdfEngine
+from papiq.adapters.outbound.oidc import AuthlibOidcProvider
 from papiq.adapters.outbound.s3 import S3ObjectStore
 from papiq.adapters.outbound.sql import Database, SqlEventBus, SqlUnitOfWorkFactory, migrate
 from papiq.adapters.outbound.system import SystemClock
@@ -34,7 +36,7 @@ from tests.contracts.processing import SAMPLES
 
 
 def settings(**values: Any) -> Settings:
-    return Settings(**values)
+    return Settings(**{"secret_key": builders.SECRET_KEY, **values})
 
 
 async def _no_op() -> None:
@@ -166,7 +168,9 @@ def test_optional_ports_are_only_selected_when_configured(
     assert built.search_index is None
     assert built.language_model is None
     assert built.embeddings is None
-    assert built.identity is None  # until M4
+    assert isinstance(built.password_hasher, Argon2PasswordHasher)
+    assert isinstance(built.totp, PyotpTotp)
+    assert built.oidc is None
 
     with pytest.raises(AdapterNotAvailableError, match="search_index: adapter 'meilisearch'"):
         build_container(settings(meilisearch_url="http://meilisearch:7700"))
@@ -227,3 +231,16 @@ async def test_health_checks_reach_database_and_store(tmp_path: Path) -> None:
         await checks["object_store"]()
     finally:
         await database.dispose()
+
+
+def test_oidc_provider_with_its_redirect_uri() -> None:
+    configured = settings(
+        oidc_issuer="https://idp.example",
+        oidc_client_id="papiq",
+        oidc_client_secret="secret",
+        public_url="https://papiq.example/",
+    )
+    assert container.redirect_uri(configured) == "https://papiq.example/api/v1/auth/oidc/callback"
+    assert isinstance(container.oidc_provider(configured), AuthlibOidcProvider)
+    services = build_services(build_memory_container(), configured)
+    assert services.oidc is None  # the memory container has no provider

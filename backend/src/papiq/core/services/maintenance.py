@@ -1,4 +1,11 @@
-"""Housekeeping as a recurring job: remove finished jobs and delivered events.
+"""Housekeeping as jobs.
+
+- The recurring cleanup removes finished jobs, delivered events, ended sessions and stale
+  counts of failed sign-ins.
+- `documents.remove_files`, queued with the deletion of a document, removes its derivatives
+  and its original, unless another document (of any owner) has the same file. Deleting the
+  original and storing it for a new upload lock the original's key (`UnitOfWork.lock`), so an
+  upload of the same file at that moment never ends up without its original.
 
 The cleanup is a job in the job queue under a fixed dedup key, so with several workers only one
 of them runs it at a time. After each run it schedules the next one, in the same transaction
@@ -7,13 +14,28 @@ that completes the current run.
 
 import logging
 from datetime import timedelta
+from uuid import UUID
 
-from papiq.core.domain.errors import ConcurrencyError
-from papiq.core.ports import Clock, EventBus, UnitOfWorkFactory
+from papiq.core.domain.documents import Sha256
+from papiq.core.domain.errors import ConcurrencyError, ValidationError
+from papiq.core.domain.identity import ACCOUNT_THROTTLE, SOURCE_THROTTLE
+from papiq.core.domain.ids import DocumentId
+from papiq.core.domain.jobs import Job
+from papiq.core.ports import Clock, EventBus, ObjectStore, UnitOfWorkFactory
+from papiq.core.services.objects import derivative_keys, original_key
 
 log = logging.getLogger(__name__)
 
 CLEANUP_JOB = "maintenance.cleanup"
+REMOVE_FILES_JOB = "documents.remove_files"
+"""Payload: `document_id`, `sha256` of the deleted document."""
+
+# Attempts to remove the files of a deleted document, waiting a minute, doubling.
+_REMOVE_ATTEMPTS = 5
+_REMOVE_DELAY = timedelta(minutes=1)
+
+# Failed sign-ins older than this count no more (see the throttle windows).
+_FAILURE_RETENTION = max(ACCOUNT_THROTTLE.window, SOURCE_THROTTLE.window)
 
 
 class MaintenanceService:
@@ -25,15 +47,20 @@ class MaintenanceService:
         *,
         interval: timedelta,
         retention: timedelta,
+        session_idle: timedelta = timedelta(days=1),
         lease: timedelta = timedelta(minutes=5),
+        object_store: ObjectStore | None = None,
     ) -> None:
         """Every `interval`, remove finished jobs and delivered events older than
-        `retention`."""
+        `retention`, sessions that expired or were idle for `session_idle`, and counts of
+        failed sign-ins that no longer matter."""
         self._uow = uow
         self._clock = clock
         self._bus = event_bus
         self._interval = interval
         self._retention = retention
+        self._session_idle = session_idle
+        self._store = object_store
         self._lease = lease
 
     async def schedule(self) -> None:
@@ -43,15 +70,64 @@ class MaintenanceService:
             await uow.commit()
 
     async def run_next_job(self) -> bool:
-        """Run the cleanup if it is due. Returns False if it was not."""
+        """Run a due housekeeping job. Returns False if none was due."""
         async with self._uow() as uow:
             job = await uow.jobs.claim(
-                now=self._clock.now(), lease=self._lease, kinds=[CLEANUP_JOB]
+                now=self._clock.now(), lease=self._lease, kinds=[CLEANUP_JOB, REMOVE_FILES_JOB]
             )
             await uow.commit()
         if job is None:
             return False
+        if job.kind == REMOVE_FILES_JOB:
+            await self._remove_files(job)
+            return True
+        await self._cleanup(job)
+        return True
 
+    async def _remove_files(self, job: Job) -> None:
+        try:
+            document = DocumentId(UUID(str(job.payload["document_id"])))
+            sha256 = Sha256(str(job.payload["sha256"]))
+        except (KeyError, ValueError, ValidationError) as error:
+            async with self._uow() as uow:
+                await uow.jobs.fail(job, error=f"invalid payload: {error}")
+                await uow.commit()
+            return
+        assert self._store is not None, "removing files needs the object store"
+        original = original_key(sha256)
+        try:
+            for key in derivative_keys(document):
+                await self._store.delete(key)
+            async with self._uow() as uow:
+                await uow.lock(original)
+                shared = await uow.documents.exists(sha256=sha256)
+                if not shared:
+                    await self._store.delete(original)
+                await uow.jobs.complete(job)
+                await uow.commit()
+        except ConcurrencyError:
+            log.warning("lost the claim of a job", extra={"job_id": str(job.id)})
+            return
+        except Exception as error:
+            log.warning(
+                "removing files failed", extra={"document_id": str(document)}, exc_info=True
+            )
+            async with self._uow() as uow:
+                if job.tries >= _REMOVE_ATTEMPTS:
+                    await uow.jobs.fail(job, error=repr(error))
+                else:
+                    delay = _REMOVE_DELAY * (1 << (job.tries - 1))
+                    await uow.jobs.reschedule(
+                        job, run_at=self._clock.now() + delay, error=repr(error)
+                    )
+                await uow.commit()
+            return
+        log.info(
+            "files of a deleted document removed",
+            extra={"document_id": str(document), "original_removed": not shared},
+        )
+
+    async def _cleanup(self, job: Job) -> None:
         now = self._clock.now()
         before = now - self._retention
         next_run = now + self._interval
@@ -59,17 +135,26 @@ class MaintenanceService:
             events = await self._bus.purge(before=before)
             async with self._uow() as uow:
                 jobs = await uow.jobs.purge(before=before)
+                sessions = await uow.sessions.purge(now=now, idle_before=now - self._session_idle)
+                failures = await uow.login_failures.purge(before=now - _FAILURE_RETENTION)
                 await uow.jobs.complete(job)
                 await uow.jobs.enqueue(CLEANUP_JOB, {}, run_at=next_run, dedup_key=CLEANUP_JOB)
                 await uow.commit()
         except ConcurrencyError:
             log.warning("lost the claim of the cleanup job", extra={"job_id": str(job.id)})
-            return True
+            return
         except Exception as error:
             log.exception("cleanup failed")
             async with self._uow() as uow:
                 await uow.jobs.reschedule(job, run_at=next_run, error=repr(error))
                 await uow.commit()
-            return True
-        log.info("cleanup done", extra={"jobs_removed": jobs, "events_removed": events})
-        return True
+            return
+        log.info(
+            "cleanup done",
+            extra={
+                "jobs_removed": jobs,
+                "events_removed": events,
+                "sessions_removed": sessions,
+                "login_failures_removed": failures,
+            },
+        )
