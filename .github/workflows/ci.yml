@@ -8,116 +8,211 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels its running checks; every push to main is checked.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Caches: only pushes to main write them, one entry per content (lock file, Docling version);
+# pull requests read main's entries. The uv cache is off: downloading the wheels is as fast as
+# restoring them.
+env:
+  WRITE_CACHE: ${{ github.event_name == 'push' }}
+
 jobs:
-  backend:
+  # Which jobs the change needs. Jobs are skipped by `if`, not by `paths`, so that a skipped
+  # job counts as passed for required checks.
+  changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ steps.diff.outputs.backend }}
+      devcontainer: ${{ steps.diff.outputs.devcontainer }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          # Unknown base (new branch, force push): run everything.
+          if git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            files=$(git diff --name-only "$BASE" HEAD)
+          else
+            files=ALL
+          fi
+          echo "$files"
+          matches() { [ "$files" = ALL ] || echo "$files" | grep -qE "$1"; }
+          ci='^\.github/(workflows/ci\.yml|compose\.ci\.yml)$'
+          if matches "^backend/|^\.devcontainer/(compose\.yml|dev\.env|garage)|$ci"; then
+            echo "backend=true" >> "$GITHUB_OUTPUT"
+          fi
+          if matches "^(Dockerfile|\.dockerignore)$|^\.devcontainer/|^backend/(pyproject\.toml|uv\.lock)$|$ci"; then
+            echo "devcontainer=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Lint, types, import contracts and the unit tests (the SQL adapter on SQLite among them).
+  backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
       - run: uv sync --locked
+      # mypy's cache: most of its work are the dependencies, so one entry per lock file.
+      - id: mypy-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: backend/.mypy_cache
+          key: mypy-${{ hashFiles('backend/uv.lock', 'backend/pyproject.toml') }}
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
+      - if: env.WRITE_CACHE == 'true' && steps.mypy-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: backend/.mypy_cache
+          key: ${{ steps.mypy-cache.outputs.cache-primary-key }}
       - run: uv run lint-imports
-      - run: uv run pytest
+      - run: uv run pytest -m unit -n auto
 
-  # The same tests against both databases. Integration tests for services that are not
-  # available here (Garage, Meilisearch) skip themselves; `devcontainer` covers them.
-  backend-tests:
+  # The integration tests against the devcontainer's services (Postgres, Garage, Meilisearch),
+  # the OCR programs and the Docling models, on the runner. No test may skip.
+  integration:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        db: [sqlite, postgres]
+    timeout-minutes: 15
     env:
-      PAPIQ_DB_TYPE: ${{ matrix.db }}
-      PAPIQ_DB_HOST: localhost
-      PAPIQ_DB_NAME: papiq
-      PAPIQ_DB_USER: papiq
-      PAPIQ_DB_PASSWORD: papiq
-    services:
-      # Started in both runs; only the postgres run configures the application to use it.
-      postgres:
-        image: postgres:17.11-trixie
-        env:
-          POSTGRES_USER: papiq
-          POSTGRES_PASSWORD: papiq
-          POSTGRES_DB: papiq
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U papiq -d papiq"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
-    defaults:
-      run:
-        working-directory: backend
+      COMPOSE: docker compose -f .devcontainer/compose.yml -f .github/compose.ci.yml
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
-      - run: uv sync --locked
-      - run: uv run pytest -v -rs | tee pytest.log
-        shell: bash
-      - name: Postgres must have been tested
-        if: matrix.db == 'postgres'
+      - uses: actions/checkout@v6
+      - name: Configure from dev.env, with the services on localhost
         run: |
-          if grep -q "test_postgres_is_reachable SKIPPED" pytest.log; then
-            echo "Postgres was not reachable, the postgres run tested nothing" >&2
+          grep '^PAPIQ_' .devcontainer/dev.env \
+            | sed -E 's#^PAPIQ_DB_HOST=.*#PAPIQ_DB_HOST=localhost#; s#//(garage|meilisearch):#//localhost:#' \
+            >> "$GITHUB_ENV"
+          echo "PAPIQ_DOCLING_MODELS_PATH=$RUNNER_TEMP/docling-models" >> "$GITHUB_ENV"
+      - name: Start the services and install the OCR programs, in parallel
+        run: |
+          (
+            sudo apt-get update -q
+            sudo apt-get install --no-install-recommends -y -q \
+              ghostscript libgl1 pngquant qpdf tesseract-ocr tesseract-ocr-deu tesseract-ocr-eng unpaper
+          ) > "$RUNNER_TEMP/apt.log" 2>&1 &
+          apt=$!
+          $COMPOSE up -d --wait postgres meilisearch garage
+          $COMPOSE run --rm garage-init
+          wait $apt || { cat "$RUNNER_TEMP/apt.log"; exit 1; }
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+      - run: uv sync --locked
+        working-directory: backend
+      # The models belong to the Docling version: the cache key is the locked docling* packages.
+      - id: docling
+        run: |
+          key=$(awk '/^\[\[package\]\]/ { p = 0 } /^name = "docling/ { p = 1 } p && /^(name|version) = /' \
+            backend/uv.lock | sha256sum | cut -c1-16)
+          echo "key=docling-models-$key" >> "$GITHUB_OUTPUT"
+      - id: models
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/docling-models
+          key: ${{ steps.docling.outputs.key }}
+      - name: Download the Docling models
+        if: steps.models.outputs.cache-hit != 'true'
+        working-directory: backend
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}  # avoids Hugging Face's rate limit
+        run: uv run docling-tools models download layout tableformer -o "$PAPIQ_DOCLING_MODELS_PATH"
+      - if: env.WRITE_CACHE == 'true' && steps.models.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/docling-models
+          key: ${{ steps.docling.outputs.key }}
+      - name: Run the integration tests
+        working-directory: backend
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run pytest -m integration -n auto -v -rs | tee pytest.log
+          # pytest marks skipped tests as SKIPPED; test names may contain "skipped".
+          if grep -q SKIPPED pytest.log; then
+            echo "Integration tests were skipped: a service or program is missing" >&2
             exit 1
           fi
-          if grep -E "tests/integration/adapters/sql/.* SKIPPED" pytest.log; then
-            echo "SQL adapter tests were skipped in the postgres run" >&2
-            exit 1
-          fi
+      - name: Show service logs
+        if: failure()
+        run: $COMPOSE logs
 
-  # Starts the devcontainer services like "Reopen in Container" does, runs Garage's init a
-  # second time (must be repeatable) and runs the whole test suite inside the dev container.
+  # The dev image, only when its inputs change. First amd64: the devcontainer's services start
+  # like "Reopen in Container", Garage's init is repeatable, and the image's own OCR programs
+  # and Docling models work (`integration` tests the code). Then amd64 and arm64 (Apple
+  # Silicon, emulated), which also writes the layer cache: one scope, only from main.
   devcontainer:
+    needs: changes
+    if: needs.changes.outputs.devcontainer == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       COMPOSE: docker compose -f .devcontainer/compose.yml
     steps:
-      - uses: actions/checkout@v5
-      # The dev image with a layer cache: only a change of the Dockerfile or the lock file
-      # (Docling models) rebuilds it. The tag is the image name Compose uses for `dev`.
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - uses: actions/checkout@v6
+      - uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+          cache-image: false
+      - uses: docker/setup-buildx-action@v4
+        with:
+          cache-binary: false
+      # The tag is the image name Compose uses for `dev`.
+      - name: Build for amd64
+        uses: docker/build-push-action@v7
         with:
           context: .
           target: dev
           load: true
           tags: papiq-dev-dev:latest
-          cache-from: type=gha,scope=devcontainer
-          cache-to: type=gha,scope=devcontainer,mode=max
+          cache-from: type=gha,scope=dev-image
+          secrets: hf_token=${{ secrets.HF_TOKEN }}
       - name: Start the services
         # Uses the image built above; builds only the small garage-init image.
         run: $COMPOSE up -d dev
       - name: Run Garage init a second time
         run: $COMPOSE run --rm garage-init
-      - name: Run all checks and tests in the dev container
+      - name: Check the tools in the dev container
         # As root: the checkout belongs to the runner user, not to the container's `vscode` user.
         run: |
           $COMPOSE exec -T -u root dev bash -e -o pipefail -c '
             uv sync --locked --project backend
             cd backend
-            uv run ruff check .
-            uv run ruff format --check .
-            uv run mypy
-            uv run lint-imports
-            uv run pytest -v -rs | tee /tmp/pytest.log
+            uv run pytest -n auto -v -rs tests/integration/test_services_reachable.py \
+              tests/integration/adapters/ocrmypdf tests/integration/adapters/docling \
+              | tee /tmp/pytest.log
             # pytest marks skipped tests as SKIPPED; test names may contain "skipped".
             if grep -q SKIPPED /tmp/pytest.log; then
-              echo "Integration tests were skipped: a service is not reachable" >&2
+              echo "Tests were skipped: a service, program or the models are missing" >&2
               exit 1
             fi
           '
       - name: Show service logs
         if: failure()
         run: $COMPOSE logs
-      - name: Stop the services
-        if: always()
-        run: $COMPOSE down -v
+      - name: Build for amd64 and arm64
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: dev
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=dev-image
+          cache-to: ${{ env.WRITE_CACHE == 'true' && 'type=gha,scope=dev-image,mode=max' || '' }}
+          secrets: hf_token=${{ secrets.HF_TOKEN }}

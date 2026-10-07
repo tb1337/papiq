@@ -88,8 +88,9 @@ async def test_discovery_and_keys_are_fetched_once(
         {"aud": [CLIENT_ID, "another-client"]},  # several audiences need azp
         {"aud": [CLIENT_ID, "another-client"], "azp": "another-client"},
         {"azp": "another-client"},
-        {"exp": int(time.time()) - 120},
-        {"iat": int(time.time()) + 600},
+        # Fixed ids: test ids must not change between collections (pytest-xdist).
+        pytest.param({"exp": int(time.time()) - 120}, id="exp=past"),
+        pytest.param({"iat": int(time.time()) + 600}, id="iat=future"),
         {"exp": None},
         {"iat": None},
         {"nonce": None},
