@@ -1,3 +1,4 @@
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -267,3 +268,41 @@ def test_file_variant_exists_only_for_secrets(
 def test_unknown_variables_are_listed(monkeypatch: pytest.MonkeyPatch) -> None:
     set_env(monkeypatch, {"PAPIQ_DB_TYPO": "x", "PAPIQ_ROLE": "all", "UNRELATED": "y"})
     assert find_unknown_variables() == ["PAPIQ_DB_TYPO"]
+
+
+def test_worker_and_processing_defaults() -> None:
+    settings = load_settings()
+    assert settings.worker_concurrency == 2
+    assert settings.step_max_attempts == 3
+    assert settings.step_retry_delay == timedelta(seconds=30)
+    assert settings.ocr_languages == "deu+eng"
+    assert settings.ocr_timeout == settings.parse_timeout == timedelta(minutes=10)
+    assert settings.docling_models_path == Path("/opt/docling-models")
+    assert settings.retention == timedelta(days=7)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("30", timedelta(seconds=30)), ("1.5", timedelta(seconds=1.5)), ("PT1H", timedelta(hours=1))],
+)
+def test_durations_are_seconds_or_iso_8601(
+    monkeypatch: pytest.MonkeyPatch, value: str, expected: timedelta
+) -> None:
+    monkeypatch.setenv("PAPIQ_OCR_TIMEOUT", value)
+    assert load_settings().ocr_timeout == expected
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("PAPIQ_OCR_TIMEOUT", "0"),
+        ("PAPIQ_OCR_TIMEOUT", "ten"),
+        ("PAPIQ_WORKER_CONCURRENCY", "0"),
+        ("PAPIQ_OCR_LANGUAGES", "deu,eng"),
+        ("PAPIQ_OCR_LANGUAGES", "deu+"),
+    ],
+)
+def test_invalid_worker_settings_name_the_variable(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    assert name in error_message(monkeypatch, {name: value})

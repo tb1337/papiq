@@ -7,10 +7,18 @@ Setting both `PAPIQ_<NAME>` and `PAPIQ_<NAME>_FILE` is an error.
 import os
 import re
 from collections.abc import Mapping
+from datetime import timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args
 
-from pydantic import AnyHttpUrl, BeforeValidator, Field, SecretStr, ValidationError, model_validator
+from pydantic import (
+    AnyHttpUrl,
+    BeforeValidator,
+    Field,
+    SecretStr,
+    ValidationError,
+    model_validator,
+)
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -31,6 +39,20 @@ LogLevel = Annotated[
     Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     BeforeValidator(lambda value: value.upper() if isinstance(value, str) else value),
 ]
+
+
+_NUMBER = re.compile(r"\d+(\.\d+)?")
+
+
+def _seconds(value: Any) -> Any:
+    """Durations are seconds (`30`, `1.5`); ISO 8601 (`PT1H`, `P7D`) works too."""
+    if isinstance(value, str) and _NUMBER.fullmatch(value.strip()):
+        return float(value)
+    return value
+
+
+# A positive duration, configured in seconds.
+Seconds = Annotated[timedelta, BeforeValidator(_seconds), Field(gt=timedelta(0))]
 
 
 class Settings(BaseSettings):
@@ -66,6 +88,23 @@ class Settings(BaseSettings):
     s3_access_key_id: SecretStr | None = None
     s3_secret_access_key: SecretStr | None = None
     s3_path_style: bool = True
+
+    # Worker: background jobs, event delivery and cleanup.
+    worker_concurrency: Annotated[int, Field(ge=1, le=64)] = 2
+    worker_poll_interval: Seconds = timedelta(seconds=1)
+    worker_shutdown_timeout: Seconds = timedelta(seconds=30)
+    step_max_attempts: Annotated[int, Field(ge=1, le=20)] = 3
+    step_retry_delay: Seconds = timedelta(seconds=30)
+    events_poll_interval: Seconds = timedelta(seconds=1)
+    events_max_attempts: Annotated[int, Field(ge=1, le=100)] = 10
+    cleanup_interval: Seconds = timedelta(hours=1)
+    retention: Seconds = timedelta(days=7)
+
+    # Processing: OCR (OCRmyPDF, Tesseract language codes joined by `+`) and parsing (Docling).
+    ocr_languages: Annotated[str, Field(pattern=r"^[a-z_]+(\+[a-z_]+)*$")] = "deu+eng"
+    ocr_timeout: Seconds = timedelta(minutes=10)
+    parse_timeout: Seconds = timedelta(minutes=10)
+    docling_models_path: Path = Path("/opt/docling-models")
 
     # Search (required from M6 on).
     meilisearch_url: AnyHttpUrl | None = None

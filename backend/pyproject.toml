@@ -53,7 +53,8 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
     "unit: needs no external services (applied automatically to tests/unit)",
-    "integration: needs Postgres, Garage or Meilisearch (applied automatically to tests/integration)",
+    "integration: needs Postgres, Garage, Meilisearch, OCR programs or Docling models (applied automatically to tests/integration)",
+    "docling: slow, runs Docling; deselect with -m 'not docling'",
 ]
 
 # Hexagonal boundaries, checked with `lint-imports`.
@@ -89,6 +90,8 @@ name = "Core is plain Python: no framework or client libraries"
 type = "forbidden"
 source_modules = ["papiq.core"]
 forbidden_modules = [
+    "aioboto3",
+    "aiobotocore",
     "aiosqlite",
     "alembic",
     "asyncpg",
@@ -100,17 +103,20 @@ forbidden_modules = [
     "httpx",
     "meilisearch",
     "ocrmypdf",
+    "PIL",
     "pydantic",
     "pydantic_settings",
+    "pypdfium2",
     "sqlalchemy",
     "starlette",
     "structlog",
+    "torch",
     "uvicorn",
 ]
 
 # Libraries without type information.
 [[tool.mypy.overrides]]
-module = ["aioboto3.*", "aiobotocore.*", "botocore.*"]
+module = ["aioboto3.*", "aiobotocore.*", "botocore.*", "pypdfium2.*"]
 ignore_missing_imports = true
 
 # PyTorch (pulled in by Docling) in its CPU variant only, on Linux (devcontainer, image).
