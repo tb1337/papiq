@@ -212,7 +212,7 @@ passes is applied (the same way as a change by the owner):
 | Contact | Contacts are not sent; the proposed name is matched against all contacts (legal forms and punctuation ignored). Accepted if similar enough (`PAPIQ_CONFIDENCE_THRESHOLD`), named in the text and not ambiguous | an existing contact is suggested from `PAPIQ_CONTACT_SUGGEST_THRESHOLD` on, otherwise a new contact (only an admin can create it) |
 | Document type | One of the existing types | new type suggested |
 | Tags | Only existing tags are applied; proposed new tags are only logged | - |
-| Document date, date attributes | A valid date that appears in the text (`31.03.2026`, `31.3.26`, `2026-03-31`, `31. März 2026`, `March 31, 2026`, ...) | |
+| Document date, date attributes | A valid date that appears in the text (`31.03.2026`, `31.3.26`, `2026-03-31`, `31. März 2026`, `March 31, 2026`, ...); a date attribute must differ from the document date | the date is suggested |
 | Amounts, numbers | The number appears in the text (German or English notation); the currency is shown as code, sign or word | |
 | Text, link, choice, yes/no | The value, or the quoted passage, appears in the text | |
 | Attributes of the type | A missing value makes the document yellow (global attributes may be missing) | |

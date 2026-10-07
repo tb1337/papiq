@@ -10,7 +10,7 @@ An unreachable model raises, so the pipeline retries the step.
 
 import re
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -317,7 +317,13 @@ class ExtractAttributesStep(_ModelStep):
         except _UnfitAnswerError as error:
             return self._unfit(error, input)
         checks = [
-            _check_attribute(definition, proposals[key], facts, self._clock.now().date())
+            _check_attribute(
+                definition,
+                proposals[key],
+                facts,
+                self._clock.now().date(),
+                document.document_date,
+            )
             for key, definition in keys.items()
         ]
         values: dict[AttributeId, object] = {}
@@ -403,8 +409,14 @@ def _check_date(field: str, proposal: Proposal, facts: DocumentText, today: date
 
 
 def _check_attribute(
-    definition: AttributeDefinition, proposal: Proposal, facts: DocumentText, today: date
+    definition: AttributeDefinition,
+    proposal: Proposal,
+    facts: DocumentText,
+    today: date,
+    document_date: date | None,
 ) -> FieldCheck:
+    """A date equal to the document date is only suggested: models put the document date into
+    date attributes the text does not show (a due date "within 30 days")."""
     field = attribute_field(definition.id)
     common = _common(field, proposal)
     if proposal.value is None:
@@ -418,6 +430,15 @@ def _check_attribute(
         )
     if definition.data_type is AttributeType.DATE:
         check = _check_date(field, proposal, facts, today)
+        if check.ok and document_date is not None and check.value == document_date.isoformat():
+            check = replace(
+                check,
+                outcome=Outcome.UNCERTAIN,
+                confidence=0,
+                reason="the same date as the document date",
+                suggestion=check.value,
+                value=None,
+            )
         if check.ok:
             return check
         reason = check.reason or "invalid"
