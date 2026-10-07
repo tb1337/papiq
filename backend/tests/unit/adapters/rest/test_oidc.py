@@ -10,6 +10,7 @@ import pytest
 from papiq.adapters.inbound.rest import PREFIX
 from papiq.adapters.outbound.memory import FakeOidcProvider, ManualClock
 from papiq.composition.container import build_memory_container, build_services
+from papiq.core.domain.errors import AuthenticationError
 from papiq.core.domain.identity import ExternalIdentity
 from papiq.core.domain.ids import UserId
 from tests import builders
@@ -135,3 +136,25 @@ async def test_without_a_provider(api: Api) -> None:
         response = await session.client.post(f"{OIDC}/link", headers=session.headers)
         assert response.status_code == 404
     assert (await api.client.get(f"{PREFIX}/auth/me", headers=auth(user))).status_code == 200
+
+
+async def test_signing_in_ends_the_session_the_browser_had(
+    oidc_api: tuple[Api, FakeOidcProvider],
+) -> None:
+    """M4-06: a session the browser can no longer see must not stay valid."""
+    api, provider = oidc_api
+    alice, bob = await api.user("alice"), await api.user("bob")
+    await link(api, "sub-bob", bob.id)
+    async with api.sign_in(alice) as session:
+        old_cookie = session.client.cookies.get("__Host-papiq_session")
+        url = (await session.client.get(f"{OIDC}/login")).headers["location"]
+        code = provider.consent(url, "sub-bob")
+        back = await session.client.get(
+            f"{OIDC}/callback", params={"code": code, "state": state(url)}
+        )
+        assert back.status_code == 303
+        me = (await session.client.get(f"{PREFIX}/auth/me")).json()
+        assert me["user"]["username"] == "bob"
+    assert old_cookie is not None
+    with pytest.raises(AuthenticationError):
+        await api.services.auth.authenticate_session(old_cookie)

@@ -333,8 +333,8 @@ async def oidc_login(context: Context, next: Next = None) -> RedirectResponse:
     status_code=303,
     summary="Return from the identity provider",
     description=(
-        "The provider sends the browser here. Signs in (new session cookie) or completes a "
-        "link, then redirects to the path given at the start."
+        "The provider sends the browser here. Signs in (new session cookie; a session the "
+        "browser had ends) or completes a link, then redirects to the path given at the start."
     ),
     response_class=RedirectResponse,
     responses={
@@ -358,6 +358,7 @@ async def oidc_callback(
         state=state,
         code=code,
         caller=None if caller is None else caller.id,
+        current_session=None if caller is None or caller.session is None else caller.session.id,
     )
     response = RedirectResponse(outcome.redirect_to, status_code=303)
     clear_flow_cookie(response, context)

@@ -26,7 +26,7 @@ from uuid import UUID
 
 from papiq.core.domain.errors import AuthenticationError, ConflictError
 from papiq.core.domain.identity import ExternalIdentity, LoginMethod, safe_redirect
-from papiq.core.domain.ids import UserId
+from papiq.core.domain.ids import SessionId, UserId
 from papiq.core.domain.users import Role
 from papiq.core.ports import (
     Clock,
@@ -103,12 +103,21 @@ class OidcService:
         return await self._begin(_new_flow(safe_redirect(redirect_to), actor, self._clock.now()))
 
     async def complete(
-        self, sealed_flow: str | None, *, state: str, code: str, caller: UserId | None = None
+        self,
+        sealed_flow: str | None,
+        *,
+        state: str,
+        code: str,
+        caller: UserId | None = None,
+        current_session: SessionId | None = None,
     ) -> OidcOutcome:
         """Finish at the callback. `caller` is the user signed in on this browser, if any; it
-        must be the user who began a link. AuthenticationError if the flow is missing, expired
-        or does not match, the provider refuses, or no account may sign in; ConflictError if
-        the provider's account is linked to another user."""
+        must be the user who began a link. Signing in ends `current_session`, the session
+        the browser had, before the new one starts: the browser can no longer use or end it.
+
+        AuthenticationError if the flow is missing, expired or does not match, the provider
+        refuses, or no account may sign in; ConflictError if the provider's account is linked
+        to another user."""
         flow = self._open(sealed_flow)
         if not hmac.compare_digest(flow.state, state):
             raise AuthenticationError("the sign-in does not match the one started here")
@@ -154,6 +163,8 @@ class OidcService:
                 log.info("user created at first sign-in", extra={"user_id": str(user.id)})
             else:
                 raise AuthenticationError("no account here is linked to this sign-in")
+        if current_session is not None:
+            await self._auth.logout(current_session)
         signed_in = await self._auth.sign_in(user_id, LoginMethod.OIDC)
         return OidcOutcome(signed_in=signed_in, redirect_to=flow.redirect_to)
 
