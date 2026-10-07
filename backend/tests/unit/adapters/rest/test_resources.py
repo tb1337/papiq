@@ -256,3 +256,33 @@ async def test_secrets_do_not_come_back(api: Api) -> None:
     )
     assert response.status_code == 422
     assert "12345678901234" not in response.text
+
+
+async def test_attribute_definitions_change(api: Api) -> None:
+    admin, owner = await api.admin(), await api.user()
+    a = auth(admin)
+    kind = await post(
+        api, "/attributes", {"name": "Kind", "data_type": "choice", "choices": ["a", "b"]}, a
+    )
+    invoice = await post(api, "/document-types", {"name": "Invoice"}, a)
+    document = await green_document(api, auth(owner))
+    await api.client.patch(
+        f"{PREFIX}/documents/{document}",
+        json={"attributes": {kind["id"]: "a"}},
+        headers=auth(owner),
+    )
+    url = f"{PREFIX}/attributes/{kind['id']}"
+    changed = await api.client.patch(url, json={"name": "Sort", "choices": ["a", "c"]}, headers=a)
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["choices"] == ["a", "c"] and changed.json()["name"] == "Sort"
+    in_use = await api.client.patch(url, json={"choices": ["c"]}, headers=a)
+    assert in_use.status_code == 409
+    narrower = await api.client.patch(url, json={"document_type_ids": [invoice["id"]]}, headers=a)
+    assert narrower.status_code == 409  # the document has no type
+    untouched = await api.client.patch(url, json={"name": "Sort"}, headers=a)
+    assert untouched.json()["document_type_ids"] is None
+    bad_changes: list[dict[str, Any]] = [{"data_type": "text"}, {"choices": []}]
+    for bad in bad_changes:
+        assert (await api.client.patch(url, json=bad, headers=a)).status_code == 422
+    denied = await api.client.patch(url, json={"name": "X"}, headers=auth(owner))
+    assert denied.status_code == 403

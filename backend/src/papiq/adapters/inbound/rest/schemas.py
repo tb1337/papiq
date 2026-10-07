@@ -442,6 +442,26 @@ class AttributeCreate(BaseModel):
     )
 
 
+class AttributePatch(BaseModel):
+    """Fields left out stay. The data type cannot change."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Name | None = None
+    choices: list[Annotated[str, Field(min_length=1, max_length=200)]] | None = Field(
+        default=None,
+        max_length=200,
+        description="All choices; removing one that documents use is a conflict (409).",
+    )
+    document_type_ids: list[UUID] | None = Field(
+        default=None,
+        description=(
+            "null: global. Narrowing is a conflict (409) while documents outside the new scope "
+            "have values."
+        ),
+    )
+
+
 class AttributeOut(BaseModel):
     id: UUID
     name: str

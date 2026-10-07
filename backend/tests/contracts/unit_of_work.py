@@ -714,6 +714,38 @@ class UnitOfWorkContract:
             await uow.lock("originals/abc")
             await uow.commit()
 
+    async def test_attribute_values_in_use(self, uow_factory: UnitOfWorkFactory) -> None:
+        owner, drawer = await owner_with_drawer(uow_factory)
+        invoice = DocumentType.create(name="Invoice", now=NOW)
+        letter = DocumentType.create(name="Letter", now=NOW)
+        kind = AttributeDefinition.create(
+            name="Kind", data_type=AttributeType.CHOICE, now=NOW, choices=["a", "b", "c"]
+        )
+        typed, untyped = builders.document(owner, drawer), builders.document(owner, drawer)
+        definitions = {kind.id: kind}
+        typed.apply_changes(
+            DocumentChanges(document_type_id=invoice.id, attributes={kind.id: "a"}),
+            definitions,
+            NOW,
+        )
+        untyped.apply_changes(DocumentChanges(attributes={kind.id: "b"}), definitions, NOW)
+        async with uow_factory() as uow:
+            for item in (invoice, letter):
+                await uow.document_types.add(item)
+            await uow.attributes.add(kind)
+            await uow.documents.add(typed)
+            await uow.documents.add(untyped)
+            await uow.commit()
+        async with uow_factory() as uow:
+            in_use = uow.documents.attribute_in_use
+            assert await in_use(kind.id)
+            assert await in_use(kind.id, values=["a", "c"])
+            assert not await in_use(kind.id, values=["c"])
+            assert await in_use(kind.id, outside_types=[invoice.id])  # the untyped one
+            assert await in_use(kind.id, outside_types=[letter.id])
+            assert not await in_use(kind.id, values=["a"], outside_types=[invoice.id])
+            assert await in_use(kind.id, values=["b"], outside_types=[invoice.id, letter.id])
+
     async def test_master_data_is_removed(self, uow_factory: UnitOfWorkFactory) -> None:
         tag, contact = Tag.create(name="old", now=NOW), Contact.create(name="Gone", now=NOW)
         async with uow_factory() as uow:

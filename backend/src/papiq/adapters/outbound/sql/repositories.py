@@ -8,7 +8,7 @@ the new version; on SQLite, writers are serialized by the write lock.
 """
 
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from datetime import timedelta
 from decimal import Decimal
 from typing import Any, ClassVar
@@ -372,6 +372,31 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
 
     async def list_visible_to(self, user: UserId) -> list[Document]:
         return await self._load(_visible_to(user))
+
+    async def attribute_in_use(
+        self,
+        attribute: AttributeId,
+        *,
+        values: Collection[str] | None = None,
+        outside_types: Collection[DocumentTypeId] | None = None,
+    ) -> bool:
+        documents, values_table = t.documents, t.document_attributes
+        statement = (
+            select(values_table.c.document_id)
+            .join(documents, documents.c.id == values_table.c.document_id)
+            .where(values_table.c.attribute_id == attribute)
+        )
+        if values is not None:
+            statement = statement.where(values_table.c.value_text.in_(list(values)))
+        if outside_types is not None:
+            statement = statement.where(
+                or_(
+                    documents.c.document_type_id.is_(None),
+                    documents.c.document_type_id.not_in(list(outside_types)),
+                )
+            )
+        found = await self._tx.read(statement.limit(1))
+        return found.first() is not None
 
     async def query_visible(
         self,

@@ -13,6 +13,7 @@ Common rules for every adapter:
 - `get` raises NotFoundError, `find` returns None.
 """
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -116,6 +117,18 @@ class DocumentRepository(Repository[DocumentId, Document], Protocol):
         """Documents the user may read, by the rules of `papiq.core.domain.permissions`:
         own documents, and green documents in drawers the user owns or that are shared with them.
         """
+        ...
+
+    async def attribute_in_use(
+        self,
+        attribute: AttributeId,
+        *,
+        values: Collection[str] | None = None,
+        outside_types: Collection[DocumentTypeId] | None = None,
+    ) -> bool:
+        """Whether any document has a value for `attribute`; with `values`, a text value that
+        is one of them; with `outside_types`, on a document whose type is none of them (a
+        document without type counts as outside)."""
         ...
 
     async def query_visible(
