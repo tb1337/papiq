@@ -41,9 +41,11 @@ Errors are problem details (RFC 9457, `application/problem+json`).
 
 Authentication: a session cookie from `POST /auth/login` (web UI; changing requests also send
 the header `X-CSRF-Token`) or a personal API token as `Authorization: Bearer papiq_…`. Every
-endpoint except sign-in and health needs one of them (401 without). A `read` token may only
-read (403). Documents and drawers the caller may not see are "not found" (404), the same as
-ones that do not exist.
+endpoint needs one of them (401 without), except health and the sign-in endpoints: `POST
+/auth/login` and, below `/auth/oidc`, information, start and callback. A `read` token may only
+read (403). The own sign-in (password, sessions, TOTP, API tokens, provider links) and
+creating users or resetting their sign-in need a session; a token gets 403 there. Documents
+and drawers the caller may not see are "not found" (404), the same as ones that do not exist.
 """
 
 

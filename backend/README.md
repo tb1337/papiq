@@ -34,7 +34,7 @@ adapter must pass.
   `EventBus` delivers committed events at least once. The identity repositories (credentials,
   sessions, API tokens, external identities, failed sign-ins) are part of the unit of work too.
   Further ports: `ObjectStore`, `Clock`, `Ocr`, `DocumentParser`, `PreviewRenderer`,
-  `PasswordHasher`, `SecretCipher`, `Totp`; LLM, embeddings and search are designed in their
+  `PasswordHasher`, `SecretCipher`, `Totp`, `OidcProvider`; LLM, embeddings and search are designed in their
   milestones.
 - `core/services`: use cases (users, drawers, master data, documents, pipeline, maintenance).
   Each runs in one unit of work and checks the caller's rights. Classification, attributes,
