@@ -103,3 +103,7 @@ class SearchUnavailableError(SearchError):
 
 class SearchIndexError(SearchError):
     """The search index refused a request or a task failed (e.g. vectors of the wrong length)."""
+
+
+class PatternTimeoutError(DomainError):
+    """A regular expression of a rule took longer than its time limit."""

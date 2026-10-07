@@ -17,6 +17,8 @@ JobId = NewType("JobId", UUID)
 SessionId = NewType("SessionId", UUID)
 ApiTokenId = NewType("ApiTokenId", UUID)
 ExternalIdentityId = NewType("ExternalIdentityId", UUID)
+RuleId = NewType("RuleId", UUID)
+RuleApplicationId = NewType("RuleApplicationId", UUID)
 
 _TIMESTAMP_BITS = 48
 _RANDOM_BITS = 80
