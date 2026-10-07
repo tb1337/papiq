@@ -287,6 +287,33 @@ class ExternalIdentity:
         )
 
 
+@dataclass(frozen=True)
+class OidcIdentity:
+    """Who an identity provider says signed in: the account is `issuer` and `subject`; the
+    other claims are hints (e.g. the username for an account created on first sign-in)."""
+
+    issuer: str
+    subject: str
+    username: str | None = None
+    email: str | None = None
+    name: str | None = None
+
+
+def safe_redirect(target: str | None) -> str:
+    """`target` if it is a path on this site (`/inbox?x=1`), else `/`. Guards the redirect after
+    signing in through an identity provider against sending the browser elsewhere."""
+    if (
+        not target
+        or not target.startswith("/")
+        or target.startswith("//")
+        or "\\" in target
+        or any(ord(char) < 0x21 or ord(char) == 0x7F for char in target)
+        or len(target) > 2000
+    ):
+        return "/"
+    return target
+
+
 # --- guessing -----------------------------------------------------------------------------------
 
 _FAILURE_NAMESPACE = uuid.UUID("0199a6c4-5d1e-7b2a-9c3d-4e5f60718293")

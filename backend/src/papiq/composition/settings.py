@@ -108,6 +108,19 @@ class Settings(BaseSettings):
     session_max_age: Seconds = timedelta(days=30)
     # `false` only for development over plain HTTP: the session cookie loses `Secure`.
     cookie_secure: bool = True
+    # Where browsers reach Papiq (e.g. `https://papiq.example.org`); needed for OIDC.
+    public_url: AnyHttpUrl | None = None
+
+    # OpenID Connect (optional): one provider, Authorization Code Flow with PKCE.
+    oidc_issuer: str | None = None
+    oidc_client_id: str | None = None
+    oidc_client_secret: SecretStr | None = None
+    oidc_scopes: str = "openid profile email"
+    oidc_display_name: str = "Single sign-on"
+    # Create a local account at the first sign-in of an unknown provider account.
+    oidc_auto_create: bool = False
+    # The ID token claim that names a new account.
+    oidc_username_claim: str = "preferred_username"
 
     # Worker: background jobs, event delivery and cleanup.
     worker_concurrency: Annotated[int, Field(ge=1, le=64)] = 2
@@ -187,6 +200,7 @@ class Settings(BaseSettings):
             problems.append(
                 f"{_env('session_max_age')} must not be shorter than {_env('session_idle_timeout')}"
             )
+        problems += self._oidc_problems()
         for prefix in ("llm", "embedding"):
             url, model = f"{prefix}_base_url", f"{prefix}_model"
             if (getattr(self, url) is None) != (getattr(self, model) is None):
@@ -194,6 +208,27 @@ class Settings(BaseSettings):
         if problems:
             raise ValueError("\n".join(problems))
         return self
+
+    @property
+    def oidc_enabled(self) -> bool:
+        return self.oidc_issuer is not None
+
+    def _oidc_problems(self) -> list[str]:
+        names = ("oidc_issuer", "oidc_client_id", "oidc_client_secret")
+        given = [getattr(self, name) is not None for name in names]
+        if not any(given):
+            return []
+        if not all(given):
+            return [f"{', '.join(_env(name) for name in names)} must be set together"]
+        problems = []
+        assert self.oidc_issuer is not None
+        if not re.fullmatch(r"https://[^\s/?#]+(/[^\s?#]*)?", self.oidc_issuer):
+            problems.append(f"{_env('oidc_issuer')}: must be an https URL without query")
+        if "openid" not in self.oidc_scopes.split():
+            problems.append(f"{_env('oidc_scopes')}: must contain 'openid'")
+        if self.public_url is None:
+            problems.append(f"{_env('public_url')} is required with OIDC (for the redirect URI)")
+        return problems
 
     @classmethod
     def settings_customise_sources(

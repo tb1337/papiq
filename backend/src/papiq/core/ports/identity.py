@@ -16,6 +16,7 @@ from papiq.core.domain.identity import (
     Credential,
     ExternalIdentity,
     LoginFailures,
+    OidcIdentity,
     Session,
 )
 from papiq.core.domain.ids import ApiTokenId, ExternalIdentityId, SessionId, UserId
@@ -154,4 +155,30 @@ class Totp(Protocol):
 
     def provisioning_uri(self, secret: str, *, account: str, issuer: str) -> str:
         """`otpauth://` URI for authenticator apps (QR code)."""
+        ...
+
+
+# --- identity provider --------------------------------------------------------------------------
+
+
+class OidcProvider(Protocol):
+    """An OpenID Connect provider, Authorization Code Flow with PKCE (S256). First adapter:
+    Authlib with joserfc.
+
+    The adapter knows its client registration (id, secret, scopes, redirect URI). It checks the
+    ID token completely: signature against the provider's published keys (asymmetric algorithms
+    only), issuer, audience (and `azp` with several audiences), expiry, issue time and nonce.
+    """
+
+    @property
+    def issuer(self) -> str: ...
+
+    async def authorization_url(self, *, state: str, nonce: str, code_verifier: str) -> str:
+        """Where to send the browser to sign in."""
+        ...
+
+    async def authenticate(self, *, code: str, code_verifier: str, nonce: str) -> OidcIdentity:
+        """Exchange the code for tokens and check the ID token. AuthenticationError if the
+        provider refuses or the token is not valid; IdentityProviderError if the provider
+        cannot be reached or answers unusably."""
         ...

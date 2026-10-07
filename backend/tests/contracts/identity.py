@@ -1,11 +1,15 @@
 """Contract suites for identity: the repositories in the unit of work and the cryptography
 ports."""
 
+import base64
+import hashlib
+from collections.abc import Callable
 from datetime import timedelta
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from papiq.core.domain.errors import ConcurrencyError, ConflictError
+from papiq.core.domain.errors import AuthenticationError, ConcurrencyError, ConflictError
 from papiq.core.domain.identity import (
     ApiToken,
     Credential,
@@ -20,6 +24,7 @@ from papiq.core.domain.identity import (
 from papiq.core.domain.users import User
 from papiq.core.ports import (
     DecryptionError,
+    OidcProvider,
     PasswordHasher,
     SecretCipher,
     Totp,
@@ -366,3 +371,62 @@ class TotpContract:
         uri = totp.provisioning_uri(secret, account="alice", issuer="Papiq")
         assert uri.startswith("otpauth://totp/")
         assert secret in uri and "alice" in uri and "Papiq" in uri
+
+
+# --- identity provider --------------------------------------------------------------------------
+
+type Consent = Callable[[str, str, str | None], str]
+"""Plays the user at the provider: (authorization URL, subject, username) -> code."""
+
+
+def _query(url: str) -> dict[str, str]:
+    return {key: values[0] for key, values in parse_qs(urlsplit(url).query).items()}
+
+
+class OidcProviderContract:
+    async def test_the_authorization_url_carries_state_nonce_and_pkce(
+        self, oidc_provider: OidcProvider
+    ) -> None:
+        url = await oidc_provider.authorization_url(
+            state="s" * 43, nonce="n" * 43, code_verifier="v" * 64
+        )
+        query = _query(url)
+        assert query["state"] == "s" * 43 and query["nonce"] == "n" * 43
+        assert query["response_type"] == "code"
+        assert "openid" in query["scope"].split()
+        assert query["code_challenge_method"] == "S256"
+        digest = hashlib.sha256(b"v" * 64).digest()
+        assert query["code_challenge"] == base64.urlsafe_b64encode(digest).decode().rstrip("=")
+        assert "v" * 64 not in url
+
+    async def test_a_code_gives_the_identity_once(
+        self, oidc_provider: OidcProvider, oidc_consent: Consent
+    ) -> None:
+        url = await oidc_provider.authorization_url(
+            state="s" * 43, nonce="n" * 43, code_verifier="v" * 64
+        )
+        code = oidc_consent(url, "subject-1", "alice")
+        identity = await oidc_provider.authenticate(
+            code=code, code_verifier="v" * 64, nonce="n" * 43
+        )
+        assert identity.issuer == oidc_provider.issuer
+        assert identity.subject == "subject-1"
+        assert identity.username == "alice"
+        with pytest.raises(AuthenticationError):
+            await oidc_provider.authenticate(code=code, code_verifier="v" * 64, nonce="n" * 43)
+
+    async def test_the_verifier_and_the_nonce_must_match(
+        self, oidc_provider: OidcProvider, oidc_consent: Consent
+    ) -> None:
+        url = await oidc_provider.authorization_url(
+            state="s" * 43, nonce="n" * 43, code_verifier="v" * 64
+        )
+        code = oidc_consent(url, "subject-1", None)
+        with pytest.raises(AuthenticationError):
+            await oidc_provider.authenticate(code=code, code_verifier="w" * 64, nonce="n" * 43)
+        url = await oidc_provider.authorization_url(
+            state="s" * 43, nonce="n" * 43, code_verifier="v" * 64
+        )
+        code = oidc_consent(url, "subject-1", None)
+        with pytest.raises(AuthenticationError):
+            await oidc_provider.authenticate(code=code, code_verifier="v" * 64, nonce="m" * 43)

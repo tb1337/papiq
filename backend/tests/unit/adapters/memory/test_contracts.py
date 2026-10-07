@@ -5,6 +5,7 @@ import pytest
 from papiq.adapters.outbound.memory import (
     FakeCipher,
     FakeOcr,
+    FakeOidcProvider,
     FakeParser,
     FakePasswordHasher,
     FakePreviewRenderer,
@@ -20,7 +21,9 @@ from papiq.core.ports.event_bus import DEFAULT_DELIVERY_RETRY
 from tests.contracts.clock import ClockContract
 from tests.contracts.event_bus import EventBusContract, EventBusFactory
 from tests.contracts.identity import (
+    Consent,
     IdentityRepositoriesContract,
+    OidcProviderContract,
     PasswordHasherContract,
     SecretCipherContract,
     TotpContract,
@@ -136,4 +139,23 @@ class TestFakeCipher(SecretCipherContract):
 
 
 class TestFakeTotp(TotpContract):
+    pass
+
+
+@pytest.fixture
+def fake_idp() -> FakeOidcProvider:
+    return FakeOidcProvider()
+
+
+@pytest.fixture
+def oidc_provider(fake_idp: FakeOidcProvider) -> FakeOidcProvider:
+    return fake_idp
+
+
+@pytest.fixture
+def oidc_consent(fake_idp: FakeOidcProvider) -> Consent:
+    return lambda url, subject, username: fake_idp.consent(url, subject, username=username)
+
+
+class TestFakeOidcProvider(OidcProviderContract):
     pass

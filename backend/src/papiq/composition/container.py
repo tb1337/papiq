@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 
 from papiq import __version__
+from papiq.adapters.inbound.rest import PREFIX
 from papiq.adapters.outbound.crypto import (
     AesGcmCipher,
     Argon2PasswordHasher,
@@ -31,6 +32,7 @@ from papiq.adapters.outbound.memory import (
     MemoryUnitOfWorkFactory,
 )
 from papiq.adapters.outbound.ocrmypdf import OcrmypdfEngine
+from papiq.adapters.outbound.oidc import AuthlibOidcProvider
 from papiq.adapters.outbound.pdfium import PdfiumPreviewRenderer
 from papiq.adapters.outbound.s3 import S3ObjectStore
 from papiq.adapters.outbound.sql import SqlEventBus, SqlUnitOfWorkFactory
@@ -49,6 +51,7 @@ from papiq.core.ports import (
     LanguageModel,
     ObjectStore,
     Ocr,
+    OidcProvider,
     PasswordHasher,
     PreviewRenderer,
     SearchIndex,
@@ -61,6 +64,7 @@ from papiq.core.services.documents import DocumentService
 from papiq.core.services.drawers import DrawerService
 from papiq.core.services.maintenance import MaintenanceService
 from papiq.core.services.master_data import MasterDataService
+from papiq.core.services.oidc import OidcService
 from papiq.core.services.pipeline import PipelineService, PlaceholderStep, RetryPolicy, StepExecutor
 from papiq.core.services.steps import OcrStep, ParseStep
 from papiq.core.services.users import UserService
@@ -161,6 +165,28 @@ class MissingKeyCipher:
         raise DecryptionError("PAPIQ_SECRET_KEY is not set")
 
 
+def redirect_uri(settings: Settings) -> str:
+    """Where the provider sends the browser back: the API's OIDC callback."""
+    assert settings.public_url is not None
+    return str(settings.public_url).rstrip("/") + PREFIX + "/auth/oidc/callback"
+
+
+def oidc_provider(settings: Settings) -> OidcProvider:
+    # Settings guarantee these with OIDC.
+    assert settings.oidc_issuer and settings.oidc_client_id and settings.oidc_client_secret
+    return AuthlibOidcProvider(
+        issuer=settings.oidc_issuer,
+        client_id=settings.oidc_client_id,
+        client_secret=settings.oidc_client_secret.get_secret_value(),
+        redirect_uri=redirect_uri(settings),
+        scopes=settings.oidc_scopes.split(),
+        username_claim=settings.oidc_username_claim,
+    )
+
+
+OIDC_PROVIDERS: dict[str, Factory[OidcProvider]] = {"authlib": oidc_provider}
+
+
 def secret_cipher(settings: Settings) -> SecretCipher:
     if settings.secret_key is None:
         return MissingKeyCipher()
@@ -186,6 +212,7 @@ class Container:
     password_hasher: PasswordHasher
     cipher: SecretCipher
     totp: Totp
+    oidc: OidcProvider | None
     search_index: SearchIndex | None
     language_model: LanguageModel | None
     embeddings: Embeddings | None
@@ -221,6 +248,9 @@ def build_container(settings: Settings) -> Container:
         password_hasher=Argon2PasswordHasher(),
         cipher=secret_cipher(settings),
         totp=PyotpTotp(),
+        oidc=(
+            _select("oidc", "authlib", OIDC_PROVIDERS, settings) if settings.oidc_enabled else None
+        ),
         search_index=(
             _select("search_index", "meilisearch", SEARCH_INDEXES, settings)
             if settings.meilisearch_url is not None
@@ -254,6 +284,7 @@ def build_memory_container(clock: Clock | None = None) -> Container:
         password_hasher=FakePasswordHasher(),
         cipher=FakeCipher(),
         totp=FakeTotp(),
+        oidc=None,
         search_index=None,
         language_model=None,
         embeddings=None,
@@ -265,6 +296,7 @@ class Services:
     """The use cases, wired to the container's adapters."""
 
     auth: AuthService
+    oidc: OidcService | None  # with a configured provider
     users: UserService
     drawers: DrawerService
     master_data: MasterDataService
@@ -288,16 +320,30 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
     executors: dict[Step, StepExecutor] = {step: PlaceholderStep() for step in PIPELINE[1:]}
     executors[Step.OCR] = OcrStep(store, container.ocr, container.previews)
     executors[Step.PARSE] = ParseStep(store, container.parser)
+    auth = AuthService(
+        uow,
+        clock,
+        hasher=container.password_hasher,
+        cipher=container.cipher,
+        totp=container.totp,
+        sessions=SessionPolicy(
+            idle=settings.session_idle_timeout, max_age=settings.session_max_age
+        ),
+    )
     return Services(
-        auth=AuthService(
-            uow,
-            clock,
-            hasher=container.password_hasher,
-            cipher=container.cipher,
-            totp=container.totp,
-            sessions=SessionPolicy(
-                idle=settings.session_idle_timeout, max_age=settings.session_max_age
-            ),
+        auth=auth,
+        oidc=(
+            None
+            if container.oidc is None
+            else OidcService(
+                uow,
+                clock,
+                auth,
+                container.oidc,
+                container.cipher,
+                display_name=settings.oidc_display_name,
+                auto_create=settings.oidc_auto_create,
+            )
         ),
         users=UserService(uow, clock, container.password_hasher),
         drawers=DrawerService(uow, clock),

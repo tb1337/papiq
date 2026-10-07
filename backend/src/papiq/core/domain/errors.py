@@ -69,3 +69,7 @@ class TooManyAttemptsError(DomainError):
     def __init__(self, retry_after: timedelta) -> None:
         super().__init__("too many failed attempts; try again later")
         self.retry_after = retry_after
+
+
+class IdentityProviderError(DomainError):
+    """The identity provider could not be reached or answered with something unusable."""

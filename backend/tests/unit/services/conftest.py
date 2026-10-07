@@ -5,6 +5,7 @@ import pytest
 
 from papiq.adapters.outbound.memory import (
     FakeCipher,
+    FakeOidcProvider,
     FakePasswordHasher,
     FakeTotp,
     ManualClock,
@@ -22,6 +23,7 @@ from papiq.core.services.auth import AuthService
 from papiq.core.services.documents import DocumentService
 from papiq.core.services.drawers import DrawerService
 from papiq.core.services.master_data import MasterDataService
+from papiq.core.services.oidc import OidcService
 from papiq.core.services.pipeline import PipelineService, PlaceholderStep, StepExecutor
 from papiq.core.services.users import UserService
 from tests import builders
@@ -66,6 +68,7 @@ class World:
     hasher: FakePasswordHasher = field(default_factory=FakePasswordHasher)
     cipher: FakeCipher = field(default_factory=FakeCipher)
     totp: FakeTotp = field(default_factory=FakeTotp)
+    idp: FakeOidcProvider = field(default_factory=FakeOidcProvider)
 
     @property
     def uow(self) -> MemoryUnitOfWorkFactory:
@@ -79,6 +82,17 @@ class World:
     def auth(self) -> AuthService:
         return AuthService(
             self.uow, self.clock, hasher=self.hasher, cipher=self.cipher, totp=self.totp
+        )
+
+    def oidc(self, *, auto_create: bool = False) -> OidcService:
+        return OidcService(
+            self.uow,
+            self.clock,
+            self.auth,
+            self.idp,
+            self.cipher,
+            display_name="Test IdP",
+            auto_create=auto_create,
         )
 
     @property
