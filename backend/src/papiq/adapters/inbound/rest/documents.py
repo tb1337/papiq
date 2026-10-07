@@ -27,6 +27,7 @@ from papiq.adapters.inbound.rest.problems import problem_responses
 from papiq.adapters.inbound.rest.schemas import (
     ConfirmRequest,
     DocumentAccepted,
+    DocumentChanged,
     DocumentDetails,
     DocumentPage,
     DocumentPatch,
@@ -36,6 +37,7 @@ from papiq.adapters.inbound.rest.schemas import (
     MoveRequest,
     ReprocessRequest,
     ReviewOut,
+    RuleReportOut,
 )
 from papiq.adapters.inbound.rest.upload import FILE_FIELD, read_upload
 from papiq.core.domain.attributes import AttributeDefinition, AttributeType, Money, Url
@@ -53,7 +55,7 @@ from papiq.core.domain.ids import (
 )
 from papiq.core.domain.pipeline import Lane, Step
 from papiq.core.ports import DocumentFilter
-from papiq.core.services.documents import MAX_PAGE, DocumentFile
+from papiq.core.services.documents import MAX_PAGE, DocumentFile, MetadataChange
 
 router = APIRouter(prefix="/documents", tags=["documents"], dependencies=PROTECTED)
 inbox = APIRouter(prefix="/inbox", tags=["inbox"], dependencies=PROTECTED)
@@ -232,18 +234,19 @@ async def get_document(id: UUID, user: CurrentUser, context: Context) -> Documen
     description=(
         "Needs write access (owner or a `read_write` share). Referenced contact, type, tags "
         "and attributes must exist; attribute values must fit their type and apply to the "
-        "document type."
+        "document type. On a filed document, the change sets off the owner's rules and the "
+        "global ones with trigger `change` that hold after it and did not before; fields set "
+        "in the change stay as they are. The owner sees what the rules did in `rules`."
     ),
-    response_model=DocumentDetails,
+    response_model=DocumentChanged,
     responses=problem_responses(401, 403, 404, 409, 422),
 )
 async def update_document(
     id: UUID, body: DocumentPatch, user: CurrentUser, context: Context
-) -> DocumentDetails:
+) -> DocumentChanged:
     changes = await _changes(body, user, context)
-    document = await context.documents.update_metadata(user, DocumentId(id), changes)
-    view = await context.documents.view(user, document.id)
-    return DocumentDetails.of(view.document, view.access)
+    change = await context.documents.change_metadata(user, DocumentId(id), changes)
+    return _changed(change)
 
 
 @router.post(
@@ -431,6 +434,16 @@ async def list_inbox(
     items = await context.documents.inbox(user, before=_decode_cursor(cursor), limit=limit)
     next_cursor = _encode_cursor(items[-1].document.id) if len(items) == limit else None
     return InboxPage(items=[InboxItemOut.of(item) for item in items], next_cursor=next_cursor)
+
+
+def _changed(change: MetadataChange) -> DocumentChanged:
+    """After a change: the caller just wrote the document; if the owner's rules filed it where
+    the caller cannot see it, this is the last answer they get about it."""
+    details = DocumentDetails.of(change.document, change.access or ShareLevel.READ_WRITE)
+    rules = None
+    if change.rules is not None:
+        rules = [RuleReportOut.of(report) for report in change.rules.plan.reports]
+    return DocumentChanged(**details.model_dump(), rules=rules)
 
 
 def _details(document: Any) -> DocumentDetails:

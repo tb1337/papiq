@@ -30,6 +30,7 @@ from papiq.core.domain.pipeline import (
     Step,
     StepRun,
 )
+from papiq.core.domain.rule_engine import RuleReport
 from papiq.core.domain.rules import (
     ConditionField,
     Operator,
@@ -382,7 +383,10 @@ class OpenStepOut(BaseModel):
     outcome: Outcome
     reason: str | None
     fields: list[FieldCheckOut] = Field(
-        description="Uncertain fields of classification and attribute extraction."
+        description=(
+            "Uncertain fields of classification, attribute extraction and the rules (also "
+            "`drawer`, `title`, `review`), and of filing (`drawer`)."
+        )
     )
 
     @classmethod
@@ -1202,3 +1206,47 @@ class RuleOut(_RuleDefinitionOut):
                 "updated_at": rule.updated_at,
             }
         )
+
+
+class RuleEffectOut(BaseModel):
+    field: str = Field(description="`drawer`, `contact`, `document_type`, `title`, `tags`, ...")
+    old: Any
+    new: Any
+
+
+class RuleNoteOut(BaseModel):
+    field: str
+    kind: Literal["skipped", "overruled", "refused", "conflict", "review"] = Field(
+        description=(
+            "`overruled`: a person decided the field; `refused`: not allowed (rights, scope, "
+            "unconfirmed values); `conflict`: rules or values disagree; `skipped`: something "
+            "it refers to is gone or does not apply; `review`: reviews are forced on arrival "
+            "only."
+        )
+    )
+    reason: str
+
+
+class RuleReportOut(BaseModel):
+    """What one rule did."""
+
+    rule_id: UUID
+    version: int
+    name: str
+    scope: RuleScope
+    applied: list[RuleEffectOut]
+    notes: list[RuleNoteOut] = Field(description="Actions that were not applied, and why.")
+
+    @classmethod
+    def of(cls, report: RuleReport) -> "RuleReportOut":
+        return cls.model_validate(report.to_json())
+
+
+class DocumentChanged(DocumentDetails):
+    rules: list[RuleReportOut] | None = Field(
+        default=None,
+        description=(
+            "For the owner: the rules the change set off (they hold now and did not before) "
+            "and what they did. Nothing turns yellow; what could not be applied is listed."
+        ),
+    )

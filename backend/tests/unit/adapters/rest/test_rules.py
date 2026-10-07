@@ -150,3 +150,35 @@ async def upload_other(api: Api, headers: dict[str, str]) -> str:
     assert response.status_code == 202, response.text
     await api.drain()
     return str(response.json()["id"])
+
+
+async def test_a_change_sets_off_the_rules_that_become_true(api: Api) -> None:
+    admin, owner = await api.admin(), await api.user()
+    a, o = auth(admin), auth(owner)
+    telekom = await post(api, "/contacts", {"name": "Telekom"}, a)
+    vodafone = await post(api, "/contacts", {"name": "Vodafone"}, a)
+    drawer = await post(api, "/drawers", {"name": "Household"}, o)
+    await post(
+        api,
+        "/rules",
+        {
+            "name": "Telekom to household",
+            "triggers": ["change"],
+            "conditions": {"all": [{"field": "contact", "op": "is", "value": telekom["id"]}]},
+            "actions": [{"type": "set_drawer", "drawer_id": drawer["id"]}],
+        },
+        o,
+    )
+    id = await upload(api, o)
+    url = f"{PREFIX}/documents/{id}"
+    response = await api.client.patch(url, json={"contact_id": vodafone["id"]}, headers=o)
+    assert response.json()["rules"] == []
+    response = await api.client.patch(url, json={"contact_id": telekom["id"]}, headers=o)
+    assert response.status_code == 200, response.text
+    changed = response.json()
+    assert changed["drawer_id"] == drawer["id"]
+    assert changed["lane"] == "green"
+    assert [effect["field"] for effect in changed["rules"][0]["applied"]] == ["drawer"]
+    # Not again: the rule held before this change.
+    response = await api.client.patch(url, json={"title": "Bill"}, headers=o)
+    assert response.json()["rules"] == []
