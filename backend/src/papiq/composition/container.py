@@ -80,6 +80,7 @@ from papiq.core.services.master_data import MasterDataService
 from papiq.core.services.oidc import OidcService
 from papiq.core.services.pipeline import PipelineService, PlaceholderStep, RetryPolicy, StepExecutor
 from papiq.core.services.rules import RuleService
+from papiq.core.services.rules.changes import ChangeRules
 from papiq.core.services.rules.steps import ApplyRulesStep, FileStep
 from papiq.core.services.search import SearchPolicy, SearchService
 from papiq.core.services.steps import OcrStep, ParseStep
@@ -469,7 +470,17 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
         drawers=DrawerService(uow, clock),
         master_data=MasterDataService(uow, clock, index_renames=index is not None),
         rules=RuleService(uow, clock),
-        documents=DocumentService(uow, clock, store),
+        documents=DocumentService(
+            uow,
+            clock,
+            store,
+            rules=ChangeRules(
+                store,
+                container.patterns,
+                max_text=settings.rules_max_text,
+                pipeline_version=__version__,
+            ),
+        ),
         pipeline=PipelineService(
             uow,
             clock,
