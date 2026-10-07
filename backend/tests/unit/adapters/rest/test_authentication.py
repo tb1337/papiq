@@ -12,6 +12,7 @@ from fastapi.routing import APIRoute, iter_route_contexts
 from papiq.adapters.inbound.rest import PREFIX
 from papiq.adapters.inbound.rest.auth import CSRF_HEADER
 from papiq.composition.container import build_memory_container, build_services
+from papiq.core.domain.errors import AuthenticationError
 from papiq.core.domain.identity import TokenScope
 from tests.api import auth, bearer
 from tests.builders import PASSWORD
@@ -174,6 +175,21 @@ async def test_logout_ends_the_session(api: Api) -> None:
         assert response.status_code == 204
         assert "max-age=0" in response.headers["set-cookie"].lower()
         assert (await client.get(f"{PREFIX}/auth/me")).status_code == 401
+
+
+async def test_signing_in_again_ends_the_former_session(api: Api) -> None:
+    user = await api.user()
+    async with api.sign_in(user) as session:
+        client = session.client
+        former = client.cookies["__Host-papiq_session"]
+        again = await client.post(
+            f"{PREFIX}/auth/login", json={"username": user.username, "password": PASSWORD}
+        )
+        assert again.status_code == 200
+        assert client.cookies["__Host-papiq_session"] != former
+        with pytest.raises(AuthenticationError):
+            await api.services.auth.authenticate_session(former)
+        assert (await client.get(f"{PREFIX}/auth/me")).status_code == 200
 
 
 async def test_sessions_expire(api: Api) -> None:

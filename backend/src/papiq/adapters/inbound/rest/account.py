@@ -81,8 +81,9 @@ async def _json_body(request: Request) -> None:
     description=(
         "Starts a session: the cookie is HTTP-only, `SameSite=Lax` and, in production, "
         "`Secure`. With TOTP on, a correct password without `code` (or `recovery_code`) "
-        "answers 401 with `second_factor_required: true`. Failed attempts are counted per "
-        "account and per address; too many answer 429 with `Retry-After`."
+        "answers 401 with `second_factor_required: true`. A session this browser had ends. "
+        "Failed attempts are counted per account and per address; too many answer 429 with "
+        "`Retry-After`."
     ),
     response_model=SessionOut,
     responses={
@@ -92,7 +93,11 @@ async def _json_body(request: Request) -> None:
     dependencies=[Depends(_json_body)],
 )
 async def login(
-    body: LoginRequest, request: Request, response: Response, context: Context
+    body: LoginRequest,
+    request: Request,
+    response: Response,
+    context: Context,
+    previous: Annotated[Principal | None, Depends(optional_session)],
 ) -> SessionOut:
     signed_in = await context.auth.login(
         body.username,
@@ -101,6 +106,8 @@ async def login(
         recovery_code=body.recovery_code or None,
         source=client_address(request),
     )
+    if previous is not None and previous.session is not None:
+        await context.auth.logout(previous.session.id)  # the browser's former session
     set_session_cookie(response, context, signed_in)
     return _session_out(signed_in)
 
