@@ -38,15 +38,23 @@ def text_of(pdf: Path) -> str:
 
 
 @pytest.mark.parametrize(
-    ("sample", "media_type"),
-    [("scan.pdf", media_types.PDF), ("photo.jpg", media_types.JPEG)],
+    ("sample", "media_type", "pages"),
+    [
+        ("scan.pdf", media_types.PDF, 1),
+        ("photo.jpg", media_types.JPEG, 1),
+        ("lowres.jpg", media_types.JPEG, 1),
+        ("screenshot.png", media_types.PNG, 1),
+        ("pages.tiff", media_types.TIFF, 2),
+    ],
 )
-async def test_scans_and_photos_get_a_text_layer(
-    tmp_path: Path, sample: str, media_type: str
+async def test_scans_and_images_get_a_text_layer(
+    tmp_path: Path, sample: str, media_type: str, pages: int
 ) -> None:
     target = tmp_path / "archive.pdf"
     assert "Rechnung" not in text_of(SAMPLES / "scan.pdf")
     result = await engine().make_archive(SAMPLES / sample, target, media_type=media_type)
+    assert result.pages == pages
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["archive.pdf"]
     text = " ".join(text_of(target).split())
     assert "Rechnung Nummer 4711" in text
     assert "123,45 EUR" in text

@@ -18,7 +18,12 @@ class OcrContract:
 
     @pytest.mark.parametrize(
         ("sample", "media_type"),
-        [("scan.pdf", media_types.PDF), ("text.pdf", media_types.PDF), ("photo.jpg", "image/jpeg")],
+        [
+            ("scan.pdf", media_types.PDF),
+            ("text.pdf", media_types.PDF),
+            ("photo.jpg", media_types.JPEG),
+            ("screenshot.png", media_types.PNG),
+        ],
     )
     async def test_makes_an_archive_pdf(
         self, ocr: Ocr, tmp_path: Path, sample: str, media_type: str
