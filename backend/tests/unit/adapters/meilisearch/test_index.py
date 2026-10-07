@@ -12,6 +12,7 @@ import httpx2
 import pytest
 
 from papiq.adapters.outbound.meilisearch import MeilisearchIndex
+from papiq.adapters.outbound.meilisearch import index as index_module
 from papiq.adapters.outbound.meilisearch.index import (
     HIGHLIGHT_END,
     HIGHLIGHT_START,
@@ -140,7 +141,57 @@ async def test_settings_that_are_in_place_are_not_applied_again() -> None:
     await index.upsert([index_document()])
     assert sim.calls("PATCH") == []
     assert sim.calls("GET", "/settings") != []
-    assert len(sim.calls("GET", "/settings")) == 1  # checked once per process
+    assert len(sim.calls("GET", "/settings")) == 1  # checked once in a while
+
+
+async def test_the_setup_is_checked_again_after_a_while(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = [1000.0]
+    monkeypatch.setattr(index_module, "monotonic", lambda: now[0])
+    sim = SimulatedMeilisearch()
+    sim.settings = wanted_settings(sim, dimensions=3)
+    index = sim.index(dimensions=3)
+    await index.upsert([index_document()])
+    now[0] += index_module.READY_FOR - 1
+    await index.upsert([index_document()])
+    assert len(sim.calls("GET", "/settings")) == 1
+
+    sim.index_exists = False  # Meilisearch lost its data
+    now[0] += 2
+    await index.upsert([index_document()])
+    assert len(sim.calls("GET", "/settings")) == 2
+    assert len(sim.calls("POST", "/indexes")) == 1  # created again, with its settings
+    assert len(sim.calls("PATCH", "/settings")) == 1
+
+
+async def test_an_answer_that_the_index_is_gone_sets_it_up_again() -> None:
+    sim = SimulatedMeilisearch()
+    sim.settings = wanted_settings(sim, dimensions=3)
+    index = sim.index(dimensions=3)
+    await index.remove(DocumentId(uid(1)))
+    gone = [True]
+
+    def lose(request: httpx2.Request) -> httpx2.Response | None:
+        if request.url.path.endswith("/search") and gone:
+            gone.clear()
+            body = {"code": "index_not_found", "message": "Index `papiq-test` not found."}
+            return httpx2.Response(404, json=body)
+        return None
+
+    sim.fail = lose
+    visibility = Visibility(UserId(uid(5)), frozenset())
+    with pytest.raises(SearchIndexError, match="index_not_found"):
+        await index.search(SearchQuery(text="x", visibility=visibility))
+    settings_checks = len(sim.calls("GET", "/settings"))
+    await index.search(SearchQuery(text="x", visibility=visibility))
+    assert len(sim.calls("GET", "/settings")) == settings_checks + 1
+
+
+async def test_writes_name_the_primary_key() -> None:
+    sim = SimulatedMeilisearch()
+    sim.settings = wanted_settings(sim)
+    await sim.index().upsert([index_document()])
+    (write,) = sim.calls("PUT", "/documents")
+    assert write.url.params["primaryKey"] == "id"
 
 
 async def test_only_the_differing_settings_are_applied() -> None:
