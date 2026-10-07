@@ -31,20 +31,20 @@ die Behandlung von Geheimnissen sind sorgfältig. Die Schwachstellen liegen in d
 Drosselung (Verfügbarkeit, Umgehung), in der Reichweite von Admin-API-Tokens und in fehlenden
 Größengrenzen für JSON-Eingaben.
 
-| Nr. | Schwere | Befund | Vor Merge |
-| --- | --- | --- | --- |
-| M4-01 | hoch | Quellen-Drossel sperrt im Standard-Deployment alle Nutzer aus | ja |
-| M4-02 | mittel | Drossel ist nicht atomar; gleichzeitige Versuche umgehen sie | ja |
-| M4-03 | mittel | Admin-API-Token übernimmt das eigene Admin-Konto (Passwort, TOTP) | ja |
-| M4-04 | mittel | JSON-Bodies ohne Größengrenze, auch an `POST /auth/login` | ja |
-| M4-05 | mittel | API-Tokens überleben Passwortwechsel und Admin-Reset (Design) | nein (entschieden) |
-| M4-06 | gering | OIDC-Anmeldung lässt eine bestehende Session serverseitig gültig | nein |
-| M4-07 | gering | Eingegebener Nutzername wird bei Fehlversuchen geloggt | nein |
-| M4-08 | gering | Kein `Cache-Control: no-store` auf `/auth/*`; Docs/OpenAPI/Health öffentlich | nein |
-| M4-09 | gering | Quellen-Drossel pro Einzeladresse (IPv6), `*` vertraut jedem `X-Forwarded-For` | nein |
-| M4-10 | gering | Freigabe an deaktivierte Nutzer möglich | nein |
-| M4-11 | gering | Dev-Schlüssel und Dev-Admin-Passwort im Repository; kein Schutz vor Übernahme in Produktion | nein |
-| M4-12 | gering | Enumeration und Timing: akzeptierte Unterschiede, dokumentiert | nein |
+| Nr. | Schwere | Befund | Vor Merge | Status |
+| --- | --- | --- | --- | --- |
+| M4-01 | hoch | Quellen-Drossel sperrt im Standard-Deployment alle Nutzer aus | ja | behoben (`1cc8bb1`) |
+| M4-02 | mittel | Drossel ist nicht atomar; gleichzeitige Versuche umgehen sie | ja | behoben (`dc504de`) |
+| M4-03 | mittel | Admin-API-Token übernimmt das eigene Admin-Konto (Passwort, TOTP) | ja | behoben (`f714d22`) |
+| M4-04 | mittel | JSON-Bodies ohne Größengrenze, auch an `POST /auth/login` | ja | behoben (`74b3b2a`) |
+| M4-05 | mittel | API-Tokens überleben Passwortwechsel und Admin-Reset (Design) | nein (entschieden) | Entscheidung: keine Änderung |
+| M4-06 | gering | OIDC-Anmeldung lässt eine bestehende Session serverseitig gültig | nein | behoben (`dfd38a0`) |
+| M4-07 | gering | Eingegebener Nutzername wird bei Fehlversuchen geloggt | nein | behoben (`fa432ff`) |
+| M4-08 | gering | Kein `Cache-Control: no-store` auf `/auth/*`; Docs/OpenAPI/Health öffentlich | nein | behoben (`c95ff0a`); Docs/OpenAPI/Health bleiben öffentlich |
+| M4-09 | gering | Quellen-Drossel pro Einzeladresse (IPv6), `*` vertraut jedem `X-Forwarded-For` | nein | behoben (`025674a`) |
+| M4-10 | gering | Freigabe an deaktivierte Nutzer möglich | nein | behoben (`06afc3d`) |
+| M4-11 | gering | Dev-Schlüssel und Dev-Admin-Passwort im Repository; kein Schutz vor Übernahme in Produktion | nein | behoben (`ec33e1b`) |
+| M4-12 | gering | Enumeration und Timing: akzeptierte Unterschiede, dokumentiert | nein | akzeptiert |
 
 ## Befunde
 
@@ -333,3 +333,13 @@ Parameter (`cursor` 64, `tag_id` ≤ 50, `next` ≤ 2000). Offen: Gesamtgröße 
 
 **Entscheidung des Besitzers:** M4-05 (Token-Widerruf als Default). Die übrigen Befunde
 (gering) können nach dem Merge folgen.
+
+## Behebung (2026-10-07)
+
+Auf `claude/charming-knuth-2ihyum`, ein Commit je Befund (Status-Spalte oben). Die Belegtests
+sind grün und thematisch eingeordnet (`test_auth.py`, `test_authentication.py`,
+`test_resources.py`, `test_settings.py`); die beiden Review-Dateien sind entfernt. Anpassung
+des Belegtests zu M4-02: Seine Warteschleife endet jetzt auch, wenn Versuche sofort
+abgewiesen werden (vorher hätte sie mit der Behebung endlos gewartet); die Aussage ist
+unverändert. Der Belegtest zu M4-01 (Settings) erwartet `ConfigurationError` schon beim
+Erzeugen von `Settings`; Konsistenzfehler werden deshalb jetzt direkt so ausgelöst.
