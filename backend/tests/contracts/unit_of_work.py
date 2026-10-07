@@ -680,6 +680,40 @@ class UnitOfWorkContract:
             with pytest.raises(NotFoundError):
                 await uow.drawers.remove(drawer.id)
 
+    async def test_a_lock_makes_other_units_wait(self, uow_factory: UnitOfWorkFactory) -> None:
+        order: list[str] = []
+        locked = asyncio.Event()
+
+        async def first() -> None:
+            async with uow_factory() as uow:
+                await uow.lock("originals/abc")
+                locked.set()
+                await asyncio.sleep(0.2)
+                order.append("first ends")
+                await uow.commit()
+
+        async def second() -> None:
+            await locked.wait()
+            async with uow_factory() as uow:
+                await uow.lock("originals/abc")
+                order.append("second holds the lock")
+                await uow.commit()
+
+        await asyncio.gather(first(), second())
+        assert order == ["first ends", "second holds the lock"]
+
+    async def test_a_lock_ends_with_a_rollback(self, uow_factory: UnitOfWorkFactory) -> None:
+        async with uow_factory() as uow:
+            await uow.lock("originals/abc")
+            await uow.rollback()
+        with pytest.raises(LookupError):
+            async with uow_factory() as uow:
+                await uow.lock("originals/abc")
+                raise LookupError
+        async with asyncio.timeout(5), uow_factory() as uow:
+            await uow.lock("originals/abc")
+            await uow.commit()
+
     async def test_master_data_is_removed(self, uow_factory: UnitOfWorkFactory) -> None:
         tag, contact = Tag.create(name="old", now=NOW), Contact.create(name="Gone", now=NOW)
         async with uow_factory() as uow:
@@ -734,5 +768,7 @@ class UnitOfWorkContract:
             assert not await uow.documents.exists(drawer=empty.id)
             assert not await uow.documents.exists(owner=stranger.id, tag=tag.id)
             assert not await uow.documents.exists(tag=unused_tag.id)
+            assert await uow.documents.exists(sha256=document.sha256)
+            assert not await uow.documents.exists(sha256=builders.sha256("other"))
             with pytest.raises(ValueError):
                 await uow.documents.exists()

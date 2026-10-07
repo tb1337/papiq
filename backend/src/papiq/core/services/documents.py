@@ -24,6 +24,7 @@ from papiq.core.services._access import (
     visible_drawer,
     writable_document,
 )
+from papiq.core.services.maintenance import REMOVE_FILES_JOB
 from papiq.core.services.objects import archive_key, original_key, preview_key
 
 log = logging.getLogger(__name__)
@@ -191,7 +192,8 @@ class DocumentService:
             await uow.commit()
 
     async def delete(self, actor: UserId, id: DocumentId) -> None:
-        """Owner only. Removes the metadata; stored files stay (cleanup is a later job)."""
+        """Owner only. Removes the metadata and queues the removal of its files (derivatives,
+        and the original unless another document has the same file)."""
         async with self._uow() as uow:
             user = await load_actor(uow, actor)
             document, _ = await readable_document(uow, user, id)
@@ -200,6 +202,11 @@ class DocumentService:
             document.delete(self._clock.now())
             await uow.documents.remove(id)
             await uow.outbox.add(document.pull_events())
+            await uow.jobs.enqueue(
+                REMOVE_FILES_JOB,
+                {"document_id": str(id), "sha256": document.sha256.hex},
+                run_at=self._clock.now(),
+            )
             await uow.commit()
 
 

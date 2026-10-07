@@ -368,6 +368,7 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
             interval=settings.cleanup_interval,
             retention=settings.retention,
             session_idle=settings.session_idle_timeout,
+            object_store=store,
         ),
     )
 

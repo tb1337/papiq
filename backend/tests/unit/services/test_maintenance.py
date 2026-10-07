@@ -8,7 +8,8 @@ import pytest
 from papiq.adapters.outbound.memory import MemoryEventBus
 from papiq.core.domain.errors import AuthenticationError
 from papiq.core.domain.jobs import JobStatus
-from papiq.core.services.maintenance import CLEANUP_JOB, MaintenanceService
+from papiq.core.services.maintenance import CLEANUP_JOB, REMOVE_FILES_JOB, MaintenanceService
+from papiq.core.services.objects import derivative_keys, original_key
 from tests.builders import PASSWORD, incoming
 from tests.unit.services.conftest import World
 
@@ -23,6 +24,7 @@ def maintenance(world: World, bus: MemoryEventBus | None = None) -> MaintenanceS
         bus or MemoryEventBus(world.database, clock=world.clock),
         interval=INTERVAL,
         retention=RETENTION,
+        object_store=world.object_store,
     )
 
 
@@ -103,3 +105,51 @@ async def test_cleanup_removes_ended_sessions_and_old_failures(world: World) -> 
     async with world.uow() as uow:
         assert await uow.sessions.find_by_token(signed_in.session.token_hash) is None
         assert await uow.login_failures.find("account:alice") is None
+
+
+async def test_deleting_a_document_removes_its_files(world: World) -> None:
+    service = maintenance(world)
+    alice, bob = await world.user(), await world.user()
+    shared_file, own_file = b"%PDF-1.7 same", b"%PDF-1.7 alice only"
+    kept = await world.pipeline().receive(alice.id, incoming(shared_file), filename="a.pdf")
+    gone = await world.pipeline().receive(alice.id, incoming(own_file), filename="b.pdf")
+    other = await world.pipeline().receive(bob.id, incoming(shared_file), filename="c.pdf")
+    await world.drain()
+    for document in (kept, gone):
+        for key in derivative_keys(document.id):
+            await world.object_store.put(key, b"x", content_type="x")
+
+    await world.documents.delete(alice.id, gone.id)
+    await world.documents.delete(alice.id, kept.id)
+    assert await service.run_next_job() and await service.run_next_job()
+    assert not await service.run_next_job()
+
+    for document in (kept, gone):
+        for key in derivative_keys(document.id):
+            assert not await world.object_store.exists(key)
+    assert not await world.object_store.exists(original_key(gone.sha256))
+    assert await world.object_store.exists(original_key(other.sha256))  # Bob still has it
+    assert [j.status for j in world.database.jobs.values() if j.kind == REMOVE_FILES_JOB] == [
+        JobStatus.DONE,
+        JobStatus.DONE,
+    ]
+
+
+async def test_removing_files_is_retried(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    service = maintenance(world)
+    owner = await world.user()
+    document = await world.pipeline().receive(owner.id, incoming(b"%PDF-1.7 x"), filename="x.pdf")
+    await world.drain()
+    await world.documents.delete(owner.id, document.id)
+
+    async def broken(key: str) -> None:
+        raise OSError("storage unreachable")
+
+    monkeypatch.setattr(world.object_store, "delete", broken)
+    assert await service.run_next_job()
+    [job] = [j for j in world.database.jobs.values() if j.kind == REMOVE_FILES_JOB]
+    assert job.status is JobStatus.QUEUED and job.last_error is not None
+    monkeypatch.undo()
+    world.clock.advance(timedelta(minutes=1))
+    assert await service.run_next_job()
+    assert not await world.object_store.exists(original_key(document.sha256))

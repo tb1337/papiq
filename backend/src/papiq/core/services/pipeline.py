@@ -156,7 +156,9 @@ class PipelineService:
             output={"sha256": sha256.hex, "size": file.size, "media_type": media_type},
         )
         try:
-            return await self._create(actor, target, sha256, filename, media_type, result, started)
+            return await self._create(
+                actor, target, sha256, file.path, filename, media_type, result, started
+            )
         except ConflictError:
             # The same file arrived twice at the same moment; the other upload won.
             async with self._uow() as uow:
@@ -170,13 +172,20 @@ class PipelineService:
         actor: UserId,
         target: DrawerId,
         sha256: Sha256,
+        path: Path,
         filename: str,
         media_type: str,
         result: StepResult,
         started: datetime,
     ) -> Document:
         now = self._clock.now()
+        key = original_key(sha256)
         async with self._uow() as uow:
+            # The removal of a deleted document's files may have taken the original meanwhile;
+            # under the lock of its key, store it again if so.
+            await uow.lock(key)
+            if not await self._store.exists(key):
+                await self._store.upload(key, path, content_type=media_type)
             # Check again: rights or a duplicate may have changed while the file was stored.
             await self._target_drawer(uow, actor, target, sha256)
             document = Document.receive(

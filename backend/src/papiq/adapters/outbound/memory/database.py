@@ -1,5 +1,6 @@
 """Committed state shared by the in-memory unit of work, job queue and event bus."""
 
+import asyncio
 from collections.abc import Callable, Hashable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -108,6 +109,7 @@ class MemoryDatabase:
     purged: set[int] = field(default_factory=set)  # outbox positions removed by `purge`
     jobs: dict[JobId, Job] = field(default_factory=dict)
     subscriptions: dict[str, SubscriptionState] = field(default_factory=dict)
+    locks: dict[str, asyncio.Lock] = field(default_factory=dict)  # see MemoryUnitOfWork.lock
 
     def rows(self, table: Table) -> dict[UUID, Any]:
         return self.tables.setdefault(table.name, {})

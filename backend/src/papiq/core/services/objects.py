@@ -27,3 +27,13 @@ def markdown_key(document: DocumentId) -> str:
 def structure_key(document: DocumentId) -> str:
     """The parsed structure, in the parser's JSON format."""
     return f"documents/{document}/content.json"
+
+
+def derivative_keys(document: DocumentId) -> list[str]:
+    """Everything the pipeline stores for one document."""
+    return [
+        archive_key(document),
+        preview_key(document),
+        markdown_key(document),
+        structure_key(document),
+    ]

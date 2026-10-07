@@ -5,6 +5,7 @@ reads see committed data plus the unit's own changes; commit checks that every r
 still has the version it had when the unit first touched it, and that uniqueness holds.
 """
 
+import asyncio
 import copy
 import dataclasses
 from collections.abc import Collection, Hashable, Iterable, Mapping
@@ -74,6 +75,7 @@ class MemoryUnitOfWork:
         self._jobs: dict[JobId, Job] = {}
         self._job_base: dict[JobId, Job | None] = {}
         self._purged_jobs: set[JobId] = set()
+        self._held: asyncio.Lock | None = None
 
         self.users = MemoryUserRepository(self, USERS)
         self.drawers = MemoryDrawerRepository(self, DRAWERS)
@@ -108,8 +110,27 @@ class MemoryUnitOfWork:
         if not self._closed:
             await self.rollback()
 
+    async def lock(self, name: str) -> None:
+        self._check_open()
+        if self._held is not None:
+            raise RuntimeError("a unit of work locks at most one name")
+        lock = self._db.locks.setdefault(name, asyncio.Lock())
+        await lock.acquire()
+        self._held = lock
+
+    def _release(self) -> None:
+        if self._held is not None:
+            self._held.release()
+            self._held = None
+
     async def commit(self) -> None:
         self._check_open()
+        try:
+            self._commit()
+        finally:
+            self._release()
+
+    def _commit(self) -> None:
         self._check_versions()
         self._check_uniqueness()
         self._check_jobs()
@@ -136,6 +157,7 @@ class MemoryUnitOfWork:
     async def rollback(self) -> None:
         self._check_open()
         self._closed = True
+        self._release()
 
     def _check_open(self) -> None:
         if self._closed:
@@ -285,8 +307,9 @@ class MemoryDocumentRepository(MemoryRepository[DocumentId, Document]):
         document_type: DocumentTypeId | None = None,
         tag: TagId | None = None,
         attribute: AttributeId | None = None,
+        sha256: Sha256 | None = None,
     ) -> bool:
-        criteria = (owner, drawer, contact, document_type, tag, attribute)
+        criteria = (owner, drawer, contact, document_type, tag, attribute, sha256)
         if all(value is None for value in criteria):
             raise ValueError("exists needs at least one criterion")
         return any(
@@ -296,6 +319,7 @@ class MemoryDocumentRepository(MemoryRepository[DocumentId, Document]):
             and (document_type is None or row.document_type_id == document_type)
             and (tag is None or tag in row.tag_ids)
             and (attribute is None or attribute in row.attributes)
+            and (sha256 is None or row.sha256 == sha256)
             for row in self._all()
         )
 
