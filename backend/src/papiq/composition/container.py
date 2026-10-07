@@ -398,6 +398,14 @@ def indexing_policy_of(settings: Settings) -> IndexingPolicy:
     )
 
 
+def search_policy_of(settings: Settings) -> SearchPolicy:
+    return SearchPolicy(
+        semantic_ratio=settings.search_semantic_ratio,
+        embed_timeout=settings.search_embed_timeout,
+        query_prefix=_prefix(settings.embedding_query_prefix),
+    )
+
+
 def build_services(container: Container, settings: Settings | None = None) -> Services:
     """The use cases; tuning (retries, time limits, cleanup) from `settings`, or the defaults.
 
@@ -475,16 +483,7 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
         search=(
             None
             if index is None
-            else SearchService(
-                uow,
-                index,
-                embeddings,
-                SearchPolicy(
-                    semantic_ratio=settings.search_semantic_ratio,
-                    embed_timeout=settings.search_embed_timeout,
-                    query_prefix=_prefix(settings.embedding_query_prefix),
-                ),
-            )
+            else SearchService(uow, index, embeddings, search_policy_of(settings))
         ),
     )
 

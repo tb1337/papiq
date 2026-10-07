@@ -455,6 +455,17 @@ async def test_deleting_an_index_fails_on_other_errors() -> None:
         await (await sim.index().begin_rebuild()).abort()
 
 
+async def test_dropping_removes_the_index_and_the_remains_of_a_rebuild() -> None:
+    sim = SimulatedMeilisearch()
+    sim.settings = wanted_settings(sim)
+    sim.deleting_a_missing_index = True  # neither exists: nothing fails
+    await sim.index().drop()
+    deleted = [
+        request.url.path for request in sim.calls("DELETE") if "/indexes/" in request.url.path
+    ]
+    assert deleted == ["/indexes/papiq-test", "/indexes/papiq-test-rebuild"]
+
+
 # --- filters and segments --------------------------------------------------------------------
 
 
