@@ -1,5 +1,5 @@
 from papiq.core.domain.drawers import Drawer, ShareLevel
-from papiq.core.domain.errors import ConflictError, PermissionDeniedError
+from papiq.core.domain.errors import ConflictError, NotFoundError, PermissionDeniedError
 from papiq.core.domain.ids import DrawerId, UserId
 from papiq.core.domain.permissions import can_manage_drawer
 from papiq.core.domain.users import User
@@ -56,7 +56,10 @@ class DrawerService:
     async def share(self, actor: UserId, id: DrawerId, user: UserId, level: ShareLevel) -> Drawer:
         async with self._uow() as uow:
             drawer = await _managed_drawer(uow, await load_actor(uow, actor), id)
-            await uow.users.get(user)
+            recipient = await uow.users.find(user)
+            if recipient is None or not recipient.active:
+                # As in the user list: deactivated users are not there for others.
+                raise NotFoundError("user", user)
             drawer.share(user, level)
             await uow.drawers.update(drawer)
             await uow.commit()

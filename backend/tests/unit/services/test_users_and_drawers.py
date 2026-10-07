@@ -123,3 +123,14 @@ async def test_drawers_are_read_and_deleted(world: World) -> None:
     await world.drawers.delete(owner.id, empty.id)
     with pytest.raises(NotFoundError):
         await world.drawers.get(owner.id, empty.id)
+
+
+async def test_drawers_are_not_shared_with_deactivated_users(world: World) -> None:
+    """M4-10: a share would take effect unnoticed when the user is activated again."""
+    admin, owner, gone = await world.user(role=Role.ADMIN), await world.user(), await world.user()
+    drawer = await world.drawers.create(owner.id, "Household")
+    await world.users.set_active(admin.id, gone.id, False)
+    with pytest.raises(NotFoundError):
+        await world.drawers.share(owner.id, drawer.id, gone.id, ShareLevel.READ)
+    with pytest.raises(NotFoundError):
+        await world.drawers.share(owner.id, drawer.id, UserId(new_id()), ShareLevel.READ)
