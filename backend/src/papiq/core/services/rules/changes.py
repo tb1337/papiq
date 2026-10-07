@@ -13,7 +13,6 @@
   entry also records what the person changed, for later rule runs.
 """
 
-import copy
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
@@ -68,10 +67,6 @@ class ChangeRules:
     async def prepare(self, rules: Sequence[Rule], document: Document) -> Prepared:
         """Outside a transaction: the text and its patterns, if a rule needs them."""
         return await prepare(self._store, self._matcher, rules, document, max_text=self._max_text)
-
-    def snapshot(self, document: Document) -> Document:
-        """The state before the change, to compare against."""
-        return copy.deepcopy(document)
 
     async def after_change(
         self,

@@ -52,7 +52,7 @@ class RuleService:
 
     async def get(self, actor: UserId, id: RuleId) -> Rule:
         async with self._uow() as uow:
-            rule = await _visible_rule(uow, await load_actor(uow, actor), id)
+            rule = await visible_rule(uow, await load_actor(uow, actor), id)
             if rule.deleted_at is not None:
                 raise NotFoundError("rule", id)
             return rule
@@ -61,12 +61,12 @@ class RuleService:
         """All versions, oldest first; also of a deleted rule, so the processing log can be
         read."""
         async with self._uow() as uow:
-            await _visible_rule(uow, await load_actor(uow, actor), id)
+            await visible_rule(uow, await load_actor(uow, actor), id)
             return await uow.rules.versions(id)
 
     async def version(self, actor: UserId, id: RuleId, number: int) -> RuleVersion:
         async with self._uow() as uow:
-            await _visible_rule(uow, await load_actor(uow, actor), id)
+            await visible_rule(uow, await load_actor(uow, actor), id)
             return await uow.rules.get_version(id, number)
 
     async def create(self, actor: UserId, scope: RuleScope, definition: RuleDefinition) -> Rule:
@@ -149,7 +149,7 @@ async def check_references(
             raise PermissionDeniedError(f"no write access to drawer '{drawer.name}'")
 
 
-async def _visible_rule(uow: UnitOfWork, user: User, id: RuleId) -> Rule:
+async def visible_rule(uow: UnitOfWork, user: User, id: RuleId) -> Rule:
     """Global rules and the caller's own; all rules for admins. Includes deleted rules."""
     rule = await uow.rules.find(id)
     if rule is None or not (
@@ -160,7 +160,7 @@ async def _visible_rule(uow: UnitOfWork, user: User, id: RuleId) -> Rule:
 
 
 async def _managed_rule(uow: UnitOfWork, user: User, id: RuleId) -> Rule:
-    rule = await _visible_rule(uow, user, id)
+    rule = await visible_rule(uow, user, id)
     if rule.deleted_at is not None:
         raise NotFoundError("rule", id)
     if rule.scope is RuleScope.GLOBAL:

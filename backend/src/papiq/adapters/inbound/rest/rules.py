@@ -2,19 +2,28 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request, Response
 
 from papiq.adapters.inbound.rest.auth import PROTECTED, CurrentUser
 from papiq.adapters.inbound.rest.context import Context
 from papiq.adapters.inbound.rest.problems import problem_responses
 from papiq.adapters.inbound.rest.schemas import (
+    ApplyPreviewItemOut,
+    ApplyPreviewOut,
+    ApplyPreviewRequest,
+    ApplyRequest,
+    RuleApplicationOut,
     RuleCreate,
     RuleDefinitionIn,
+    RuleEffectOut,
+    RuleNoteOut,
     RuleOut,
     RulePatch,
     RuleVersionOut,
 )
-from papiq.core.domain.ids import RuleId
+from papiq.core.domain.errors import ValidationError
+from papiq.core.domain.ids import DocumentId, RuleApplicationId, RuleId
+from papiq.core.domain.rule_engine import Note
 from papiq.core.domain.rules import RuleScope, definition_from_json
 
 router = APIRouter(prefix="/rules", tags=["rules"], dependencies=PROTECTED)
@@ -145,3 +154,105 @@ async def get_rule_version(
     id: UUID, number: int, user: CurrentUser, context: Context
 ) -> RuleVersionOut:
     return RuleVersionOut.of(await context.rules.version(user, RuleId(id), number))
+
+
+WHO_APPLIES = (
+    "A user rule: its owner, on their documents. A global rule: anyone, on the documents they "
+    "may write to (admins included, without extra rights). Documents in processing are left "
+    "out."
+)
+
+
+@router.post(
+    "/{id}/apply/preview",
+    summary="Preview applying a rule to existing documents",
+    description=(
+        "The documents the rule's current version would change, newest first, with what would "
+        "change and the conflicts (a field that has another value). Nothing is stored. "
+        + WHO_APPLIES
+    ),
+    response_model=ApplyPreviewOut,
+    responses=problem_responses(401, 403, 404, 422),
+)
+async def preview_apply(
+    id: UUID, body: ApplyPreviewRequest, user: CurrentUser, context: Context
+) -> ApplyPreviewOut:
+    preview = await context.rule_applications.preview(
+        user, RuleId(id), before=_cursor(body.cursor), limit=body.limit
+    )
+    return ApplyPreviewOut(
+        rule_id=preview.rule.id,
+        version=preview.rule.current.number,
+        items=[
+            ApplyPreviewItemOut(
+                document_id=item.document.id,
+                title=item.document.title,
+                changes=[RuleEffectOut(field=e.field, old=e.old, new=e.new) for e in item.effects],
+                conflicts=[_note(note) for note in item.conflicts],
+                notes=[_note(note) for note in item.notes],
+            )
+            for item in preview.items
+        ],
+        next_cursor=None if preview.next_cursor is None else str(preview.next_cursor),
+    )
+
+
+@router.post(
+    "/{id}/apply",
+    status_code=202,
+    summary="Apply a rule to existing documents",
+    description=(
+        "Applies the given version to the selected documents in the background; follow it at "
+        "`GET /rule-applications/{id}`. Rights are checked again for every document. Conflicts "
+        "are applied only for documents in `accept_conflicts`; forced reviews do not act. "
+        + WHO_APPLIES
+    ),
+    response_model=RuleApplicationOut,
+    responses=problem_responses(401, 403, 404, 422),
+)
+async def apply_rule(
+    id: UUID,
+    body: ApplyRequest,
+    request: Request,
+    response: Response,
+    user: CurrentUser,
+    context: Context,
+) -> RuleApplicationOut:
+    application = await context.rule_applications.start(
+        user,
+        RuleId(id),
+        version=body.version,
+        documents=[DocumentId(item) for item in body.document_ids],
+        accept_conflicts=[DocumentId(item) for item in body.accept_conflicts],
+    )
+    response.headers["Location"] = str(request.url_for("get_application", id=application.id).path)
+    return RuleApplicationOut.of(application)
+
+
+applications = APIRouter(prefix="/rule-applications", tags=["rules"], dependencies=PROTECTED)
+
+
+@applications.get(
+    "/{id}",
+    summary="Progress of a rule application",
+    description="Only for the user who started it.",
+    response_model=RuleApplicationOut,
+    responses=problem_responses(401, 404, 422),
+)
+async def get_application(id: UUID, user: CurrentUser, context: Context) -> RuleApplicationOut:
+    return RuleApplicationOut.of(await context.rule_applications.get(user, RuleApplicationId(id)))
+
+
+def _note(note: Note) -> RuleNoteOut:
+    return RuleNoteOut.model_validate(
+        {"field": note.field, "kind": note.kind, "reason": note.reason}
+    )
+
+
+def _cursor(value: str | None) -> DocumentId | None:
+    if value is None or not value.strip():
+        return None
+    try:
+        return DocumentId(UUID(value.strip()))
+    except ValueError:
+        raise ValidationError(f"cursor: not a valid cursor: {value!r}") from None

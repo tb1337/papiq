@@ -182,3 +182,79 @@ async def test_a_change_sets_off_the_rules_that_become_true(api: Api) -> None:
     # Not again: the rule held before this change.
     response = await api.client.patch(url, json={"title": "Bill"}, headers=o)
     assert response.json()["rules"] == []
+
+
+async def test_a_rule_is_applied_to_existing_documents(api: Api) -> None:
+    admin, owner = await api.admin(), await api.user()
+    a, o = auth(admin), auth(owner)
+    tax = await post(api, "/tags", {"name": "tax"}, a)
+    first, second = await upload(api, o), await upload_other(api, o)
+    await api.client.patch(f"{PREFIX}/documents/{first}", json={"title": "Mine"}, headers=o)
+    rule = await post(
+        api,
+        "/rules",
+        {
+            "name": "Tax",
+            "conditions": {"all": [{"field": "channel", "op": "is", "value": "api"}]},
+            "actions": [
+                {"type": "add_tags", "tag_ids": [tax["id"]]},
+                {"type": "set_title", "template": "Tax {filename}"},
+            ],
+        },
+        o,
+    )
+    response = await api.client.post(
+        f"{PREFIX}/rules/{rule['id']}/apply/preview", json={}, headers=o
+    )
+    assert response.status_code == 200, response.text
+    preview = response.json()
+    assert {item["document_id"] for item in preview["items"]} == {first, second}
+    items = {item["document_id"]: item for item in preview["items"]}
+    assert [change["field"] for change in items[first]["changes"]] == ["tags"]
+    assert [conflict["field"] for conflict in items[first]["conflicts"]] == ["title"]
+    assert [change["field"] for change in items[second]["changes"]] == ["tags", "title"]
+
+    response = await api.client.post(
+        f"{PREFIX}/rules/{rule['id']}/apply",
+        json={"version": 1, "document_ids": [first, second], "accept_conflicts": [first]},
+        headers=o,
+    )
+    assert response.status_code == 202, response.text
+    while await api.services.rule_applications.run_next_job():
+        pass
+    progress = await api.client.get(response.headers["location"], headers=o)
+    assert progress.json()["status"] == "done", progress.text
+    assert progress.json()["applied"] == 2
+    one = (await api.client.get(f"{PREFIX}/documents/{first}", headers=o)).json()
+    two = (await api.client.get(f"{PREFIX}/documents/{second}", headers=o)).json()
+    assert one["title"] == "Tax Bill 2026" and one["tag_ids"] == [tax["id"]]
+    assert two["title"] == "Tax Other" and two["tag_ids"] == [tax["id"]]
+
+
+async def test_a_dry_run_shows_what_a_change_would_do(api: Api) -> None:
+    admin, owner = await api.admin(), await api.user()
+    telekom = await post(api, "/contacts", {"name": "Telekom"}, auth(admin))
+    drawer = await post(api, "/drawers", {"name": "Household"}, auth(owner))
+    await post(
+        api,
+        "/rules",
+        {
+            "name": "Telekom",
+            "conditions": {"all": [{"field": "contact", "op": "is", "value": telekom["id"]}]},
+            "actions": [{"type": "set_drawer", "drawer_id": drawer["id"]}],
+        },
+        auth(owner),
+    )
+    id = await upload(api, auth(owner))
+    response = await api.client.post(
+        f"{PREFIX}/documents/{id}/dry-run",
+        json={"contact_id": telekom["id"]},
+        headers=auth(owner),
+    )
+    assert response.status_code == 200, response.text
+    preview = response.json()
+    assert preview["changed"] == ["contact", "drawer"]
+    assert preview["visibility"]["drawer_id"] == drawer["id"]
+    assert preview["visibility"]["shares"] == []
+    stored = (await api.client.get(f"{PREFIX}/documents/{id}", headers=auth(owner))).json()
+    assert stored["contact_id"] is None
