@@ -1,0 +1,41 @@
+name: Dev image
+
+# The dev image must build for the architectures developers use (Apple Silicon: arm64). arm64
+# is emulated here and slow, so this runs only when the image's inputs change.
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - .devcontainer/**
+      - backend/pyproject.toml
+      - backend/uv.lock
+      - .github/workflows/dev-image.yml
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - .devcontainer/**
+      - backend/pyproject.toml
+      - backend/uv.lock
+      - .github/workflows/dev-image.yml
+
+permissions:
+  contents: read
+
+jobs:
+  dev-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: dev
+          platforms: linux/amd64,linux/arm64
+          push: false
+          cache-from: type=gha,scope=dev-image
+          cache-to: type=gha,scope=dev-image,mode=max
