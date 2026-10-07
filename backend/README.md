@@ -294,7 +294,10 @@ contradictory configuration stops the start with a message naming the variables.
 
 Secrets (marked *secret*) can also be passed as `PAPIQ_<NAME>_FILE=/run/secrets/...` (Docker
 secrets): the file content, without one trailing newline, is the value. Setting both
-`PAPIQ_<NAME>` and `PAPIQ_<NAME>_FILE` is an error.
+`PAPIQ_<NAME>` and `PAPIQ_<NAME>_FILE` is an error. In production, pass at least
+`PAPIQ_SECRET_KEY_FILE` and `PAPIQ_ADMIN_PASSWORD_FILE` that way. The key and the admin
+password in `.devcontainer/dev.env` are public; with secure cookies the start refuses the
+development key.
 
 Variables for the variant that is not selected (for example `PAPIQ_DB_HOST` with
 `PAPIQ_DB_TYPE=sqlite`) are not required, but must still be well-formed if set.

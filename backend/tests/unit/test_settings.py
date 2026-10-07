@@ -4,7 +4,12 @@ from pathlib import Path
 import pytest
 
 from papiq.composition.errors import ConfigurationError
-from papiq.composition.settings import Settings, find_unknown_variables, load_settings
+from papiq.composition.settings import (
+    DEVELOPMENT_SECRET_KEY,
+    Settings,
+    find_unknown_variables,
+    load_settings,
+)
 
 POSTGRES = {
     "PAPIQ_DB_TYPE": "postgres",
@@ -430,3 +435,18 @@ def test_request_bodies_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     assert load_settings().request_max_size == 1024 * 1024
     set_env(monkeypatch, {"PAPIQ_REQUEST_MAX_SIZE": "64KiB"})
     assert load_settings().request_max_size == 64 * 1024
+
+
+def test_the_development_key_is_refused_with_secure_cookies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M4-11: the devcontainer's key is public; production (secure cookies) must not use it."""
+    dev_env = Path(__file__).parents[3] / ".devcontainer" / "dev.env"
+    assert f"PAPIQ_SECRET_KEY={DEVELOPMENT_SECRET_KEY}" in dev_env.read_text().splitlines()
+    message = error_message(monkeypatch, {"PAPIQ_SECRET_KEY": DEVELOPMENT_SECRET_KEY})
+    assert "PAPIQ_SECRET_KEY is the development key" in message
+    assert DEVELOPMENT_SECRET_KEY not in message
+    urlsafe = DEVELOPMENT_SECRET_KEY.replace("+", "-").replace("/", "_").rstrip("=")
+    assert "development key" in error_message(monkeypatch, {"PAPIQ_SECRET_KEY": urlsafe})
+    set_env(monkeypatch, {"PAPIQ_COOKIE_SECURE": "false"})
+    assert load_settings().secret_key is not None  # fine for development

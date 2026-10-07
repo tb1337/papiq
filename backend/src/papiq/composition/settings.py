@@ -32,6 +32,9 @@ from papiq.composition.errors import ConfigurationError
 ENV_PREFIX = "PAPIQ_"
 FILE_SUFFIX = "_FILE"
 
+# The secret key of the devcontainer (`.devcontainer/dev.env`); public, so never for production.
+DEVELOPMENT_SECRET_KEY = "ZGV2LWtleS1kZXYta2V5LWRldi1rZXktZGV2LWtleS0="
+
 # Choices are written in lower case; `PAPIQ_ROLE=API` is accepted.
 _LOWERCASE_FIELDS = {"role", "log_format", "db_type", "storage_type"}
 # Credentials in URLs (`http://user:password@host`) must not reach logs or error messages.
@@ -196,11 +199,17 @@ class Settings(BaseSettings):
             problems.append(f"{_env('secret_key')} is required when {_env('role')}={self.role}")
         if self.secret_key is not None:
             try:
-                decode_key(self.secret_key.get_secret_value())
+                key = decode_key(self.secret_key.get_secret_value())
             except ValueError as error:
                 problems.append(
                     f"{_env('secret_key')}: {error}; create one with `openssl rand -base64 32`"
                 )
+            else:
+                if self.cookie_secure and key == decode_key(DEVELOPMENT_SECRET_KEY):
+                    problems.append(
+                        f"{_env('secret_key')} is the development key from the repository; "
+                        "create one with `openssl rand -base64 32`"
+                    )
         if (self.admin_username is None) != (self.admin_password is None):
             problems.append(
                 f"{_env('admin_username')} and {_env('admin_password')} must be set together"
