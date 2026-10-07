@@ -30,6 +30,7 @@ uv run pytest -m integration     # needs Postgres, Garage, Meilisearch, OCR prog
 uv run pytest -m "not docling"   # without the slow Docling tests
 uv run python -m papiq.composition   # validate PAPIQ_ configuration
 uv run python -m papiq.composition migrate   # bring the configured database to the newest schema
+uv run python -m papiq.composition api       # serve the REST API until SIGTERM
 uv run python -m papiq.composition worker    # run the worker until SIGTERM
 ```
 
