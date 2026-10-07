@@ -375,21 +375,40 @@ async def test_drawers(api: Api) -> None:
 # --- master data and users ----------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("kind", ["contacts", "document-types", "tags"])
+MASTER_DATA = {
+    "contacts": {"name": "X"},
+    "document-types": {"name": "X"},
+    "tags": {"name": "X"},
+    "attributes": {"name": "X", "data_type": "text"},
+}
+NOT_ADMIN = {"owner": 403, "reader": 403, "writer": 403, "stranger": 403, "read_token": 403}
+
+
+@pytest.mark.parametrize("kind", MASTER_DATA)
 async def test_master_data_is_read_by_all_and_changed_by_admins(api: Api, kind: str) -> None:
     scene = await build_scene(api)
     url = f"{PREFIX}/{kind}"
     for actor in ("owner", "reader", "stranger", "admin", "read_token"):
         assert (await api.client.get(url, headers=scene.headers[actor])).status_code == 200
-    for actor, status in {"owner": 403, "stranger": 403, **DENIED}.items():
-        response = await api.client.post(url, json={"name": "X"}, headers=scene.headers[actor])
+    for actor in DENIED:
+        assert (await api.client.get(url, headers=scene.headers[actor])).status_code == 401
+    body = MASTER_DATA[kind]
+    for actor, status in {**NOT_ADMIN, **DENIED}.items():
+        response = await api.client.post(url, json=body, headers=scene.headers[actor])
         assert response.status_code == status, actor
-    created = await api.client.post(url, json={"name": "X"}, headers=scene.headers["admin"])
+    created = await api.client.post(url, json=body, headers=scene.headers["admin"])
     assert created.status_code == 201
     item = f"{url}/{created.json()['id']}"
-    for method, body in (("PATCH", {"name": "Y"}), ("DELETE", None)):
-        response = await api.client.request(method, item, json=body, headers=scene.headers["owner"])
-        assert response.status_code == 403
+    for actor in ("owner", "reader", "stranger", "read_token"):
+        assert (await api.client.get(item, headers=scene.headers[actor])).status_code == 200
+    for method, change in (("PATCH", {"name": "Y"}), ("DELETE", None)):
+        for actor, status in {**NOT_ADMIN, **DENIED}.items():
+            response = await api.client.request(
+                method, item, json=change, headers=scene.headers[actor]
+            )
+            assert response.status_code == status, (method, actor)
+    renamed = await api.client.patch(item, json={"name": "Y"}, headers=scene.headers["admin"])
+    assert renamed.status_code == 200
     assert (await api.client.delete(item, headers=scene.headers["admin"])).status_code == 204
 
 
@@ -411,10 +430,11 @@ async def test_users_are_managed_by_admins(api: Api) -> None:
         ("DELETE", f"{target}/oidc", None),
         ("DELETE", target, None),
     ]:
-        response = await api.client.request(
-            method, path, json=body, headers=scene.headers["reader"]
-        )
-        assert response.status_code == 403, (method, path)
+        for actor, status in {**NOT_ADMIN, **DENIED}.items():
+            response = await api.client.request(
+                method, path, json=body, headers=scene.headers[actor]
+            )
+            assert response.status_code == status, (method, path, actor)
     account = (await api.client.get(target, headers=scene.headers["admin"])).json()
     assert account["has_password"] is True and account["totp_enabled"] is False
     summary = (await api.client.get(target, headers=scene.headers["reader"])).json()
