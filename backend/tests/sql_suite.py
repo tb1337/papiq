@@ -5,6 +5,7 @@ Test modules subclass the suites and provide the fixtures `database` (migrated, 
 """
 
 import asyncio
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -250,6 +251,21 @@ class SqlAdapterSuite:
         assert [(row.subscriber, row.attempts) for row in rows] == [("failing", 2)]
         assert "handler failed" in rows[0].last_error
         assert rows[0].retry_at == NOW + timedelta(seconds=30)
+
+    async def test_dispatch_logs_at_info_level(
+        self,
+        uow_factory: UnitOfWorkFactory,
+        event_bus_factory: EventBusFactory,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Log records must not use reserved attribute names (`name` raised KeyError)."""
+        caplog.set_level(logging.INFO)
+        bus = event_bus_factory()
+        recorder = Recorder()
+        bus.subscribe("index", recorder)
+        await publish(uow_factory, received(1))
+        assert await bus.dispatch() == 1
+        assert any(record.message == "event subscription created" for record in caplog.records)
 
 
 class MigrationSuite:

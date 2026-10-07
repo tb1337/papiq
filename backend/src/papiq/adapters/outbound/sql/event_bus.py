@@ -141,7 +141,9 @@ class SqlEventBus:
                     .values(position=fresh[-1].seq)
                 )
                 if moved.rowcount == 0:
-                    log.warning("subscription moved by another dispatcher", extra={"name": name})
+                    log.warning(
+                        "subscription moved by another dispatcher", extra={"subscriber": name}
+                    )
                     return delivered
                 waiting = {
                     seq: failure
@@ -245,7 +247,7 @@ class SqlEventBus:
             )
             position = await _read_position(connection, name)
         assert position is not None
-        log.info("event subscription created", extra={"name": name, "position": position})
+        log.info("event subscription created", extra={"subscriber": name, "position": position})
         return position
 
 
