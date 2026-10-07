@@ -1,4 +1,4 @@
-"""`python -m papiq.composition [check | migrate | api | worker | evaluate]`.
+"""`python -m papiq.composition [check | migrate | api | worker | evaluate | reindex]`.
 
 - `check` (default): validate the configuration and print it without secrets.
 - `migrate`: validate, then bring the configured database to the newest schema. Run before the
@@ -10,6 +10,8 @@
   `evaluation`) against the configured language model, or with `--fake` against the set's fixed
   answers, and write a Markdown report. Exits with status 1 if a document came out green that
   should not have or with a wrong value, or a field changed without a passed check.
+- `reindex`: rebuild the search index from the database and the object store, in the foreground,
+  with progress. The search keeps working meanwhile. Needs `PAPIQ_MEILISEARCH_URL`.
 
 Exits with status 1 and a readable message when the configuration is invalid, the command does
 not fit `PAPIQ_ROLE`, or the migration or the service fails.
@@ -30,6 +32,7 @@ from papiq.composition.endpoints import external_endpoints
 from papiq.composition.errors import ConfigurationError
 from papiq.composition.evaluation import run_evaluation
 from papiq.composition.logging_setup import configure_logging
+from papiq.composition.reindex import run_reindex
 from papiq.composition.settings import Settings, find_unknown_variables, load_settings
 from papiq.composition.worker import run_worker
 
@@ -42,7 +45,7 @@ def main(argv: Sequence[str] = ()) -> int:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["check", "migrate", *SERVICES, "evaluate"],
+        choices=["check", "migrate", *SERVICES, "evaluate", "reindex"],
         default="check",
     )
     parser.add_argument("--fake", action="store_true", help="evaluate: use the fixed answers")
@@ -93,6 +96,9 @@ def main(argv: Sequence[str] = ()) -> int:
     if command == "evaluate":
         return _evaluate(settings, arguments)
 
+    if command == "reindex":
+        return _reindex(settings)
+
     if command == "migrate":
         try:
             asyncio.run(migrate_database(settings))
@@ -100,6 +106,25 @@ def main(argv: Sequence[str] = ()) -> int:
             log.exception("database migration failed", db_type=settings.db_type)
             return 1
         log.info("database migrated", db_type=settings.db_type)
+    return 0
+
+
+def _reindex(settings: Settings) -> int:
+    log = structlog.get_logger("papiq.composition")
+    try:
+        result = asyncio.run(run_reindex(settings, progress=True))
+    except ConfigurationError as error:
+        print(error, file=sys.stderr)
+        return 1
+    except Exception:
+        log.exception("rebuilding the search index failed")
+        return 1
+    log.info(
+        "reindex finished",
+        documents=result.documents,
+        queued=result.queued,
+        removed=result.removed,
+    )
     return 0
 
 

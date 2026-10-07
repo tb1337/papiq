@@ -154,6 +154,19 @@ class Settings(BaseSettings):
     meilisearch_task_timeout: Seconds = timedelta(minutes=2)
     # Languages of the documents (ISO 639-3 codes joined by `+`), for tokenising.
     search_locales: Annotated[str, Field(pattern=r"^[a-z]{3}(\+[a-z]{3})*$")] = "deu+eng"
+    # Hybrid search: the weight of the meaning against the words (0: words only, 1: meaning
+    # only) when a request does not say; the wait for the embedding of a query, after which
+    # the search falls back to the words.
+    search_semantic_ratio: Annotated[float, Field(ge=0, le=1)] = 0.5
+    search_embed_timeout: Seconds = timedelta(seconds=5)
+    # Indexing: characters of text per document; the text is cut into sections of about
+    # `search_chunk_size` characters that get a vector each, at most `search_max_chunks`.
+    search_max_text: Annotated[int, Field(ge=1000, le=10_000_000)] = 200_000
+    search_chunk_size: Annotated[int, Field(ge=100, le=100_000)] = 1500
+    search_max_chunks: Annotated[int, Field(ge=1, le=100)] = 8
+    # The index is compared with the database this often; a rebuild may take this long.
+    search_reconcile_interval: Seconds = timedelta(hours=6)
+    search_rebuild_timeout: Seconds = timedelta(hours=6)
 
     # Language model and embeddings: OpenAI-compatible endpoints (Ollama, cloud).
     # The base URL includes the version path, e.g. `http://ollama:11434/v1`.
@@ -175,6 +188,10 @@ class Settings(BaseSettings):
     embedding_timeout: Seconds = timedelta(minutes=1)
     # Length of the vectors (`bge-m3`: 1024); the search index needs it to be set up.
     embedding_dimensions: Annotated[int, Field(ge=1, le=65535)] | None = None
+    # Some models want a hint in front of the text (e5: `query:` and `passage:`); a space
+    # separates it from the text.
+    embedding_query_prefix: str | None = None
+    embedding_document_prefix: str | None = None
 
     # Classification: a field is accepted (ok) from this confidence on; an existing contact is
     # suggested from the second.

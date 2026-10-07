@@ -32,6 +32,7 @@ from papiq.adapters.outbound.memory import (
     MemoryDatabase,
     MemoryEventBus,
     MemoryObjectStore,
+    MemorySearchIndex,
     MemoryUnitOfWorkFactory,
 )
 from papiq.adapters.outbound.ocrmypdf import OcrmypdfEngine
@@ -71,10 +72,12 @@ from papiq.core.services.classification.steps import (
 )
 from papiq.core.services.documents import DocumentService
 from papiq.core.services.drawers import DrawerService
+from papiq.core.services.indexing import IndexingPolicy, IndexingService
 from papiq.core.services.maintenance import MaintenanceService
 from papiq.core.services.master_data import MasterDataService
 from papiq.core.services.oidc import OidcService
 from papiq.core.services.pipeline import PipelineService, PlaceholderStep, RetryPolicy, StepExecutor
+from papiq.core.services.search import SearchPolicy, SearchService
 from papiq.core.services.steps import OcrStep, ParseStep
 from papiq.core.services.users import UserService
 
@@ -341,7 +344,7 @@ def build_memory_container(clock: Clock | None = None) -> Container:
         cipher=FakeCipher(),
         totp=FakeTotp(),
         oidc=None,
-        search_index=None,
+        search_index=MemorySearchIndex(),
         language_model=None,
         embeddings=None,
     )
@@ -359,6 +362,8 @@ class Services:
     documents: DocumentService
     pipeline: PipelineService
     maintenance: MaintenanceService
+    indexing: IndexingService | None  # with a search index
+    search: SearchService | None  # with a search index
 
 
 # Time a step job may take beyond its time limit: downloads, uploads, preview, bookkeeping.
@@ -375,6 +380,24 @@ def policy_of(settings: Settings) -> ClassificationPolicy:
     )
 
 
+def _prefix(value: str | None) -> str:
+    return "" if not value else value + " "
+
+
+def indexing_policy_of(settings: Settings) -> IndexingPolicy:
+    return IndexingPolicy(
+        max_text=settings.search_max_text,
+        chunk_size=settings.search_chunk_size,
+        max_chunks=settings.search_max_chunks,
+        document_prefix=_prefix(settings.embedding_document_prefix),
+        reconcile_interval=settings.search_reconcile_interval,
+        # An indexing job may embed and write up to three times (see `IndexingService`).
+        job_lease=3 * (settings.embedding_timeout + settings.meilisearch_task_timeout)
+        + LEASE_MARGIN,
+        rebuild_lease=settings.search_rebuild_timeout,
+    )
+
+
 def build_services(container: Container, settings: Settings | None = None) -> Services:
     """The use cases; tuning (retries, time limits, cleanup) from `settings`, or the defaults.
 
@@ -384,6 +407,7 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
     """
     settings = settings or Settings.model_construct()
     uow, clock, store = container.unit_of_work, container.clock, container.object_store
+    index, embeddings = container.search_index, container.embeddings
     executors: dict[Step, StepExecutor] = {step: PlaceholderStep() for step in PIPELINE[1:]}
     executors[Step.OCR] = OcrStep(store, container.ocr, container.previews)
     executors[Step.PARSE] = ParseStep(store, container.parser)
@@ -418,7 +442,7 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
         ),
         users=UserService(uow, clock, container.password_hasher),
         drawers=DrawerService(uow, clock),
-        master_data=MasterDataService(uow, clock),
+        master_data=MasterDataService(uow, clock, index_renames=index is not None),
         documents=DocumentService(uow, clock, store),
         pipeline=PipelineService(
             uow,
@@ -442,6 +466,25 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
             retention=settings.retention,
             session_idle=settings.session_idle_timeout,
             object_store=store,
+        ),
+        indexing=(
+            None
+            if index is None
+            else IndexingService(uow, clock, store, index, embeddings, indexing_policy_of(settings))
+        ),
+        search=(
+            None
+            if index is None
+            else SearchService(
+                uow,
+                index,
+                embeddings,
+                SearchPolicy(
+                    semantic_ratio=settings.search_semantic_ratio,
+                    embed_timeout=settings.search_embed_timeout,
+                    query_prefix=_prefix(settings.embedding_query_prefix),
+                ),
+            )
         ),
     )
 

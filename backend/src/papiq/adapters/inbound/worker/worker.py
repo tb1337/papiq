@@ -1,6 +1,7 @@
 """The worker service: runs background jobs, delivers events and keeps the cleanup scheduled.
 
-- `concurrency` job loops claim and run due jobs (the cleanup when due, else pipeline steps);
+- `concurrency` job loops claim and run due jobs (the cleanup when due, then search indexing,
+  else pipeline steps);
   a loop that finds nothing waits `poll_interval`.
 - One loop dispatches the outbox (`EventBus.dispatch`) every `dispatch_interval` while there is
   nothing to deliver, and at once again while there is.
@@ -19,6 +20,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from datetime import timedelta
 
 from papiq.core.ports import EventBus
+from papiq.core.services.indexing import IndexingService
 from papiq.core.services.maintenance import MaintenanceService
 from papiq.core.services.pipeline import PipelineService
 
@@ -38,9 +40,11 @@ class Worker:
         poll_interval: timedelta,
         dispatch_interval: timedelta,
         shutdown_timeout: timedelta,
+        indexing: IndexingService | None = None,
     ) -> None:
         self._pipeline = pipeline
         self._maintenance = maintenance
+        self._indexing = indexing
         self._bus = event_bus
         self._concurrency = concurrency
         self._poll = poll_interval
@@ -58,6 +62,8 @@ class Worker:
         """Run until `stop()`."""
         log.info("worker started", extra={"concurrency": self._concurrency})
         await self._maintenance.schedule()
+        if self._indexing is not None:
+            await self._indexing.schedule()
         loops = [
             *(
                 asyncio.create_task(self._loop(f"jobs-{n}", self._run_job, self._poll))
@@ -99,7 +105,11 @@ class Worker:
     async def _run_job(self) -> bool:
         # The cleanup first: it is due once per interval and would otherwise wait for a quiet
         # moment, which a long bulk ingest never has.
-        return await self._maintenance.run_next_job() or await self._pipeline.run_next_job()
+        return (
+            await self._maintenance.run_next_job()
+            or (self._indexing is not None and await self._indexing.run_next_job())
+            or await self._pipeline.run_next_job()
+        )
 
     async def _dispatch(self) -> bool:
         return await self._bus.dispatch() > 0
