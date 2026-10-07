@@ -15,6 +15,7 @@ from papiq.core.services.indexing import IndexingService
 from papiq.core.services.master_data import MasterDataService
 from papiq.core.services.oidc import OidcService
 from papiq.core.services.pipeline import PipelineService
+from papiq.core.services.rules import RuleService
 from papiq.core.services.search import SearchService
 from papiq.core.services.users import UserService
 
@@ -29,6 +30,7 @@ class ApiContext:
     master_data: MasterDataService
     pipeline: PipelineService
     documents: DocumentService
+    rules: RuleService
     event_bus: EventBus
     health_checks: Mapping[str, HealthCheck]
     max_upload_size: int

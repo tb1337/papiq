@@ -11,7 +11,7 @@ from typing import Protocol
 from uuid import UUID
 
 from papiq.core.domain import media_types
-from papiq.core.domain.documents import Document, DocumentChanges, Sha256
+from papiq.core.domain.documents import Channel, Document, DocumentChanges, Sha256
 from papiq.core.domain.errors import (
     ConcurrencyError,
     ConflictError,
@@ -147,6 +147,7 @@ class PipelineService:
         *,
         filename: str,
         drawer: DrawerId | None = None,
+        channel: Channel = Channel.API,
     ) -> Document:
         """Store the original, then create the document, its first events and the OCR job in
         one transaction.
@@ -157,6 +158,7 @@ class PipelineService:
         owner already has is rejected with DuplicateDocumentError, also if the same file arrives
         twice at the same moment. An
         original that is stored already (another owner has the same file) is not stored again.
+        `channel`: how the document arrived (for rules).
         """
         started = self._clock.now()
         sha256 = file.sha256
@@ -177,7 +179,7 @@ class PipelineService:
         )
         try:
             return await self._create(
-                actor, target, sha256, file.path, filename, media_type, result, started
+                actor, target, sha256, file.path, filename, media_type, channel, result, started
             )
         except ConflictError:
             # The same file arrived twice at the same moment; the other upload won.
@@ -195,6 +197,7 @@ class PipelineService:
         path: Path,
         filename: str,
         media_type: str,
+        channel: Channel,
         result: StepResult,
         started: datetime,
     ) -> Document:
@@ -216,6 +219,7 @@ class PipelineService:
                 media_type=media_type,
                 result=result,
                 now=now,
+                channel=channel,
             )
             await uow.documents.add(document)
             await self._log(uow, document.id, Step.RECEIVE, 1, result, started, now)

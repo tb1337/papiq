@@ -21,7 +21,7 @@ from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from papiq.adapters.inbound.rest.auth import PROTECTED, CurrentUser
+from papiq.adapters.inbound.rest.auth import PROTECTED, Authenticated, CurrentUser
 from papiq.adapters.inbound.rest.context import Context
 from papiq.adapters.inbound.rest.problems import problem_responses
 from papiq.adapters.inbound.rest.schemas import (
@@ -39,7 +39,7 @@ from papiq.adapters.inbound.rest.schemas import (
 )
 from papiq.adapters.inbound.rest.upload import FILE_FIELD, read_upload
 from papiq.core.domain.attributes import AttributeDefinition, AttributeType, Money, Url
-from papiq.core.domain.documents import UNSET, DocumentChanges
+from papiq.core.domain.documents import UNSET, Channel, DocumentChanges
 from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import ValidationError
 from papiq.core.domain.ids import (
@@ -74,6 +74,7 @@ _LANES: dict[LaneFilter, Lane | None] = {
 }
 
 DRAWER_FIELD = "drawer_id"
+CHANNEL_FIELD = "channel"
 
 
 def document_filter(
@@ -111,6 +112,15 @@ _UPLOAD_BODY: dict[str, Any] = {
                             "type": "string",
                             "format": "uuid",
                             "description": "Target drawer; default: the owner's default drawer.",
+                        },
+                        CHANNEL_FIELD: {
+                            "type": "string",
+                            "enum": [Channel.MIGRATION.value],
+                            "description": (
+                                "The intake channel, for rules. Default: `web` with a session, "
+                                "`api` with an API token; `migration` for imports from another "
+                                "system."
+                            ),
                         },
                     },
                 }
@@ -153,13 +163,16 @@ _UPLOAD_BODY: dict[str, Any] = {
     openapi_extra=_UPLOAD_BODY,
 )
 async def upload(
-    request: Request, response: Response, user: CurrentUser, context: Context
+    request: Request, response: Response, principal: Authenticated, context: Context
 ) -> DocumentAccepted:
-    received = await read_upload(request, max_size=context.max_upload_size, fields=[DRAWER_FIELD])
+    received = await read_upload(
+        request, max_size=context.max_upload_size, fields=[DRAWER_FIELD, CHANNEL_FIELD]
+    )
     try:
         drawer = _drawer(received.fields.get(DRAWER_FIELD))
+        channel = _channel(received.fields.get(CHANNEL_FIELD), session=principal.session)
         document = await context.pipeline.receive(
-            user, received.file, filename=received.filename, drawer=drawer
+            principal.id, received.file, filename=received.filename, drawer=drawer, channel=channel
         )
     finally:
         await asyncio.shield(asyncio.to_thread(received.file.path.unlink, missing_ok=True))
@@ -499,3 +512,12 @@ def _drawer(value: str | None) -> DrawerId | None:
         return DrawerId(UUID(value.strip()))
     except ValueError:
         raise ValidationError(f"drawer_id: not a UUID: {value!r}") from None
+
+
+def _channel(value: str | None, *, session: object | None) -> Channel:
+    """The intake channel: as the caller says (`migration` only), else by credentials."""
+    if value is None or not value.strip():
+        return Channel.API if session is None else Channel.WEB
+    if value.strip() != Channel.MIGRATION.value:
+        raise ValidationError(f"channel: only '{Channel.MIGRATION.value}' can be given")
+    return Channel.MIGRATION

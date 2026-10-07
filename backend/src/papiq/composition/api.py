@@ -62,6 +62,7 @@ def build_app(
             cookie_secure=settings.cookie_secure,
             pipeline=services.pipeline,
             documents=services.documents,
+            rules=services.rules,
             event_bus=container.event_bus,
             health_checks=health_checks(container),
             optional_checks=frozenset({"search"}),
