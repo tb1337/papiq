@@ -243,6 +243,9 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
   lists, filters and pages only ever contain readable documents (the repository query follows
   the permission rule, and the service checks every result again). Yellow, red and unfinished
   documents are the owner's only.
+- Every answer below `/auth` carries `Cache-Control: no-store` (CSRF tokens, TOTP secrets,
+  recovery codes, API tokens), also errors and redirects. The OpenAPI document, the docs and
+  `/health` stay public.
 - Request bodies other than uploads are bounded by `PAPIQ_REQUEST_MAX_SIZE`, by
   `Content-Length` before anything is read and by the bytes received otherwise (`413`);
   FastAPI would otherwise read a JSON body of any size into memory.
