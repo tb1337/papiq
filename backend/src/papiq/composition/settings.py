@@ -96,7 +96,7 @@ class Settings(BaseSettings):
     api_port: Annotated[int, Field(ge=1, le=65535)] = 8000
     upload_max_size: Annotated[ByteSize, Field(gt=0)] = ByteSize(100 * 1024 * 1024)
     # Addresses of reverse proxies whose X-Forwarded-For is trusted (comma-separated, `*` for
-    # all); the client address counts failed sign-ins per source.
+    # all); the client address counts failed sign-ins per source. Required with secure cookies.
     forwarded_allow_ips: str | None = None
 
     # Identity. The secret key (32 bytes, base64) encrypts TOTP secrets; required for the API.
@@ -183,6 +183,13 @@ class Settings(BaseSettings):
                 "s3_access_key_id",
                 "s3_secret_access_key",
             )
+        if self.role in ("all", "api") and self.cookie_secure and self.forwarded_allow_ips is None:
+            problems.append(
+                f"{_env('forwarded_allow_ips')} is required with {_env('cookie_secure')}=true: "
+                "secure cookies need a TLS-terminating proxy in front of Papiq; name its address "
+                "(`*` only if the proxy sets X-Forwarded-For itself, replacing what clients "
+                f"send). For development over plain HTTP set {_env('cookie_secure')}=false"
+            )
         if self.role in ("all", "api") and self.secret_key is None:
             problems.append(f"{_env('secret_key')} is required when {_env('role')}={self.role}")
         if self.secret_key is not None:
@@ -206,7 +213,8 @@ class Settings(BaseSettings):
             if (getattr(self, url) is None) != (getattr(self, model) is None):
                 problems.append(f"{_env(url)} and {_env(model)} must be set together")
         if problems:
-            raise ValueError("\n".join(problems))
+            # Not a ValueError: pydantic would wrap it; the message is complete already.
+            raise ConfigurationError(_report(problems))
         return self
 
     @property
@@ -333,18 +341,17 @@ def load_settings() -> Settings:
         raise ConfigurationError(_format(error)) from error
 
 
+def _report(lines: list[str]) -> str:
+    return "Invalid configuration:\n" + "\n".join(f"  - {line}" for line in lines)
+
+
 def _format(error: ValidationError) -> str:
     secrets = set(_secret_fields(Settings))
     lines: list[str] = []
     for item in error.errors():
-        location = item["loc"]
-        if not location:
-            # Raised by the consistency check: the message already names the variables.
-            lines += item["msg"].removeprefix("Value error, ").splitlines()
-            continue
-        name = str(location[0])
+        name = str(item["loc"][0])
         line = f"{_env(name)}: {item['msg']}"
         if name not in secrets:
             line += f" (got {_mask_userinfo(repr(item['input']))})"
         lines.append(line)
-    return "Invalid configuration:\n" + "\n".join(f"  - {line}" for line in lines)
+    return _report(lines)

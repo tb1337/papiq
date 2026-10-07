@@ -3,8 +3,13 @@
 Sign-in (`login`):
 - Unknown and deactivated users are checked against a dummy hash, so all failures take the
   same time and give the same answer.
-- Failures are counted per account (also for unknown names) and per source address; while
-  either is blocked, attempts are refused with TooManyAttemptsError before anything is checked.
+- Failures are counted per account (also for unknown names) and per source address. While the
+  account is blocked, every attempt is refused with TooManyAttemptsError before anything is
+  checked (also a correct password: this stops guessing TOTP codes). While the source is
+  blocked, the attempt is still checked: a correct sign-in succeeds and counts nothing, a wrong
+  one is refused with TooManyAttemptsError instead of AuthenticationError and does not count
+  for the source again. So failures from an address that many users share (a proxy, NAT)
+  never lock out those who know their password.
 - With TOTP on, a correct password without a code raises SecondFactorRequiredError; the caller
   sends password and code (or a recovery code) again. A wrong code counts as a failure.
 - Success starts a new session (never reuses one) and clears the account's failures. A password
@@ -153,7 +158,10 @@ class AuthService:
         """Sign in with password and, if the account has TOTP, a code or a recovery code."""
         now = self._clock.now()
         throttles = _throttles(username, source)
-        await self._check_throttles(throttles, now)
+        await self._check_throttles(throttles[:1], now)
+        source_blocked = await self._blocked(throttles[1:], now)
+        if source_blocked is not None:
+            throttles = throttles[:1]  # count for the account only
 
         async with self._uow() as uow:
             user = await uow.users.find_by_username(username)
@@ -164,6 +172,8 @@ class AuthService:
         )
         if user is None or credential is None or stored is None or not valid or not user.active:
             await self._fail(throttles, now)
+            if source_blocked is not None:
+                raise TooManyAttemptsError(source_blocked)
             raise AuthenticationError("invalid username or password")
 
         if credential.totp_enabled and not code and not recovery_code:
@@ -172,7 +182,13 @@ class AuthService:
         if self._hasher.needs_rehash(stored):
             new_hash = await self._hasher.hash(normalize_password(password))
         return await self._complete_login(
-            user.id, throttles, now, code=code, recovery_code=recovery_code, new_hash=new_hash
+            user.id,
+            throttles,
+            now,
+            code=code,
+            recovery_code=recovery_code,
+            new_hash=new_hash,
+            source_blocked=source_blocked,
         )
 
     async def _complete_login(
@@ -184,6 +200,7 @@ class AuthService:
         code: str | None,
         recovery_code: str | None,
         new_hash: str | None,
+        source_blocked: timedelta | None,
     ) -> SignedIn:
         async with self._uow() as uow:
             user = await uow.users.get(user_id)
@@ -200,6 +217,8 @@ class AuthService:
                 await uow.commit()
         if not valid:
             await self._fail(throttles, now)
+            if source_blocked is not None:
+                raise TooManyAttemptsError(source_blocked)
             raise AuthenticationError("invalid one-time code")
         log.info("signed in", extra={"user_id": str(user.id), "method": "password"})
         return signed_in
@@ -460,6 +479,16 @@ class AuthService:
         if self._dummy_hash is None:
             self._dummy_hash = await self._hasher.hash(secrets.token_urlsafe(16))
         return self._dummy_hash
+
+    async def _blocked(
+        self, throttles: Sequence[tuple[str, ThrottleRule]], now: datetime
+    ) -> timedelta | None:
+        """How long the first blocked of `throttles` stays blocked, if one is."""
+        try:
+            await self._check_throttles(throttles, now)
+        except TooManyAttemptsError as error:
+            return error.retry_after
+        return None
 
     async def _check_throttles(
         self, throttles: Sequence[tuple[str, ThrottleRule]], now: datetime
