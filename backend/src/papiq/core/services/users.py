@@ -75,7 +75,7 @@ class UserService:
         now = self._clock.now()
         async with self._uow() as uow:
             await _require_admin(uow, actor)
-            user = await _add_user(uow, username, role, now)
+            user = await add_user(uow, username, role, now)
             if password_hash is not None:
                 await uow.credentials.add(
                     Credential(
@@ -212,7 +212,7 @@ class UserService:
                 return None
             if await uow.users.find_by_username(username) is not None:
                 raise ConflictError(f"username '{username}' belongs to a user who is no admin")
-            user = await _add_user(uow, username, Role.ADMIN, now)
+            user = await add_user(uow, username, Role.ADMIN, now)
             await uow.credentials.add(
                 Credential(user_id=user.id, password_hash=password_hash, password_changed_at=now)
             )
@@ -235,7 +235,8 @@ async def _require_admin(uow: UnitOfWork, actor: UserId) -> User:
     return user
 
 
-async def _add_user(uow: UnitOfWork, username: str, role: Role, now: datetime) -> User:
+async def add_user(uow: UnitOfWork, username: str, role: Role, now: datetime) -> User:
+    """Add a user with their default drawer; ConflictError if the name is taken."""
     user = User.create(username=username, role=role, now=now)
     if await uow.users.find_by_username(user.username) is not None:
         raise ConflictError(f"username '{user.username}' is taken")

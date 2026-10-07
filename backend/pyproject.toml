@@ -131,7 +131,7 @@ forbidden_modules = [
 
 # Libraries without type information.
 [[tool.mypy.overrides]]
-module = ["aioboto3.*", "aiobotocore.*", "botocore.*", "pypdfium2.*"]
+module = ["aioboto3.*", "aiobotocore.*", "authlib.*", "botocore.*", "pypdfium2.*"]
 ignore_missing_imports = true
 
 # PyTorch (pulled in by Docling) in its CPU variant only, on Linux (devcontainer, image).

@@ -365,3 +365,47 @@ def test_inconsistent_identity_settings(monkeypatch: pytest.MonkeyPatch) -> None
     )
     assert "PAPIQ_ADMIN_USERNAME and PAPIQ_ADMIN_PASSWORD must be set together" in message
     assert "PAPIQ_SESSION_MAX_AGE must not be shorter than PAPIQ_SESSION_IDLE_TIMEOUT" in message
+
+
+OIDC = {
+    "PAPIQ_OIDC_ISSUER": "https://idp.example/realms/home",
+    "PAPIQ_OIDC_CLIENT_ID": "papiq",
+    "PAPIQ_OIDC_CLIENT_SECRET": "client-secret",
+    "PAPIQ_PUBLIC_URL": "https://papiq.example",
+}
+
+
+def test_oidc_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert not load_settings().oidc_enabled
+    set_env(monkeypatch, OIDC | {"PAPIQ_OIDC_AUTO_CREATE": "true"})
+    settings = load_settings()
+    assert settings.oidc_enabled
+    assert settings.oidc_issuer == "https://idp.example/realms/home"  # exactly as given
+    assert settings.oidc_scopes == "openid profile email"
+    assert settings.oidc_display_name == "Single sign-on"
+    assert settings.oidc_auto_create is True
+    assert settings.describe()["oidc_client_secret"] == "**********"
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        (
+            {"PAPIQ_OIDC_ISSUER": "https://idp.example"},
+            "PAPIQ_OIDC_ISSUER, PAPIQ_OIDC_CLIENT_ID, PAPIQ_OIDC_CLIENT_SECRET must be set "
+            "together",
+        ),
+        (OIDC | {"PAPIQ_OIDC_ISSUER": "http://idp.example"}, "PAPIQ_OIDC_ISSUER: must be an https"),
+        (OIDC | {"PAPIQ_OIDC_SCOPES": "profile email"}, "PAPIQ_OIDC_SCOPES: must contain 'openid'"),
+        (
+            {key: value for key, value in OIDC.items() if key != "PAPIQ_PUBLIC_URL"},
+            "PAPIQ_PUBLIC_URL is required with OIDC",
+        ),
+    ],
+)
+def test_inconsistent_oidc_settings(
+    monkeypatch: pytest.MonkeyPatch, values: dict[str, str], expected: str
+) -> None:
+    message = error_message(monkeypatch, values)
+    assert expected in message
+    assert "client-secret" not in message

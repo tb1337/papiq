@@ -79,6 +79,19 @@ whether it is active. A deactivated user has no rights and cannot authenticate.
 - The first admin: `PAPIQ_ADMIN_USERNAME` and `PAPIQ_ADMIN_PASSWORD[_FILE]` create an admin at
   API start while there is no admin at all. Afterwards they are ignored; they never change an
   existing account. A name taken by another user stops the start.
+- OpenID Connect (optional, one provider; `core/services/oidc.py`, `adapters/outbound/oidc`):
+  Authorization Code Flow with PKCE (S256) through Authlib over httpx2. State, nonce, verifier
+  and the target path are sealed (AES-GCM, `PAPIQ_SECRET_KEY`) into a value for a short-lived
+  cookie, which binds the flow to the browser that began it; it expires after ten minutes. The
+  ID token is checked with joserfc: signature with an asymmetric algorithm the provider
+  announces, issuer, audience (`azp` with several), expiry and issue time (one minute of
+  leeway), nonce. Endpoints and keys come from the discovery document, whose issuer must equal
+  `PAPIQ_OIDC_ISSUER`; keys are fetched again once for an unknown key id. Accounts are linked by
+  issuer and subject, never by e-mail; a signed-in user links their account through the same
+  flow. Unknown accounts are refused unless `PAPIQ_OIDC_AUTO_CREATE` creates a user named by
+  `PAPIQ_OIDC_USERNAME_CLAIM` (a taken name is refused). No local TOTP is asked for: the
+  provider handles that. Unlinking needs a local password. The redirect after the callback goes
+  only to a path on this site.
 - The cleanup job also removes ended sessions and failure counts past their window.
 
 ## Persistence
@@ -256,6 +269,12 @@ Durations are seconds (`30`, `1.5`) or ISO 8601 (`PT1H`, `P7D`) and must be posi
 | `PAPIQ_SESSION_IDLE_TIMEOUT` | `P1D` | A session ends when unused this long |
 | `PAPIQ_SESSION_MAX_AGE` | `P30D` | A session ends this long after sign-in; not shorter than the idle timeout |
 | `PAPIQ_COOKIE_SECURE` | `true` | `false` only for development over plain HTTP |
+| `PAPIQ_PUBLIC_URL` | unset | Where browsers reach Papiq (`https://papiq.example.org`); required with OIDC |
+| `PAPIQ_OIDC_ISSUER`, `_CLIENT_ID`, `_CLIENT_SECRET` | unset | OpenID Connect; set all three or none; the issuer is https and compared exactly; secret *secret*. Register `<PAPIQ_PUBLIC_URL>/api/v1/auth/oidc/callback` as redirect URI |
+| `PAPIQ_OIDC_SCOPES` | `openid profile email` | Must contain `openid` |
+| `PAPIQ_OIDC_DISPLAY_NAME` | `Single sign-on` | Name of the provider for the sign-in page |
+| `PAPIQ_OIDC_AUTO_CREATE` | `false` | Create a user at the first sign-in of an unknown provider account |
+| `PAPIQ_OIDC_USERNAME_CLAIM` | `preferred_username` | ID token claim that names such a user |
 | `PAPIQ_WORKER_CONCURRENCY` | `2` | Jobs at the same time |
 | `PAPIQ_WORKER_POLL_INTERVAL` | `1` | Seconds between looks for due jobs |
 | `PAPIQ_WORKER_SHUTDOWN_TIMEOUT` | `30` | Seconds running jobs get to finish on SIGTERM |
