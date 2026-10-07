@@ -1,7 +1,13 @@
+from collections.abc import Collection
+
 from papiq.core.domain.documents import Document, DocumentChanges, Unset
 from papiq.core.domain.errors import NotFoundError, PermissionDeniedError
 from papiq.core.domain.ids import DocumentId, DrawerId, UserId
-from papiq.core.domain.permissions import can_move_document, is_document_owner
+from papiq.core.domain.permissions import (
+    can_move_document,
+    can_read_document,
+    is_document_owner,
+)
 from papiq.core.domain.pipeline import StepRun
 from papiq.core.ports import Clock, UnitOfWork, UnitOfWorkFactory
 from papiq.core.services._access import (
@@ -29,9 +35,30 @@ class DocumentService:
             await load_actor(uow, actor)
             return await uow.documents.list_visible_to(actor)
 
-    async def processing_log(self, actor: UserId, id: DocumentId) -> list[StepRun]:
+    async def filter_readers(self, id: DocumentId, candidates: Collection[UserId]) -> set[UserId]:
+        """Those of `candidates` who may read the document now; none if it does not exist.
+        For pushing events to users (SSE), so it reads the current state."""
+        if not candidates:
+            return set()
         async with self._uow() as uow:
-            await readable_document(uow, await load_actor(uow, actor), id)
+            document = await uow.documents.find(id)
+            if document is None:
+                return set()
+            drawer = await uow.drawers.get(document.drawer_id)
+            readers: set[UserId] = set()
+            for candidate in set(candidates):
+                user = await uow.users.find(candidate)
+                if user is not None and can_read_document(user, document, drawer):
+                    readers.add(candidate)
+            return readers
+
+    async def processing_log(self, actor: UserId, id: DocumentId) -> list[StepRun]:
+        """Owner only: the log may hold technical details of failed runs."""
+        async with self._uow() as uow:
+            user = await load_actor(uow, actor)
+            document, _ = await readable_document(uow, user, id)
+            if not is_document_owner(user, document):
+                raise PermissionDeniedError(f"only the owner reads the processing log of {id}")
             return await uow.processing_log.list_for(id)
 
     async def update_metadata(

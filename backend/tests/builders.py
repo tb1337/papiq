@@ -1,12 +1,16 @@
 """Test data builders shared by unit tests and contract suites."""
 
+import tempfile
+import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 from papiq.core.domain.documents import Document, Sha256
 from papiq.core.domain.drawers import Drawer
 from papiq.core.domain.ids import DrawerId, UserId
 from papiq.core.domain.pipeline import Outcome, Step, StepResult
 from papiq.core.domain.users import Role, User
+from papiq.core.services.pipeline import IncomingFile
 
 NOW = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 
@@ -84,3 +88,14 @@ def processed(
     result = run_pipeline(document(owner, in_drawer, content=content), results)
     result.pull_events()
     return result
+
+
+# Received files of the tests; the directory is removed when the test process ends.
+_INCOMING = tempfile.TemporaryDirectory(prefix="papiq-tests-")
+
+
+def incoming(data: bytes) -> IncomingFile:
+    """`data` as a received file, ready for `PipelineService.receive`."""
+    path = Path(_INCOMING.name) / uuid.uuid4().hex
+    path.write_bytes(data)
+    return IncomingFile.of(path)

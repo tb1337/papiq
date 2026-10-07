@@ -1,17 +1,24 @@
 """Ingest and processing: receive a document, run its steps as jobs, retry and reprocess."""
 
+import asyncio
+import hashlib
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Protocol
 from uuid import UUID
 
+from papiq.core.domain import media_types
 from papiq.core.domain.documents import Document, Sha256
 from papiq.core.domain.errors import (
     ConcurrencyError,
+    ConflictError,
     DuplicateDocumentError,
     PermissionDeniedError,
+    UnprocessableDocumentError,
+    UnsupportedMediaTypeError,
 )
 from papiq.core.domain.ids import DocumentId, DrawerId, JobId, UserId
 from papiq.core.domain.jobs import Job, JobStatus
@@ -21,6 +28,7 @@ from papiq.core.domain.pipeline import PIPELINE, Outcome, Step, StepResult, Step
 from papiq.core.domain.users import User
 from papiq.core.ports import Clock, ObjectStore, UnitOfWork, UnitOfWorkFactory
 from papiq.core.services._access import load_actor, readable_document, visible_drawer
+from papiq.core.services.objects import original_key
 
 log = logging.getLogger(__name__)
 
@@ -35,7 +43,8 @@ class StepExecutor(Protocol):
     """Does the work of one pipeline step (OCR, parsing, classification, ...).
 
     Runs outside any transaction and may take long. Returns what the step decided; raising an
-    exception counts as a failed attempt and is retried.
+    exception counts as a failed attempt and is retried, except UnprocessableDocumentError,
+    which fails the step at once.
     """
 
     async def run(self, document: Document) -> StepResult: ...
@@ -65,9 +74,25 @@ class RetryPolicy:
 DEFAULT_RETRY = RetryPolicy()
 
 
-def original_key(sha256: Sha256) -> str:
-    """Object key of an original; identical content is stored once."""
-    return f"originals/{sha256.hex}"
+@dataclass(frozen=True)
+class IncomingFile:
+    """A received file in a local temporary location. The receiving adapter computes the
+    SHA-256 and size while it writes the file, so the content is read only once."""
+
+    path: Path
+    sha256: Sha256
+    size: int
+
+    @classmethod
+    def of(cls, path: Path) -> "IncomingFile":
+        """Hash an existing file (blocking; for tools and tests)."""
+        digest = hashlib.sha256()
+        size = 0
+        with path.open("rb") as file:
+            while chunk := file.read(1024 * 1024):
+                digest.update(chunk)
+                size += len(chunk)
+        return cls(path=path, sha256=Sha256(digest.hexdigest()), size=size)
 
 
 class PipelineService:
@@ -98,25 +123,59 @@ class PipelineService:
     async def receive(
         self,
         actor: UserId,
-        data: bytes,
+        file: IncomingFile,
         *,
         filename: str,
-        media_type: str,
         drawer: DrawerId | None = None,
     ) -> Document:
         """Store the original, then create the document, its first events and the OCR job in
-        one transaction. Without `drawer` the document goes to the owner's default drawer;
-        otherwise the owner needs write access to it. A file the owner already has is rejected
-        with DuplicateDocumentError; if the same file arrives twice at the same moment, the
-        later commit fails with ConflictError instead."""
+        one transaction.
+
+        The media type is recognised from the content; an unsupported type raises
+        UnsupportedMediaTypeError and nothing is stored. Without `drawer` the document goes to
+        the owner's default drawer; otherwise the owner needs write access to it. A file the
+        owner already has is rejected with DuplicateDocumentError, also if the same file arrives
+        twice at the same moment. An
+        original that is stored already (another owner has the same file) is not stored again.
+        """
         started = self._clock.now()
-        sha256 = Sha256.of(data)
+        sha256 = file.sha256
+        media_type = media_types.detect(await asyncio.to_thread(_head, file.path))
+        if media_type is None:
+            raise UnsupportedMediaTypeError(
+                f"unsupported file type; supported: {', '.join(media_types.SUPPORTED)}"
+            )
         async with self._uow() as uow:
             target = await self._target_drawer(uow, actor, drawer, sha256)
-        await self._store.put(original_key(sha256), data, content_type=media_type)
+        key = original_key(sha256)
+        if not await self._store.exists(key):
+            await self._store.upload(key, file.path, content_type=media_type)
 
+        result = StepResult(
+            outcome=Outcome.OK,
+            output={"sha256": sha256.hex, "size": file.size, "media_type": media_type},
+        )
+        try:
+            return await self._create(actor, target, sha256, filename, media_type, result, started)
+        except ConflictError:
+            # The same file arrived twice at the same moment; the other upload won.
+            async with self._uow() as uow:
+                existing = await uow.documents.find_by_sha256(actor, sha256)
+            if existing is None:
+                raise
+            raise DuplicateDocumentError(existing.id) from None
+
+    async def _create(
+        self,
+        actor: UserId,
+        target: DrawerId,
+        sha256: Sha256,
+        filename: str,
+        media_type: str,
+        result: StepResult,
+        started: datetime,
+    ) -> Document:
         now = self._clock.now()
-        result = StepResult(outcome=Outcome.OK, output={"sha256": sha256.hex, "size": len(data)})
         async with self._uow() as uow:
             # Check again: rights or a duplicate may have changed while the file was stored.
             await self._target_drawer(uow, actor, target, sha256)
@@ -184,53 +243,68 @@ class PipelineService:
         completion. A job whose step is no longer due (stale) is just completed. A job that
         was claimed more often than the retry policy allows (the worker died or overran its
         lease each time) fails without running again.
+
+        If the caller is cancelled after the claim (the worker shuts down), the job is released
+        at once to run again, instead of waiting for its lease to expire; the interrupted claim
+        does not count as an attempt.
         """
         async with self._uow() as uow:
             job = await uow.jobs.claim(now=self._clock.now(), lease=self._lease, kinds=[STEP_JOB])
             await uow.commit()
         if job is None:
             return False
+        try:
+            await self._run_claimed(job)
+        except asyncio.CancelledError:
+            await asyncio.shield(self._release(job))
+            raise
+        return True
 
+    async def _run_claimed(self, job: Job) -> None:
         try:
             document_id, step, run = _parse_payload(job.payload)
         except (KeyError, TypeError, ValueError) as error:
             log.error("invalid step job", extra={"job_id": str(job.id), "error": str(error)})
             await self._finish(job, error=f"invalid payload: {error}")
-            return True
+            return
         async with self._uow() as uow:
             document = await uow.documents.find(document_id)
         if document is None or not document.is_awaiting(step, run):
             await self._finish(job)
-            return True
+            return
 
         started = self._clock.now()
-        if job.attempts > self._retry.max_attempts:
-            reason = f"step did not finish in {self._retry.max_attempts} attempts (lease expired)"
+        if job.tries > self._retry.max_attempts:
+            reason = (
+                f"step did not finish in {self._retry.max_attempts} attempts "
+                "(the worker died or ran out of time each time)"
+            )
             await self._record(job, document_id, step, run, _failed(reason), started)
-            return True
+            return
         try:
             result = await self._executors[step].run(document)
+        except UnprocessableDocumentError as error:
+            result = _failed(str(error))
         except Exception as error:
             reason = f"{type(error).__name__}: {error}"
-            retry_at = self._retry.next_run(job.attempts, self._clock.now())
+            retry_at = self._retry.next_run(job.tries, self._clock.now())
             log.warning(
                 "pipeline step failed",
-                extra={"document_id": str(document_id), "step": step, "attempt": job.attempts},
+                extra={"document_id": str(document_id), "step": step, "attempt": job.tries},
                 exc_info=True,
             )
             if retry_at is None:
                 await self._record(job, document_id, step, run, _failed(reason), started)
-                return True
+                return
             try:
                 async with self._uow() as uow:
                     await uow.jobs.reschedule(job, run_at=retry_at, error=reason)
                     await uow.commit()
             except ConcurrencyError:
                 log.warning("lost the claim of a step job", extra={"job_id": str(job.id)})
-            return True
+            return
 
         await self._record(job, document_id, step, run, result, started)
-        return True
 
     async def _record(
         self,
@@ -282,6 +356,24 @@ class PipelineService:
                 await uow.jobs.complete(job)
             await uow.outbox.add(document.pull_events())
             await uow.commit()
+
+    async def _release(self, job: Job) -> None:
+        """Let an interrupted job run again at once. Nothing to do if it was finished or lost
+        its claim meanwhile."""
+        try:
+            async with self._uow() as uow:
+                await uow.jobs.release(
+                    job, run_at=self._clock.now(), error="interrupted: the worker stopped"
+                )
+                await uow.commit()
+        except ConcurrencyError:
+            pass
+        except Exception:
+            log.warning(
+                "could not release an interrupted job",
+                extra={"job_id": str(job.id)},
+                exc_info=True,
+            )
 
     async def _still_claimed(self, job: Job) -> bool:
         async with self._uow() as uow:
@@ -342,6 +434,11 @@ async def _enqueue_step(uow: UnitOfWork, document: Document, now: datetime) -> J
 
 def _failed(reason: str) -> StepResult:
     return StepResult(outcome=Outcome.FAILED, reason=reason)
+
+
+def _head(path: Path) -> bytes:
+    with path.open("rb") as file:
+        return file.read(media_types.SNIFF_SIZE)
 
 
 def _parse_payload(payload: JsonObject) -> tuple[DocumentId, Step, int]:

@@ -1,1 +1,5 @@
-"""Worker: runs pipeline jobs from the job queue."""
+"""Inbound adapter: the worker service (jobs, event delivery, cleanup)."""
+
+from papiq.adapters.inbound.worker.worker import Worker
+
+__all__ = ["Worker"]

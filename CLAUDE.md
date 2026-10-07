@@ -26,9 +26,12 @@ uv run mypy
 uv run lint-imports
 uv run pytest                    # all tests; integration tests skip if a service is unreachable
 uv run pytest -m unit            # no external services
-uv run pytest -m integration     # needs Postgres, Garage or Meilisearch
+uv run pytest -m integration     # needs Postgres, Garage, Meilisearch, OCR programs, Docling models
+uv run pytest -m "not docling"   # without the slow Docling tests
 uv run python -m papiq.composition   # validate PAPIQ_ configuration
 uv run python -m papiq.composition migrate   # bring the configured database to the newest schema
+uv run python -m papiq.composition api       # serve the REST API until SIGTERM
+uv run python -m papiq.composition worker    # run the worker until SIGTERM
 ```
 
 Run all five checks before every commit.

@@ -1,8 +1,9 @@
-from collections.abc import Callable
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+from typing import Protocol
 
 import pytest
 
+from papiq.adapters.outbound.memory import ManualClock
 from papiq.core.domain.events import (
     EVENT_TYPES,
     DocumentDeleted,
@@ -15,8 +16,21 @@ from papiq.core.domain.events import (
 )
 from papiq.core.domain.ids import DocumentId, DrawerId, new_id
 from papiq.core.domain.pipeline import Lane, Outcome, Step
-from papiq.core.ports import EventBus, UnitOfWorkFactory
+from papiq.core.ports import Clock, DeliveryRetry, EventBus, UnitOfWorkFactory
+from papiq.core.ports.event_bus import DEFAULT_DELIVERY_RETRY
 from tests.builders import NOW
+
+# Failed deliveries are due again at once: most tests are about what is delivered, not when.
+IMMEDIATE = DeliveryRetry(delay=timedelta(0))
+FAR_FUTURE = datetime(2100, 1, 1, tzinfo=UTC)
+
+
+class EventBusFactory(Protocol):
+    """Creates a bus on the same database as `uow_factory`."""
+
+    def __call__(
+        self, *, clock: Clock | None = None, retry: DeliveryRetry = DEFAULT_DELIVERY_RETRY
+    ) -> EventBus: ...
 
 
 class Recorder:
@@ -48,8 +62,8 @@ class EventBusContract:
     database)."""
 
     @pytest.fixture
-    def event_bus(self, event_bus_factory: Callable[[], EventBus]) -> EventBus:
-        return event_bus_factory()
+    def event_bus(self, event_bus_factory: EventBusFactory) -> EventBus:
+        return event_bus_factory(retry=IMMEDIATE)
 
     async def test_committed_events_are_delivered_once(
         self, uow_factory: UnitOfWorkFactory, event_bus: EventBus
@@ -179,7 +193,7 @@ class EventBusContract:
         assert recorder.received == [late, early]
 
     async def test_a_new_bus_resumes_the_subscription(
-        self, uow_factory: UnitOfWorkFactory, event_bus_factory: Callable[[], EventBus]
+        self, uow_factory: UnitOfWorkFactory, event_bus_factory: EventBusFactory
     ) -> None:
         before = event_bus_factory()
         first = Recorder()
@@ -221,3 +235,109 @@ class EventBusContract:
         event_bus.subscribe("test", Recorder())
         with pytest.raises(ValueError, match="already"):
             event_bus.subscribe("test", Recorder())
+
+    # --- delays and limits of repeated deliveries -----------------------------------------------
+
+    async def test_a_failed_delivery_waits_with_growing_delay_then_is_given_up(
+        self, uow_factory: UnitOfWorkFactory, event_bus_factory: EventBusFactory
+    ) -> None:
+        clock = ManualClock(NOW)
+        bus = event_bus_factory(
+            clock=clock, retry=DeliveryRetry(max_attempts=3, delay=timedelta(seconds=10))
+        )
+        attempts = 0
+
+        async def failing(event: DomainEvent) -> None:
+            nonlocal attempts
+            attempts += 1
+            raise RuntimeError("receiver down")
+
+        steady = Recorder()
+        bus.subscribe("failing", failing)
+        bus.subscribe("steady", steady)
+        await publish(uow_factory, received())
+        await bus.dispatch()
+        assert attempts == 1
+
+        for wait, expected in [(9, 1), (1, 2), (19, 2), (1, 3), (3600, 3)]:
+            clock.advance(timedelta(seconds=wait))
+            await bus.dispatch()
+            assert attempts == expected, f"after {wait} s more"
+        assert len(steady.received) == 1
+
+    async def test_a_late_success_ends_the_repetitions(
+        self, uow_factory: UnitOfWorkFactory, event_bus_factory: EventBusFactory
+    ) -> None:
+        clock = ManualClock(NOW)
+        bus = event_bus_factory(clock=clock, retry=DeliveryRetry(delay=timedelta(seconds=1)))
+        flaky = Recorder(failures=2)
+        bus.subscribe("flaky", flaky)
+        event = received()
+        await publish(uow_factory, event)
+        for _ in range(5):
+            await bus.dispatch()
+            clock.advance(timedelta(minutes=1))
+        assert flaky.received == [event]
+
+    # --- purge ----------------------------------------------------------------------------------
+
+    async def test_purge_removes_events_every_subscriber_has_handled(
+        self, uow_factory: UnitOfWorkFactory, event_bus: EventBus
+    ) -> None:
+        index, webhooks = Recorder(), Recorder(failures=1)
+        event_bus.subscribe("index", index)
+        event_bus.subscribe("webhooks", webhooks)
+        await event_bus.dispatch()  # creates the subscriptions
+        first, second = received(1), received(2)
+        await publish(uow_factory, first, second)
+        assert await event_bus.purge(before=FAR_FUTURE) == 0  # not delivered yet
+
+        await event_bus.dispatch()  # `first` failed for webhooks and waits
+        assert await event_bus.purge(before=datetime(2000, 1, 1, tzinfo=UTC)) == 0
+        assert await event_bus.purge(before=FAR_FUTURE) == 1
+        await event_bus.dispatch()
+        assert webhooks.received == [second, first]
+        assert await event_bus.purge(before=FAR_FUTURE) == 1
+        assert await event_bus.purge(before=FAR_FUTURE) == 0
+
+        later = received(3)
+        await publish(uow_factory, later)
+        await event_bus.dispatch()
+        assert index.received == [first, second, later]
+
+    async def test_purge_counts_given_up_events_as_handled(
+        self, uow_factory: UnitOfWorkFactory, event_bus_factory: EventBusFactory
+    ) -> None:
+        bus = event_bus_factory(retry=DeliveryRetry(max_attempts=1))
+
+        async def failing(event: DomainEvent) -> None:
+            raise RuntimeError("receiver down")
+
+        bus.subscribe("failing", failing)
+        await bus.dispatch()  # creates the subscription
+        await publish(uow_factory, received())
+        await bus.dispatch()
+        assert await bus.purge(before=FAR_FUTURE) == 1
+
+    async def test_without_subscriptions_every_event_is_handled(
+        self, uow_factory: UnitOfWorkFactory, event_bus: EventBus
+    ) -> None:
+        await publish(uow_factory, received(1), received(2))
+        assert await event_bus.purge(before=FAR_FUTURE) == 2
+
+    async def test_purged_events_do_not_disturb_a_resumed_subscription(
+        self, uow_factory: UnitOfWorkFactory, event_bus_factory: EventBusFactory
+    ) -> None:
+        first = event_bus_factory(retry=IMMEDIATE)
+        first.subscribe("index", Recorder())
+        await publish(uow_factory, received(1))
+        await first.dispatch()
+        assert await first.purge(before=FAR_FUTURE) == 1
+
+        later = received(2)
+        await publish(uow_factory, later)
+        second = event_bus_factory(retry=IMMEDIATE)
+        recorder = Recorder()
+        second.subscribe("index", recorder)
+        await second.dispatch()
+        assert recorder.received == [later]

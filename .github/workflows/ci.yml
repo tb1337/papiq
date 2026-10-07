@@ -74,22 +74,6 @@ jobs:
             exit 1
           fi
 
-  # The dev image must build for the architectures developers use (Apple Silicon: arm64).
-  dev-image:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: dev
-          platforms: linux/amd64,linux/arm64
-          push: false
-          cache-from: type=gha,scope=dev-image
-          cache-to: type=gha,scope=dev-image,mode=max
-
   # Starts the devcontainer services like "Reopen in Container" does, runs Garage's init a
   # second time (must be repeatable) and runs the whole test suite inside the dev container.
   devcontainer:
@@ -98,8 +82,20 @@ jobs:
       COMPOSE: docker compose -f .devcontainer/compose.yml
     steps:
       - uses: actions/checkout@v5
+      # The dev image with a layer cache: only a change of the Dockerfile or the lock file
+      # (Docling models) rebuilds it. The tag is the image name Compose uses for `dev`.
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: dev
+          load: true
+          tags: papiq-dev-dev:latest
+          cache-from: type=gha,scope=devcontainer
+          cache-to: type=gha,scope=devcontainer,mode=max
       - name: Start the services
-        run: $COMPOSE up -d --build dev
+        # Uses the image built above; builds only the small garage-init image.
+        run: $COMPOSE up -d dev
       - name: Run Garage init a second time
         run: $COMPOSE run --rm garage-init
       - name: Run all checks and tests in the dev container
