@@ -76,7 +76,8 @@ async def delete_drawer(id: UUID, user: CurrentUser, context: Context) -> None:
     summary="Share a drawer",
     description=(
         OWNER_ONLY + " Sets the user's access: `read` or `read_write`. The default drawer "
-        "cannot be shared (422). Other users see documents in it once they are green."
+        "cannot be shared (422); an unknown or deactivated user is not found (404). Other "
+        "users see documents in it once they are green."
     ),
     response_model=DrawerOut,
     responses=problem_responses(401, 403, 404, 422),
