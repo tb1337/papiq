@@ -121,6 +121,9 @@ async def test_openapi_lists_every_endpoint(api: Api) -> None:
         (f"{PREFIX}/documents/{{id}}/log", "get"),
         (f"{PREFIX}/documents/{{id}}/retry", "post"),
         (f"{PREFIX}/documents/{{id}}/reprocess", "post"),
+        (f"{PREFIX}/documents/{{id}}/review", "get"),
+        (f"{PREFIX}/documents/{{id}}/confirm", "post"),
+        (f"{PREFIX}/inbox", "get"),
         (f"{PREFIX}/events", "get"),
         (f"{PREFIX}/health", "get"),
     }
@@ -168,6 +171,9 @@ async def test_schemas_of_status_log_and_events(api: Api) -> None:
     reprocess = schemas["ReprocessRequest"]["properties"]["from_step"]
     step = schemas[reprocess["$ref"].rsplit("/", 1)[1]]
     assert "receive" not in step["enum"]
+    resume = schemas["ConfirmRequest"]["properties"]["resume_at"]
+    resume_at = schemas[resume["$ref"].rsplit("/", 1)[1]]
+    assert resume_at["enum"] == ["extract_attributes", "apply_rules"]
     events = schema["paths"][f"{PREFIX}/events"]["get"]["responses"]["200"]["content"]
     stream = events["text/event-stream"]
     assert stream["schema"]["type"] == "string"

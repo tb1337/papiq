@@ -205,6 +205,14 @@ GREEN: dict[str, tuple[Call, dict[str, int]]] = {
         doc("POST", "/reprocess", {"from_step": "parse"}),
         {"owner": 202, "reader": 403, "writer": 403, "read_token": 403, **HIDDEN, **DENIED},
     ),
+    "review": (
+        doc("GET", "/review"),
+        {"owner": 200, "reader": 403, "writer": 403, "read_token": 200, **HIDDEN, **DENIED},
+    ),
+    "confirm": (
+        doc("POST", "/confirm", {}),
+        {"owner": 409, "reader": 403, "writer": 403, "read_token": 403, **HIDDEN, **DENIED},
+    ),
 }
 
 CASES = [
@@ -224,7 +232,16 @@ async def test_green_document(api: Api, operation: str, actor: str, expected: in
         assert response.json()["detail"] == f"document {scene.green} not found"
 
 
-HIDDEN_FROM_SHARES = ["read", "original", "archive", "preview", "change", "delete", "log"]
+HIDDEN_FROM_SHARES = [
+    "read",
+    "original",
+    "archive",
+    "preview",
+    "change",
+    "delete",
+    "log",
+    "review",
+]
 
 
 @pytest.mark.parametrize("which", ["yellow", "processing"])
@@ -243,6 +260,25 @@ async def test_yellow_and_processing_documents_are_the_owners_only(
         assert owner.status_code == 404  # not made yet
     else:
         assert owner.status_code in {200, 204}, owner.text
+
+
+async def test_the_inbox_is_the_owners(api: Api) -> None:
+    scene = await build_scene(api)
+    for actor, expected in [("owner", [scene.yellow]), ("read_token", [scene.yellow])] + [
+        (actor, []) for actor in ("reader", "writer", "stranger", "admin")
+    ]:
+        response = await api.client.get(f"{PREFIX}/inbox", headers=scene.headers[actor])
+        assert response.status_code == 200, response.text
+        assert [item["document"]["id"] for item in response.json()["items"]] == expected, actor
+    for actor in ("expired_token", "revoked_token", "deactivated"):
+        response = await api.client.get(f"{PREFIX}/inbox", headers=scene.headers[actor])
+        assert response.status_code == 401
+    confirm = doc("POST", "/confirm", {})
+    for actor in ("reader", "writer", "stranger", "admin"):
+        response = await confirm(scene, api.client, scene.headers[actor], "yellow")
+        assert response.status_code == 404, actor
+    denied = await confirm(scene, api.client, scene.headers["read_token"], "yellow")
+    assert denied.status_code == 403
 
 
 async def test_hidden_and_missing_documents_look_alike(api: Api) -> None:
