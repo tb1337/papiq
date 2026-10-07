@@ -51,6 +51,7 @@ def make_app(
             indexing=services.indexing,
             pipeline=services.pipeline,
             documents=services.documents,
+            rules=services.rules,
             event_bus=container.event_bus,
             health_checks={"database": ok, "object_store": ok},
             max_upload_size=max_upload,

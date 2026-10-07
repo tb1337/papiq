@@ -16,10 +16,11 @@ from papiq.core.domain.attributes import (
     Url,
 )
 from papiq.core.domain.classification import FieldCheck
-from papiq.core.domain.documents import Document
+from papiq.core.domain.documents import Channel, Document
 from papiq.core.domain.drawers import Drawer, ShareLevel
 from papiq.core.domain.identity import ApiToken, ExternalIdentity, LoginMethod, TokenScope
 from papiq.core.domain.ids import UserId
+from papiq.core.domain.json_value import JsonValue
 from papiq.core.domain.master_data import MasterData
 from papiq.core.domain.pipeline import (
     PIPELINE,
@@ -28,6 +29,15 @@ from papiq.core.domain.pipeline import (
     ProcessingStatus,
     Step,
     StepRun,
+)
+from papiq.core.domain.rules import (
+    ConditionField,
+    Operator,
+    Rule,
+    RuleScope,
+    RuleVersion,
+    Trigger,
+    definition_to_json,
 )
 from papiq.core.domain.users import Role, User
 from papiq.core.services.inbox import InboxItem, OpenStep, Review, StepReview
@@ -96,6 +106,7 @@ class DocumentDetails(BaseModel):
                     "title": "Electricity bill March",
                     "original_filename": "scan_0042.pdf",
                     "media_type": "application/pdf",
+                    "channel": "web",
                     "owner_id": "01999d5e-1111-7c1e-b6a3-2f4d5e6f7a8b",
                     "drawer_id": "01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b",
                     "access": "read_write",
@@ -127,6 +138,9 @@ class DocumentDetails(BaseModel):
     title: str
     original_filename: str
     media_type: str = Field(examples=["application/pdf"])
+    channel: Channel = Field(
+        description="How the document arrived: `web` (web UI), `api`, `migration`."
+    )
     owner_id: UUID
     drawer_id: UUID
     access: ShareLevel = Field(description="What the caller may do: read, or read and write.")
@@ -148,6 +162,7 @@ class DocumentDetails(BaseModel):
             title=document.title,
             original_filename=document.original_filename,
             media_type=document.media_type,
+            channel=document.channel,
             owner_id=document.owner_id,
             drawer_id=document.drawer_id,
             access=access,
@@ -920,3 +935,263 @@ class ShareIn(BaseModel):
     )
 
     level: ShareLevel
+
+
+# --- rules --------------------------------------------------------------------------------------
+# Shape and types are checked here; operators by field and data type, values, patterns and the
+# actions a scope allows are checked by the core (`definition_from_json`), references by the
+# rule service.
+
+
+class ConditionSchema(BaseModel):
+    """`field` `op` `value`. Operators by field: contact, document_type: `is`, `in`, `present`,
+    `missing`; tags: `contains` (this tag), `in` (one of), `present` (any), `missing` (none);
+    channel: `is`, `in`; text: `contains`, `matches` (regular expression); document_date and
+    number, amount, date attributes: `is`, `gt`, `lt`, `present`, `missing`; text and link
+    attributes: `is`, `in`, `contains`, `matches`, `present`, `missing`; choice: `is`, `in`,
+    `present`, `missing`; boolean: `is`, `present`, `missing`."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {"field": "contact", "op": "is", "value": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b"},
+                {
+                    "field": "text",
+                    "op": "matches",
+                    "value": "Rechnung\\s+Nr",
+                    "case_sensitive": True,
+                },
+            ]
+        },
+    )
+
+    field: ConditionField
+    op: Operator
+    value: str | bool | MoneyValue | list[str] | None = Field(
+        default=None,
+        description=(
+            "None for `present` and `missing`, a list for `in`, otherwise one value: an id, a "
+            "channel, a text or pattern, a date `YYYY-MM-DD`, or an attribute value as in "
+            "`attributes` of a document."
+        ),
+    )
+    attribute_id: UUID | None = Field(default=None, description="For `field` `attribute` only.")
+    case_sensitive: bool = Field(
+        default=False, description="For `matches` only; other comparisons ignore case."
+    )
+
+
+class AllGroup(BaseModel):
+    """All items hold (and); `not` turns the result around."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    all: list["ConditionSchema | AllGroup | AnyGroup"] = Field(min_length=1, max_length=50)
+    negate: bool = Field(default=False, alias="not")
+
+
+class AnyGroup(BaseModel):
+    """At least one item holds (or); `not` turns the result around."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    any: list["ConditionSchema | AllGroup | AnyGroup"] = Field(min_length=1, max_length=50)
+    negate: bool = Field(default=False, alias="not")
+
+
+class SetDrawerAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["set_drawer"]
+    drawer_id: UUID = Field(description="A drawer the rule's owner may write to (user rules).")
+
+
+class SetContactAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["set_contact"]
+    contact_id: UUID
+
+
+class SetDocumentTypeAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["set_document_type"]
+    document_type_id: UUID
+
+
+class SetTitleAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["set_title"]
+    template: str = Field(
+        max_length=500,
+        examples=["{contact} {document_type} {document_date}"],
+        description=(
+            "Placeholders: `{contact}`, `{document_type}`, `{document_date}` (YYYY-MM-DD), "
+            "`{filename}` (the original's name without extension); empty when unknown."
+        ),
+    )
+
+
+class AddTagsAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["add_tags"]
+    tag_ids: list[UUID] = Field(min_length=1, max_length=100)
+
+
+class RemoveTagsAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["remove_tags"]
+    tag_ids: list[UUID] = Field(min_length=1, max_length=100)
+
+
+class SetAttributeAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["set_attribute"]
+    attribute_id: UUID
+    value: AttributeJson
+
+
+class ForceReviewAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["force_review"]
+    reason: str = Field(max_length=500, examples=["check the contract term"])
+
+
+ActionSchema = Annotated[
+    SetDrawerAction
+    | SetContactAction
+    | SetDocumentTypeAction
+    | SetTitleAction
+    | AddTagsAction
+    | RemoveTagsAction
+    | SetAttributeAction
+    | ForceReviewAction,
+    Field(discriminator="type"),
+]
+
+_RULE_EXAMPLE: dict[str, Any] = {
+    "name": "Telekom to household",
+    "priority": 100,
+    "triggers": ["ingest", "change"],
+    "conditions": {
+        "all": [
+            {"field": "contact", "op": "is", "value": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b"},
+            {"field": "text", "op": "contains", "value": "Rechnung"},
+        ]
+    },
+    "actions": [
+        {"type": "set_drawer", "drawer_id": "01999d5e-5555-7c1e-b6a3-2f4d5e6f7a8b"},
+        {"type": "add_tags", "tag_ids": ["01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b"]},
+    ],
+}
+
+
+class RuleDefinitionIn(BaseModel):
+    """The content of a rule; changing it makes a new version."""
+
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [_RULE_EXAMPLE]})
+
+    name: str = Field(min_length=1, max_length=200)
+    priority: int = Field(
+        default=100,
+        ge=0,
+        le=1000,
+        description=(
+            "Higher first; the order of the log and of suggestions. Conflicts are never "
+            "decided by priority."
+        ),
+    )
+    triggers: list[Trigger] = Field(
+        default_factory=lambda: list(Trigger),
+        min_length=1,
+        description="`ingest`: when a document arrives; `change`: when a person changes it.",
+    )
+    conditions: AllGroup | AnyGroup = Field(
+        description="Nested at most 5 deep, at most 50 conditions."
+    )
+    actions: list[ActionSchema] = Field(min_length=1, max_length=20)
+
+    def to_json(self) -> JsonValue:
+        data: JsonValue = self.model_dump(mode="json", by_alias=True, exclude_defaults=True)
+        return data
+
+
+class RuleCreate(RuleDefinitionIn):
+    model_config = ConfigDict(
+        extra="forbid", json_schema_extra={"examples": [{"scope": "user", **_RULE_EXAMPLE}]}
+    )
+
+    scope: RuleScope = Field(
+        default=RuleScope.USER,
+        description=(
+            "`user`: the caller's rule, for their documents. `global` (admins): for every "
+            "document, but only tags, attributes and reviews."
+        ),
+    )
+
+    def to_json(self) -> JsonValue:
+        data: JsonValue = self.model_dump(
+            mode="json", by_alias=True, exclude_defaults=True, exclude={"scope"}
+        )
+        return data
+
+
+class RulePatch(BaseModel):
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [{"enabled": False}]})
+
+    enabled: bool
+
+
+class _RuleDefinitionOut(BaseModel):
+    name: str
+    priority: int
+    triggers: list[Trigger]
+    conditions: AllGroup | AnyGroup
+    actions: list[ActionSchema]
+
+
+class RuleVersionOut(_RuleDefinitionOut):
+    rule_id: UUID
+    version: int = Field(description="Counts from 1; every change of the content adds one.")
+    created_at: datetime
+    created_by: UUID | None
+
+    @classmethod
+    def of(cls, version: RuleVersion) -> "RuleVersionOut":
+        return cls.model_validate(
+            {
+                **definition_to_json(version.definition),
+                "rule_id": version.rule_id,
+                "version": version.number,
+                "created_at": version.created_at,
+                "created_by": version.created_by,
+            }
+        )
+
+
+class RuleOut(_RuleDefinitionOut):
+    id: UUID
+    scope: RuleScope
+    owner_id: UUID | None = Field(description="None for global rules.")
+    version: int = Field(description="The current version.")
+    enabled: bool
+    disabled_reason: str | None = Field(
+        description="Why the rule was disabled automatically, e.g. a contact it uses was deleted."
+    )
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def of(cls, rule: Rule) -> "RuleOut":
+        return cls.model_validate(
+            {
+                **definition_to_json(rule.definition),
+                "id": rule.id,
+                "scope": rule.scope,
+                "owner_id": rule.owner_id,
+                "version": rule.current.number,
+                "enabled": rule.enabled,
+                "disabled_reason": rule.disabled_reason,
+                "created_at": rule.created_at,
+                "updated_at": rule.updated_at,
+            }
+        )
