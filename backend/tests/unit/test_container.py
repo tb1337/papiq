@@ -236,7 +236,11 @@ async def test_memory_container_runs_the_core() -> None:
     )
     while await services.pipeline.run_next_job():
         pass
-    assert (await services.documents.get(user.id, document.id)).lane is Lane.GREEN
+    # Without a language model, a person classifies the document.
+    stored = await services.documents.get(user.id, document.id)
+    assert stored.lane is Lane.YELLOW
+    log = await services.documents.processing_log(user.id, document.id)
+    assert "no language model" in (log[3].result.reason or "")
     await built.event_bus.dispatch()
     assert received[0].type == "document.received"
     assert received[-1].type == "document.lane_changed"

@@ -63,6 +63,11 @@ from papiq.core.ports import (
     UnitOfWorkFactory,
 )
 from papiq.core.services.auth import AuthService, SessionPolicy
+from papiq.core.services.classification.steps import (
+    ClassificationPolicy,
+    ClassifyStep,
+    ExtractAttributesStep,
+)
 from papiq.core.services.documents import DocumentService
 from papiq.core.services.drawers import DrawerService
 from papiq.core.services.maintenance import MaintenanceService
@@ -345,14 +350,24 @@ LEASE_MARGIN = timedelta(minutes=2)
 def build_services(container: Container, settings: Settings | None = None) -> Services:
     """The use cases; tuning (retries, time limits, cleanup) from `settings`, or the defaults.
 
-    OCR and parsing run on the container's adapters. Classification, attributes, rules and
-    filing are placeholders until M5 and M7.
+    OCR, parsing, classification and attribute extraction run on the container's adapters
+    (without a language model, classification is uncertain). Rules and filing are
+    placeholders until M7.
     """
     settings = settings or Settings.model_construct()
     uow, clock, store = container.unit_of_work, container.clock, container.object_store
     executors: dict[Step, StepExecutor] = {step: PlaceholderStep() for step in PIPELINE[1:]}
     executors[Step.OCR] = OcrStep(store, container.ocr, container.previews)
     executors[Step.PARSE] = ParseStep(store, container.parser)
+    policy = ClassificationPolicy(
+        accept=settings.confidence_threshold,
+        suggest_contact=settings.contact_suggest_threshold,
+        input_budget=settings.llm_input_budget,
+        max_tags=settings.llm_max_tags,
+    )
+    model = container.language_model
+    executors[Step.CLASSIFY] = ClassifyStep(uow, store, model, clock, policy)
+    executors[Step.EXTRACT_ATTRIBUTES] = ExtractAttributesStep(uow, store, model, clock, policy)
     auth = AuthService(
         uow,
         clock,

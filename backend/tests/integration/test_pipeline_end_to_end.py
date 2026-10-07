@@ -59,6 +59,7 @@ async def test_scan_and_photo_are_processed(
         previews=PdfiumPreviewRenderer(),
     )
     services = build_services(container)
+    builders.skip_classification(services.pipeline)
     owner = builders.user()
     async with container.unit_of_work() as uow:
         await uow.users.add(owner)
