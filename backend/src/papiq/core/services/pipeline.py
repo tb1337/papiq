@@ -1,5 +1,6 @@
 """Ingest and processing: receive a document, run its steps as jobs, retry and reprocess."""
 
+import asyncio
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from papiq.core.domain.errors import (
     ConcurrencyError,
     DuplicateDocumentError,
     PermissionDeniedError,
+    UnprocessableDocumentError,
 )
 from papiq.core.domain.ids import DocumentId, DrawerId, JobId, UserId
 from papiq.core.domain.jobs import Job, JobStatus
@@ -21,6 +23,7 @@ from papiq.core.domain.pipeline import PIPELINE, Outcome, Step, StepResult, Step
 from papiq.core.domain.users import User
 from papiq.core.ports import Clock, ObjectStore, UnitOfWork, UnitOfWorkFactory
 from papiq.core.services._access import load_actor, readable_document, visible_drawer
+from papiq.core.services.objects import original_key
 
 log = logging.getLogger(__name__)
 
@@ -35,7 +38,8 @@ class StepExecutor(Protocol):
     """Does the work of one pipeline step (OCR, parsing, classification, ...).
 
     Runs outside any transaction and may take long. Returns what the step decided; raising an
-    exception counts as a failed attempt and is retried.
+    exception counts as a failed attempt and is retried, except UnprocessableDocumentError,
+    which fails the step at once.
     """
 
     async def run(self, document: Document) -> StepResult: ...
@@ -63,11 +67,6 @@ class RetryPolicy:
 
 
 DEFAULT_RETRY = RetryPolicy()
-
-
-def original_key(sha256: Sha256) -> str:
-    """Object key of an original; identical content is stored once."""
-    return f"originals/{sha256.hex}"
 
 
 class PipelineService:
@@ -184,6 +183,9 @@ class PipelineService:
         completion. A job whose step is no longer due (stale) is just completed. A job that
         was claimed more often than the retry policy allows (the worker died or overran its
         lease each time) fails without running again.
+
+        If the caller is cancelled while the step runs (the worker shuts down), the job is
+        released at once to run again, instead of waiting for its lease to expire.
         """
         async with self._uow() as uow:
             job = await uow.jobs.claim(now=self._clock.now(), lease=self._lease, kinds=[STEP_JOB])
@@ -210,6 +212,11 @@ class PipelineService:
             return True
         try:
             result = await self._executors[step].run(document)
+        except asyncio.CancelledError:
+            await asyncio.shield(self._release(job))
+            raise
+        except UnprocessableDocumentError as error:
+            result = _failed(str(error))
         except Exception as error:
             reason = f"{type(error).__name__}: {error}"
             retry_at = self._retry.next_run(job.attempts, self._clock.now())
@@ -282,6 +289,16 @@ class PipelineService:
                 await uow.jobs.complete(job)
             await uow.outbox.add(document.pull_events())
             await uow.commit()
+
+    async def _release(self, job: Job) -> None:
+        try:
+            async with self._uow() as uow:
+                await uow.jobs.reschedule(
+                    job, run_at=self._clock.now(), error="interrupted: the worker stopped"
+                )
+                await uow.commit()
+        except Exception:
+            log.warning("could not release an interrupted job", extra={"job_id": str(job.id)})
 
     async def _still_claimed(self, job: Job) -> bool:
         async with self._uow() as uow:
