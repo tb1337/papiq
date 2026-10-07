@@ -221,6 +221,17 @@ async def test_bodies_and_answers_are_described(api: Api) -> None:
     assert login["requestBody"]["content"]["application/json"]
 
 
+async def test_refusals_are_described(api: Api) -> None:
+    """Every protected change may be refused (a `read` token, no CSRF header): 403."""
+    schema = await openapi(api)
+    for path, item in schema["paths"].items():
+        for method, operation in item.items():
+            if operation["security"] and method != "get":
+                assert "403" in operation["responses"], (path, method)
+    me = schema["paths"][f"{PREFIX}/auth/tokens"]["get"]
+    assert "403" in me["responses"]  # session only
+
+
 async def test_request_bodies_have_examples(api: Api) -> None:
     schema = await openapi(api)
     components = schema["components"]["schemas"]
