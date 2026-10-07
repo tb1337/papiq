@@ -26,10 +26,14 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
+from papiq.adapters.outbound.crypto import decode_key
 from papiq.composition.errors import ConfigurationError
 
 ENV_PREFIX = "PAPIQ_"
 FILE_SUFFIX = "_FILE"
+
+# The secret key of the devcontainer (`.devcontainer/dev.env`); public, so never for production.
+DEVELOPMENT_SECRET_KEY = "ZGV2LWtleS1kZXYta2V5LWRldi1rZXktZGV2LWtleS0="
 
 # Choices are written in lower case; `PAPIQ_ROLE=API` is accepted.
 _LOWERCASE_FIELDS = {"role", "log_format", "db_type", "storage_type"}
@@ -94,6 +98,34 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: Annotated[int, Field(ge=1, le=65535)] = 8000
     upload_max_size: Annotated[ByteSize, Field(gt=0)] = ByteSize(100 * 1024 * 1024)
+    # Every other request body (JSON).
+    request_max_size: Annotated[ByteSize, Field(gt=0)] = ByteSize(1024 * 1024)
+    # Addresses of reverse proxies whose X-Forwarded-For is trusted (comma-separated, `*` for
+    # all); the client address counts failed sign-ins per source. Required with secure cookies.
+    forwarded_allow_ips: str | None = None
+
+    # Identity. The secret key (32 bytes, base64) encrypts TOTP secrets; required for the API.
+    secret_key: SecretStr | None = None
+    # The first admin: created at API start while there is no admin at all.
+    admin_username: str | None = None
+    admin_password: SecretStr | None = None
+    session_idle_timeout: Seconds = timedelta(days=1)
+    session_max_age: Seconds = timedelta(days=30)
+    # `false` only for development over plain HTTP: the session cookie loses `Secure`.
+    cookie_secure: bool = True
+    # Where browsers reach Papiq (e.g. `https://papiq.example.org`); needed for OIDC.
+    public_url: AnyHttpUrl | None = None
+
+    # OpenID Connect (optional): one provider, Authorization Code Flow with PKCE.
+    oidc_issuer: str | None = None
+    oidc_client_id: str | None = None
+    oidc_client_secret: SecretStr | None = None
+    oidc_scopes: str = "openid profile email"
+    oidc_display_name: str = "Single sign-on"
+    # Create a local account at the first sign-in of an unknown provider account.
+    oidc_auto_create: bool = False
+    # The ID token claim that names a new account.
+    oidc_username_claim: str = "preferred_username"
 
     # Worker: background jobs, event delivery and cleanup.
     worker_concurrency: Annotated[int, Field(ge=1, le=64)] = 2
@@ -156,13 +188,66 @@ class Settings(BaseSettings):
                 "s3_access_key_id",
                 "s3_secret_access_key",
             )
+        if self.role in ("all", "api") and self.cookie_secure and self.forwarded_allow_ips is None:
+            problems.append(
+                f"{_env('forwarded_allow_ips')} is required with {_env('cookie_secure')}=true: "
+                "secure cookies need a TLS-terminating proxy in front of Papiq; name its address "
+                "(`*` only if the proxy sets X-Forwarded-For itself, replacing what clients "
+                f"send). For development over plain HTTP set {_env('cookie_secure')}=false"
+            )
+        if self.role in ("all", "api") and self.secret_key is None:
+            problems.append(f"{_env('secret_key')} is required when {_env('role')}={self.role}")
+        if self.secret_key is not None:
+            try:
+                key = decode_key(self.secret_key.get_secret_value())
+            except ValueError as error:
+                problems.append(
+                    f"{_env('secret_key')}: {error}; create one with `openssl rand -base64 32`"
+                )
+            else:
+                if self.cookie_secure and key == decode_key(DEVELOPMENT_SECRET_KEY):
+                    problems.append(
+                        f"{_env('secret_key')} is the development key from the repository; "
+                        "create one with `openssl rand -base64 32`"
+                    )
+        if (self.admin_username is None) != (self.admin_password is None):
+            problems.append(
+                f"{_env('admin_username')} and {_env('admin_password')} must be set together"
+            )
+        if self.session_max_age < self.session_idle_timeout:
+            problems.append(
+                f"{_env('session_max_age')} must not be shorter than {_env('session_idle_timeout')}"
+            )
+        problems += self._oidc_problems()
         for prefix in ("llm", "embedding"):
             url, model = f"{prefix}_base_url", f"{prefix}_model"
             if (getattr(self, url) is None) != (getattr(self, model) is None):
                 problems.append(f"{_env(url)} and {_env(model)} must be set together")
         if problems:
-            raise ValueError("\n".join(problems))
+            # Not a ValueError: pydantic would wrap it; the message is complete already.
+            raise ConfigurationError(_report(problems))
         return self
+
+    @property
+    def oidc_enabled(self) -> bool:
+        return self.oidc_issuer is not None
+
+    def _oidc_problems(self) -> list[str]:
+        names = ("oidc_issuer", "oidc_client_id", "oidc_client_secret")
+        given = [getattr(self, name) is not None for name in names]
+        if not any(given):
+            return []
+        if not all(given):
+            return [f"{', '.join(_env(name) for name in names)} must be set together"]
+        problems = []
+        assert self.oidc_issuer is not None
+        if not re.fullmatch(r"https://[^\s/?#]+(/[^\s?#]*)?", self.oidc_issuer):
+            problems.append(f"{_env('oidc_issuer')}: must be an https URL without query")
+        if "openid" not in self.oidc_scopes.split():
+            problems.append(f"{_env('oidc_scopes')}: must contain 'openid'")
+        if self.public_url is None:
+            problems.append(f"{_env('public_url')} is required with OIDC (for the redirect URI)")
+        return problems
 
     @classmethod
     def settings_customise_sources(
@@ -267,18 +352,17 @@ def load_settings() -> Settings:
         raise ConfigurationError(_format(error)) from error
 
 
+def _report(lines: list[str]) -> str:
+    return "Invalid configuration:\n" + "\n".join(f"  - {line}" for line in lines)
+
+
 def _format(error: ValidationError) -> str:
     secrets = set(_secret_fields(Settings))
     lines: list[str] = []
     for item in error.errors():
-        location = item["loc"]
-        if not location:
-            # Raised by the consistency check: the message already names the variables.
-            lines += item["msg"].removeprefix("Value error, ").splitlines()
-            continue
-        name = str(location[0])
+        name = str(item["loc"][0])
         line = f"{_env(name)}: {item['msg']}"
         if name not in secrets:
             line += f" (got {_mask_userinfo(repr(item['input']))})"
         lines.append(line)
-    return "Invalid configuration:\n" + "\n".join(f"  - {line}" for line in lines)
+    return _report(lines)

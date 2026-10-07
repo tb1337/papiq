@@ -10,18 +10,29 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 
 from papiq import __version__
+from papiq.adapters.inbound.rest import PREFIX
+from papiq.adapters.outbound.crypto import (
+    AesGcmCipher,
+    Argon2PasswordHasher,
+    PyotpTotp,
+    decode_key,
+)
 from papiq.adapters.outbound.docling import DoclingParser
 from papiq.adapters.outbound.filesystem import FilesystemObjectStore
 from papiq.adapters.outbound.memory import (
+    FakeCipher,
     FakeOcr,
     FakeParser,
+    FakePasswordHasher,
     FakePreviewRenderer,
+    FakeTotp,
     MemoryDatabase,
     MemoryEventBus,
     MemoryObjectStore,
     MemoryUnitOfWorkFactory,
 )
 from papiq.adapters.outbound.ocrmypdf import OcrmypdfEngine
+from papiq.adapters.outbound.oidc import AuthlibOidcProvider
 from papiq.adapters.outbound.pdfium import PdfiumPreviewRenderer
 from papiq.adapters.outbound.s3 import S3ObjectStore
 from papiq.adapters.outbound.sql import SqlEventBus, SqlUnitOfWorkFactory
@@ -32,22 +43,28 @@ from papiq.composition.settings import Settings
 from papiq.core.domain.pipeline import PIPELINE, Step
 from papiq.core.ports import (
     Clock,
+    DecryptionError,
     DeliveryRetry,
     DocumentParser,
     Embeddings,
     EventBus,
-    IdentityProvider,
     LanguageModel,
     ObjectStore,
     Ocr,
+    OidcProvider,
+    PasswordHasher,
     PreviewRenderer,
     SearchIndex,
+    SecretCipher,
+    Totp,
     UnitOfWorkFactory,
 )
+from papiq.core.services.auth import AuthService, SessionPolicy
 from papiq.core.services.documents import DocumentService
 from papiq.core.services.drawers import DrawerService
 from papiq.core.services.maintenance import MaintenanceService
 from papiq.core.services.master_data import MasterDataService
+from papiq.core.services.oidc import OidcService
 from papiq.core.services.pipeline import PipelineService, PlaceholderStep, RetryPolicy, StepExecutor
 from papiq.core.services.steps import OcrStep, ParseStep
 from papiq.core.services.users import UserService
@@ -136,13 +153,50 @@ PARSERS: dict[str, Factory[DocumentParser]] = {"docling": docling_parser}
 PREVIEW_RENDERERS: dict[str, Factory[PreviewRenderer]] = {
     "pdfium": lambda _: PdfiumPreviewRenderer()
 }
-IDENTITY_PROVIDERS: dict[str, Factory[IdentityProvider]] = {}  # selected from M4 on
+
+
+class MissingKeyCipher:
+    """Stands in where `PAPIQ_SECRET_KEY` is not set (the worker): any use is an error."""
+
+    def encrypt(self, plaintext: bytes, *, context: bytes) -> bytes:
+        raise RuntimeError("PAPIQ_SECRET_KEY is not set")
+
+    def decrypt(self, ciphertext: bytes, *, context: bytes) -> bytes:
+        raise DecryptionError("PAPIQ_SECRET_KEY is not set")
+
+
+def redirect_uri(settings: Settings) -> str:
+    """Where the provider sends the browser back: the API's OIDC callback."""
+    assert settings.public_url is not None
+    return str(settings.public_url).rstrip("/") + PREFIX + "/auth/oidc/callback"
+
+
+def oidc_provider(settings: Settings) -> OidcProvider:
+    # Settings guarantee these with OIDC.
+    assert settings.oidc_issuer and settings.oidc_client_id and settings.oidc_client_secret
+    return AuthlibOidcProvider(
+        issuer=settings.oidc_issuer,
+        client_id=settings.oidc_client_id,
+        client_secret=settings.oidc_client_secret.get_secret_value(),
+        redirect_uri=redirect_uri(settings),
+        scopes=settings.oidc_scopes.split(),
+        username_claim=settings.oidc_username_claim,
+    )
+
+
+OIDC_PROVIDERS: dict[str, Factory[OidcProvider]] = {"authlib": oidc_provider}
+
+
+def secret_cipher(settings: Settings) -> SecretCipher:
+    if settings.secret_key is None:
+        return MissingKeyCipher()
+    return AesGcmCipher(decode_key(settings.secret_key.get_secret_value()))
 
 
 @dataclass(frozen=True)
 class Container:
     """One adapter per port. Search, language model and embeddings are optional until the
-    milestones that need them (M6, M5); identity is missing until M4.
+    milestones that need them (M6, M5).
 
     `aclose` releases what the adapters hold (database engine, S3 client); call it when the
     API or the worker stops.
@@ -155,7 +209,10 @@ class Container:
     ocr: Ocr
     parser: DocumentParser
     previews: PreviewRenderer
-    identity: IdentityProvider | None
+    password_hasher: PasswordHasher
+    cipher: SecretCipher
+    totp: Totp
+    oidc: OidcProvider | None
     search_index: SearchIndex | None
     language_model: LanguageModel | None
     embeddings: Embeddings | None
@@ -188,7 +245,12 @@ def build_container(settings: Settings) -> Container:
         ocr=_select("ocr", "ocrmypdf", OCR_ENGINES, settings),
         parser=_select("parser", "docling", PARSERS, settings),
         previews=_select("previews", "pdfium", PREVIEW_RENDERERS, settings),
-        identity=None,
+        password_hasher=Argon2PasswordHasher(),
+        cipher=secret_cipher(settings),
+        totp=PyotpTotp(),
+        oidc=(
+            _select("oidc", "authlib", OIDC_PROVIDERS, settings) if settings.oidc_enabled else None
+        ),
         search_index=(
             _select("search_index", "meilisearch", SEARCH_INDEXES, settings)
             if settings.meilisearch_url is not None
@@ -219,7 +281,10 @@ def build_memory_container(clock: Clock | None = None) -> Container:
         ocr=FakeOcr(),
         parser=FakeParser(),
         previews=FakePreviewRenderer(),
-        identity=None,
+        password_hasher=FakePasswordHasher(),
+        cipher=FakeCipher(),
+        totp=FakeTotp(),
+        oidc=None,
         search_index=None,
         language_model=None,
         embeddings=None,
@@ -230,6 +295,8 @@ def build_memory_container(clock: Clock | None = None) -> Container:
 class Services:
     """The use cases, wired to the container's adapters."""
 
+    auth: AuthService
+    oidc: OidcService | None  # with a configured provider
     users: UserService
     drawers: DrawerService
     master_data: MasterDataService
@@ -253,11 +320,35 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
     executors: dict[Step, StepExecutor] = {step: PlaceholderStep() for step in PIPELINE[1:]}
     executors[Step.OCR] = OcrStep(store, container.ocr, container.previews)
     executors[Step.PARSE] = ParseStep(store, container.parser)
+    auth = AuthService(
+        uow,
+        clock,
+        hasher=container.password_hasher,
+        cipher=container.cipher,
+        totp=container.totp,
+        sessions=SessionPolicy(
+            idle=settings.session_idle_timeout, max_age=settings.session_max_age
+        ),
+    )
     return Services(
-        users=UserService(uow, clock),
+        auth=auth,
+        oidc=(
+            None
+            if container.oidc is None
+            else OidcService(
+                uow,
+                clock,
+                auth,
+                container.oidc,
+                container.cipher,
+                display_name=settings.oidc_display_name,
+                auto_create=settings.oidc_auto_create,
+            )
+        ),
+        users=UserService(uow, clock, container.password_hasher),
         drawers=DrawerService(uow, clock),
         master_data=MasterDataService(uow, clock),
-        documents=DocumentService(uow, clock),
+        documents=DocumentService(uow, clock, store),
         pipeline=PipelineService(
             uow,
             clock,
@@ -276,6 +367,8 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
             container.event_bus,
             interval=settings.cleanup_interval,
             retention=settings.retention,
+            session_idle=settings.session_idle_timeout,
+            object_store=store,
         ),
     )
 

@@ -14,6 +14,12 @@ from papiq.core.services.pipeline import IncomingFile
 
 NOW = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 
+# PAPIQ_SECRET_KEY for tests (32 bytes, base64); never use it elsewhere.
+SECRET_KEY = "dGVzdC1rZXktdGVzdC1rZXktdGVzdC1rZXktdGVzdC0="
+PASSWORD = "correct horse battery"
+# PAPIQ_FORWARDED_ALLOW_IPS for tests: required with secure cookies.
+TRUSTED_PROXY = "127.0.0.1"
+
 OK = StepResult(outcome=Outcome.OK)
 UNCERTAIN = StepResult(outcome=Outcome.UNCERTAIN, reason="new contact", confidence=0.4)
 FAILED = StepResult(outcome=Outcome.FAILED, reason="OCR crashed")

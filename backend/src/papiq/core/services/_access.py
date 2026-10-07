@@ -2,7 +2,7 @@
 
 from papiq.core.domain.documents import Document
 from papiq.core.domain.drawers import Drawer
-from papiq.core.domain.errors import NotFoundError, PermissionDeniedError
+from papiq.core.domain.errors import AuthenticationError, NotFoundError, PermissionDeniedError
 from papiq.core.domain.ids import DocumentId, DrawerId, UserId
 from papiq.core.domain.permissions import (
     can_read_document,
@@ -14,7 +14,12 @@ from papiq.core.ports import UnitOfWork
 
 
 async def load_actor(uow: UnitOfWork, actor: UserId) -> User:
-    return await uow.users.get(actor)
+    """The caller; AuthenticationError if the account is gone or deactivated (it may have
+    changed since the request was authenticated)."""
+    user = await uow.users.find(actor)
+    if user is None or not user.active:
+        raise AuthenticationError("authentication is required")
+    return user
 
 
 async def readable_document(uow: UnitOfWork, user: User, id: DocumentId) -> tuple[Document, Drawer]:

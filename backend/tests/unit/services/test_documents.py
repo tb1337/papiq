@@ -1,4 +1,5 @@
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +15,9 @@ from papiq.core.domain.events import DocumentDeleted, DocumentFiled, DocumentUpd
 from papiq.core.domain.ids import ContactId, DocumentId, DrawerId, TagId, UserId, new_id
 from papiq.core.domain.pipeline import Lane, Step
 from papiq.core.domain.users import Role, User
+from papiq.core.ports import DocumentFilter
+from papiq.core.services.documents import DocumentFile, FileInfo
+from papiq.core.services.objects import archive_key, preview_key
 from tests.builders import UNCERTAIN, incoming
 from tests.unit.services.conftest import Returns, World
 
@@ -207,3 +211,60 @@ async def test_filter_readers_follows_the_visibility(world: World, scene: Scene)
     assert await world.documents.filter_readers(scene.document.id, everyone) == {scene.owner.id}
     assert await world.documents.filter_readers(DocumentId(new_id()), everyone) == set()
     assert await world.documents.filter_readers(scene.document.id, set()) == set()
+
+
+async def test_views_carry_the_access(world: World, scene: Scene) -> None:
+    expected = [
+        (scene.owner, ShareLevel.READ_WRITE),
+        (scene.reader, ShareLevel.READ),
+        (scene.writer, ShareLevel.READ_WRITE),
+    ]
+    for user, access in expected:
+        assert (await world.documents.view(user.id, scene.document.id)).access is access
+        [view] = await world.documents.query(user.id, DocumentFilter())
+        assert view.access is access and view.document.id == scene.document.id
+    with pytest.raises(NotFoundError):
+        await world.documents.view(scene.stranger.id, scene.document.id)
+    assert await world.documents.query(scene.stranger.id, DocumentFilter()) == []
+
+
+async def test_query_pages_newest_first(world: World, scene: Scene) -> None:
+    for number in range(4):
+        await world.pipeline().receive(
+            scene.owner.id, incoming(f"%PDF-1.7 page {number}".encode()), filename=f"{number}.pdf"
+        )
+    everything = await world.documents.query(scene.owner.id, DocumentFilter(), limit=500)
+    assert len(everything) == 5
+    first = await world.documents.query(scene.owner.id, DocumentFilter(), limit=2)
+    rest = await world.documents.query(
+        scene.owner.id, DocumentFilter(), before=first[-1].document.id, limit=200
+    )
+    assert [v.document.id for v in [*first, *rest]] == [v.document.id for v in everything]
+    # Documents in processing are the owner's only.
+    assert len(await world.documents.query(scene.reader.id, DocumentFilter())) == 1
+
+
+async def test_downloads_need_read_access(world: World, scene: Scene, tmp_path: Path) -> None:
+    target = tmp_path / "file"
+    info = await world.documents.download(
+        scene.reader.id, scene.document.id, DocumentFile.ORIGINAL, target
+    )
+    assert info == FileInfo("application/pdf", "electricity.pdf")
+    assert target.read_bytes() == b"%PDF-1.7 electricity"
+    with pytest.raises(NotFoundError):  # not made by the placeholder steps
+        await world.documents.download(
+            scene.owner.id, scene.document.id, DocumentFile.ARCHIVE, target
+        )
+    await world.object_store.put(archive_key(scene.document.id), b"%PDF-A", content_type="x")
+    info = await world.documents.download(
+        scene.owner.id, scene.document.id, DocumentFile.ARCHIVE, target
+    )
+    assert info == FileInfo("application/pdf", "electricity.pdf")
+    await world.object_store.put(preview_key(scene.document.id), b"RIFF", content_type="x")
+    info = await world.documents.download(
+        scene.writer.id, scene.document.id, DocumentFile.PREVIEW, target
+    )
+    assert info == FileInfo("image/webp", "electricity.webp")
+    for file in DocumentFile:
+        with pytest.raises(NotFoundError):
+            await world.documents.download(scene.stranger.id, scene.document.id, file, target)

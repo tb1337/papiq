@@ -13,7 +13,8 @@ from fastapi import FastAPI
 from papiq.adapters.inbound.rest import ApiContext, HealthCheck, close_event_streams, create_app
 from papiq.adapters.outbound.filesystem import FilesystemObjectStore
 from papiq.adapters.outbound.s3 import S3ObjectStore
-from papiq.composition.container import Container, build_container, build_services
+from papiq.composition.bootstrap import ensure_first_admin
+from papiq.composition.container import Container, Services, build_container, build_services
 from papiq.composition.settings import Settings
 from papiq.core.domain.ids import UserId
 
@@ -41,15 +42,24 @@ def health_checks(container: Container) -> dict[str, HealthCheck]:
     return {"database": database, "object_store": object_store}
 
 
-def build_app(container: Container, settings: Settings) -> FastAPI:
-    services = build_services(container, settings)
+def build_app(
+    container: Container, settings: Settings, services: Services | None = None
+) -> FastAPI:
+    services = services or build_services(container, settings)
     return create_app(
         ApiContext(
+            auth=services.auth,
+            users=services.users,
+            drawers=services.drawers,
+            master_data=services.master_data,
+            oidc=services.oidc,
+            cookie_secure=settings.cookie_secure,
             pipeline=services.pipeline,
             documents=services.documents,
             event_bus=container.event_bus,
             health_checks=health_checks(container),
             max_upload_size=int(settings.upload_max_size),
+            max_request_size=int(settings.request_max_size),
             events_poll_interval=settings.events_poll_interval,
         )
     )
@@ -89,14 +99,19 @@ async def run_api(settings: Settings) -> None:
     store."""
     container = build_container(settings)
     try:
-        app = build_app(container, settings)
+        services = build_services(container, settings)
+        await ensure_first_admin(services.users, settings)
+        app = build_app(container, settings, services)
         config = uvicorn.Config(
             app,
             host=settings.api_host,
             port=settings.api_port,
             log_config=None,  # logging is configured by the composition root
             timeout_graceful_shutdown=SHUTDOWN_TIMEOUT,
-            proxy_headers=False,
+            # The client address (failed sign-ins per source) comes from X-Forwarded-For only
+            # behind the configured proxies.
+            proxy_headers=settings.forwarded_allow_ips is not None,
+            forwarded_allow_ips=settings.forwarded_allow_ips,
         )
         await _Server(config, app).serve()
     finally:

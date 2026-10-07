@@ -1,4 +1,5 @@
-"""Users and roles. Passwords, TOTP and tokens belong to identity (M4), not to the domain."""
+"""Users and roles. Passwords, TOTP and tokens belong to identity (`identity.py`), not to the
+user."""
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -20,6 +21,7 @@ class User:
     username: str  # unique regardless of case
     role: Role
     created_at: datetime
+    active: bool = True  # a deactivated user cannot sign in and reads nothing
     version: int = 1
 
     def __post_init__(self) -> None:
@@ -33,3 +35,7 @@ class User:
     @property
     def is_admin(self) -> bool:
         return self.role is Role.ADMIN
+
+    @property
+    def is_active_admin(self) -> bool:
+        return self.active and self.is_admin

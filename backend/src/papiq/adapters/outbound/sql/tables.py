@@ -17,11 +17,13 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     String,
     Table,
     Text,
     Uuid,
+    true,
 )
 
 from papiq.adapters.outbound.sql.types import ExactDecimal, UtcDateTime, json_type
@@ -49,6 +51,7 @@ users = Table(
     Column("username_key", Text, nullable=False, unique=True),
     Column("role", Text, nullable=False),
     Column("created_at", UtcDateTime, nullable=False),
+    Column("active", Boolean, nullable=False, server_default=true()),
     Column("version", Integer, nullable=False),
 )
 
@@ -259,4 +262,81 @@ event_retries = Table(
     Column("last_error", Text, nullable=False),
     # When the delivery is due again; NULL: at once.
     Column("retry_at", UtcDateTime, nullable=True),
+)
+
+# --- identity: rows go with their user (ON DELETE CASCADE) ---------------------------------------
+
+credentials = Table(
+    "credentials",
+    metadata,
+    Column("user_id", Uuid, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("password_hash", Text, nullable=True),
+    Column("password_changed_at", UtcDateTime, nullable=True),
+    # TOTP: the secret encrypted (SecretCipher); NULL if TOTP is off.
+    Column("totp_secret", LargeBinary, nullable=True),
+    Column("totp_confirmed", Boolean, nullable=False),
+    Column("totp_last_step", BigInteger, nullable=True),
+    Column("version", Integer, nullable=False),
+)
+
+recovery_codes = Table(
+    "recovery_codes",
+    metadata,
+    Column(
+        "user_id",
+        Uuid,
+        ForeignKey("credentials.user_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("code_hash", String(64), primary_key=True),
+)
+
+sessions = Table(
+    "sessions",
+    metadata,
+    Column("id", Uuid, primary_key=True),
+    Column("user_id", Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("token_hash", String(64), nullable=False, unique=True),
+    Column("method", Text, nullable=False),
+    Column("created_at", UtcDateTime, nullable=False),
+    Column("last_seen_at", UtcDateTime, nullable=False),
+    Column("expires_at", UtcDateTime, nullable=False),
+    Column("version", Integer, nullable=False),
+)
+
+api_tokens = Table(
+    "api_tokens",
+    metadata,
+    Column("id", Uuid, primary_key=True),
+    Column("user_id", Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("name", Text, nullable=False),
+    Column("scope", Text, nullable=False),
+    Column("token_hash", String(64), nullable=False, unique=True),
+    Column("created_at", UtcDateTime, nullable=False),
+    Column("expires_at", UtcDateTime, nullable=True),
+    Column("last_used_at", UtcDateTime, nullable=True),
+    Column("version", Integer, nullable=False),
+)
+
+external_identities = Table(
+    "external_identities",
+    metadata,
+    Column("id", Uuid, primary_key=True),
+    Column("issuer", Text, nullable=False),
+    Column("subject", Text, nullable=False),
+    Column("user_id", Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("created_at", UtcDateTime, nullable=False),
+    Column("version", Integer, nullable=False),
+    Index(None, "issuer", "subject", unique=True),
+)
+
+# Failed sign-ins per key (`account:<name>`, `source:<address>`).
+login_failures = Table(
+    "login_failures",
+    metadata,
+    Column("key", Text, primary_key=True),
+    Column("failures", Integer, nullable=False),
+    Column("first_failure_at", UtcDateTime, nullable=False),
+    Column("blocked_until", UtcDateTime, nullable=True),
+    Column("version", Integer, nullable=False),
 )

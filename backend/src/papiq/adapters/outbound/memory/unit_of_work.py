@@ -5,6 +5,7 @@ reads see committed data plus the unit's own changes; commit checks that every r
 still has the version it had when the unit first touched it, and that uniqueness holds.
 """
 
+import asyncio
 import copy
 import dataclasses
 from collections.abc import Collection, Hashable, Iterable, Mapping
@@ -14,16 +15,29 @@ from typing import Any, Self
 from uuid import UUID
 
 from papiq.adapters.outbound.memory.database import (
+    API_TOKENS,
     ATTRIBUTES,
     CONTACTS,
+    CREDENTIALS,
     DOCUMENT_TYPES,
     DOCUMENTS,
     DRAWERS,
+    EXTERNAL_IDENTITIES,
+    LOGIN_FAILURES,
+    SESSIONS,
     TAGS,
     USERS,
     MemoryDatabase,
     Table,
 )
+from papiq.adapters.outbound.memory.identity import (
+    MemoryApiTokenRepository,
+    MemoryCredentialRepository,
+    MemoryExternalIdentityRepository,
+    MemoryLoginFailureRepository,
+    MemorySessionRepository,
+)
+from papiq.adapters.outbound.memory.rows import _REMOVED, MemoryRepository, _copy
 from papiq.core.domain.attributes import AttributeDefinition
 from papiq.core.domain.documents import Document, Sha256
 from papiq.core.domain.drawers import Drawer
@@ -46,13 +60,7 @@ from papiq.core.domain.master_data import Contact, DocumentType, MasterData, Tag
 from papiq.core.domain.pipeline import Lane, StepRun
 from papiq.core.domain.users import User
 from papiq.core.domain.validation import name_key, require_utc
-
-_REMOVED = None
-
-
-def _copy[E](entity: E) -> E:
-    """A private copy. `replace` drops transient state such as recorded domain events."""
-    return copy.deepcopy(dataclasses.replace(entity))  # type: ignore[type-var]
+from papiq.core.ports.repository import DocumentFilter
 
 
 class MemoryUnitOfWork:
@@ -67,6 +75,7 @@ class MemoryUnitOfWork:
         self._jobs: dict[JobId, Job] = {}
         self._job_base: dict[JobId, Job | None] = {}
         self._purged_jobs: set[JobId] = set()
+        self._held: asyncio.Lock | None = None
 
         self.users = MemoryUserRepository(self, USERS)
         self.drawers = MemoryDrawerRepository(self, DRAWERS)
@@ -80,6 +89,11 @@ class MemoryUnitOfWork:
         self.processing_log = MemoryProcessingLog(self)
         self.outbox = MemoryOutbox(self)
         self.jobs = MemoryJobQueue(self)
+        self.credentials = MemoryCredentialRepository(self, CREDENTIALS)
+        self.sessions = MemorySessionRepository(self, SESSIONS)
+        self.api_tokens = MemoryApiTokenRepository(self, API_TOKENS)
+        self.external_identities = MemoryExternalIdentityRepository(self, EXTERNAL_IDENTITIES)
+        self.login_failures = MemoryLoginFailureRepository(self, LOGIN_FAILURES)
 
     # --- transaction ----------------------------------------------------------------------------
 
@@ -96,8 +110,27 @@ class MemoryUnitOfWork:
         if not self._closed:
             await self.rollback()
 
+    async def lock(self, name: str) -> None:
+        self._check_open()
+        if self._held is not None:
+            raise RuntimeError("a unit of work locks at most one name")
+        lock = self._db.locks.setdefault(name, asyncio.Lock())
+        await lock.acquire()
+        self._held = lock
+
+    def _release(self) -> None:
+        if self._held is not None:
+            self._held.release()
+            self._held = None
+
     async def commit(self) -> None:
         self._check_open()
+        try:
+            self._commit()
+        finally:
+            self._release()
+
+    def _commit(self) -> None:
         self._check_versions()
         self._check_uniqueness()
         self._check_jobs()
@@ -124,6 +157,7 @@ class MemoryUnitOfWork:
     async def rollback(self) -> None:
         self._check_open()
         self._closed = True
+        self._release()
 
     def _check_open(self) -> None:
         if self._closed:
@@ -189,64 +223,24 @@ class MemoryUnitOfWork:
                 seen.add(key)
 
 
-class MemoryRepository[K: UUID, E]:
-    def __init__(self, uow: MemoryUnitOfWork, table: Table) -> None:
-        self._uow = uow
-        self._table = table
-
-    async def get(self, id: K) -> E:
-        entity = await self.find(id)
-        if entity is None:
-            raise NotFoundError(self._table.name, id)
-        return entity
-
-    async def find(self, id: K) -> E | None:
-        self._uow._check_open()
-        row = self._uow._row(self._table, id)
-        return None if row is _REMOVED else _copy(row)
-
-    async def add(self, entity: E) -> None:
-        id = self._id(entity)
-        if self._uow._row(self._table, id) is not _REMOVED:
-            raise ConflictError(f"{self._table.name} {id} already exists")
-        self._uow._unique_or_fail(self._table, [*self._uow._rows(self._table), entity])
-        self._uow._write(self._table, id, _copy(entity))
-
-    async def update(self, entity: E) -> None:
-        self._uow._check_open()
-        id = self._id(entity)
-        current = self._uow._row(self._table, id)
-        if current is _REMOVED:
-            raise NotFoundError(self._table.name, id)
-        if current.version != entity.version:  # type: ignore[attr-defined]
-            raise ConcurrencyError(f"{self._table.name} {id} was changed concurrently")
-        others = [row for row in self._uow._rows(self._table) if row is not current]
-        self._uow._unique_or_fail(self._table, [*others, entity])
-        entity.version += 1  # type: ignore[attr-defined]
-        self._uow._write(self._table, id, _copy(entity))
-
-    async def list_all(self) -> list[E]:
-        return [_copy(row) for row in self._all()]
-
-    def _all(self) -> list[E]:
-        self._uow._check_open()
-        return self._uow._rows(self._table)
-
-    @staticmethod
-    def _id(entity: E) -> K:
-        return entity.id  # type: ignore[attr-defined, no-any-return]
-
-
 class MemoryNamedRepository[K: UUID, E: MasterData](MemoryRepository[K, E]):
     async def find_by_name(self, name: str) -> E | None:
         key = name_key(name)
         return next((_copy(row) for row in self._all() if name_key(row.name) == key), None)
+
+    async def remove(self, id: K) -> None:
+        await self.get(id)
+        self._uow._write(self._table, id, _REMOVED)
 
 
 class MemoryUserRepository(MemoryRepository[UserId, User]):
     async def find_by_username(self, username: str) -> User | None:
         key = name_key(username)
         return next((_copy(row) for row in self._all() if name_key(row.username) == key), None)
+
+    async def remove(self, id: UserId) -> None:
+        await self.get(id)
+        self._uow._write(self._table, id, _REMOVED)
 
 
 class MemoryDrawerRepository(MemoryRepository[DrawerId, Drawer]):
@@ -258,6 +252,10 @@ class MemoryDrawerRepository(MemoryRepository[DrawerId, Drawer]):
 
     async def list_accessible(self, user: UserId) -> list[Drawer]:
         return [_copy(row) for row in self._all() if row.owner_id == user or user in row.shares]
+
+    async def remove(self, id: DrawerId) -> None:
+        await self.get(id)
+        self._uow._write(self._table, id, _REMOVED)
 
 
 class MemoryDocumentRepository(MemoryRepository[DocumentId, Document]):
@@ -279,6 +277,65 @@ class MemoryDocumentRepository(MemoryRepository[DocumentId, Document]):
         if self._uow._row(self._table, id) is _REMOVED:
             raise NotFoundError(self._table.name, id)
         self._uow._write(self._table, id, _REMOVED)
+
+    async def attribute_in_use(
+        self,
+        attribute: AttributeId,
+        *,
+        values: Collection[str] | None = None,
+        outside_types: Collection[DocumentTypeId] | None = None,
+    ) -> bool:
+        return any(
+            attribute in row.attributes
+            and (values is None or row.attributes[attribute] in set(values))
+            and (outside_types is None or row.document_type_id not in set(outside_types))
+            for row in self._all()
+        )
+
+    async def query_visible(
+        self,
+        user: UserId,
+        filter: DocumentFilter,
+        *,
+        before: DocumentId | None = None,
+        limit: int,
+    ) -> list[Document]:
+        matching = [
+            document
+            for document in await self.list_visible_to(user)
+            if (before is None or document.id < before)
+            and (filter.contact is None or document.contact_id == filter.contact)
+            and (filter.document_type is None or document.document_type_id == filter.document_type)
+            and filter.tags <= document.tag_ids
+            and (filter.drawer is None or document.drawer_id == filter.drawer)
+            and (filter.lanes is None or document.lane in filter.lanes)
+        ]
+        return sorted(matching, key=lambda document: document.id, reverse=True)[:limit]
+
+    async def exists(
+        self,
+        *,
+        owner: UserId | None = None,
+        drawer: DrawerId | None = None,
+        contact: ContactId | None = None,
+        document_type: DocumentTypeId | None = None,
+        tag: TagId | None = None,
+        attribute: AttributeId | None = None,
+        sha256: Sha256 | None = None,
+    ) -> bool:
+        criteria = (owner, drawer, contact, document_type, tag, attribute, sha256)
+        if all(value is None for value in criteria):
+            raise ValueError("exists needs at least one criterion")
+        return any(
+            (owner is None or row.owner_id == owner)
+            and (drawer is None or row.drawer_id == drawer)
+            and (contact is None or row.contact_id == contact)
+            and (document_type is None or row.document_type_id == document_type)
+            and (tag is None or tag in row.tag_ids)
+            and (attribute is None or attribute in row.attributes)
+            and (sha256 is None or row.sha256 == sha256)
+            for row in self._all()
+        )
 
 
 class MemoryProcessingLog:

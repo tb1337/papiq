@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Any
 
 from papiq.core.domain.attributes import AttributeDefinition, AttributeType
+from papiq.core.domain.documents import UNSET, Unset
 from papiq.core.domain.errors import ConflictError, PermissionDeniedError
 from papiq.core.domain.ids import AttributeId, ContactId, DocumentTypeId, TagId, UserId
 from papiq.core.domain.master_data import Contact, DocumentType, MasterData, Tag
@@ -81,10 +82,122 @@ class MasterDataService:
 
         return await self._create(actor, _attributes, definition, check)
 
+    async def change_attribute(
+        self,
+        actor: UserId,
+        id: AttributeId,
+        *,
+        name: str | None = None,
+        choices: Collection[str] | None = None,
+        document_type_ids: Collection[DocumentTypeId] | Unset | None = UNSET,
+    ) -> AttributeDefinition:
+        """Admins only. Name; choices (adding is free, removing only what no document uses);
+        scope (`None`: global; widening is free, narrowing only while no document outside the
+        new scope has a value). The data type never changes. ConflictError if values are in
+        use."""
+        async with self._uow() as uow:
+            await _require_admin(uow, actor)
+            definition = await uow.attributes.get(id)
+            if name is not None:
+                definition.rename(name)
+                await _check_name_free(uow.attributes, definition)
+            if choices is not None:
+                removed = definition.change_choices(choices)
+                if removed and await uow.documents.attribute_in_use(id, values=removed):
+                    raise ConflictError(f"documents use the choices {', '.join(sorted(removed))}")
+            if not isinstance(document_type_ids, Unset):
+                for document_type in document_type_ids or ():
+                    await uow.document_types.get(document_type)
+                narrower = definition.change_scope(document_type_ids)
+                scope = definition.document_type_ids
+                if (
+                    narrower
+                    and scope is not None
+                    and await uow.documents.attribute_in_use(id, outside_types=scope)
+                ):
+                    raise ConflictError("documents outside the new scope have values")
+            await uow.attributes.update(definition)
+            await uow.commit()
+        return definition
+
     async def rename_attribute(
         self, actor: UserId, id: AttributeId, name: str
     ) -> AttributeDefinition:
         return await self._rename(actor, _attributes, id, name)
+
+    # --- reading (every signed-in user) ----------------------------------------------------------
+
+    async def list_contacts(self, actor: UserId) -> list[Contact]:
+        return await self._list(actor, _contacts)
+
+    async def list_document_types(self, actor: UserId) -> list[DocumentType]:
+        return await self._list(actor, _document_types)
+
+    async def list_tags(self, actor: UserId) -> list[Tag]:
+        return await self._list(actor, _tags)
+
+    async def list_attributes(self, actor: UserId) -> list[AttributeDefinition]:
+        return await self._list(actor, _attributes)
+
+    async def get_contact(self, actor: UserId, id: ContactId) -> Contact:
+        return await self._get(actor, _contacts, id)
+
+    async def get_document_type(self, actor: UserId, id: DocumentTypeId) -> DocumentType:
+        return await self._get(actor, _document_types, id)
+
+    async def get_tag(self, actor: UserId, id: TagId) -> Tag:
+        return await self._get(actor, _tags, id)
+
+    async def get_attribute(self, actor: UserId, id: AttributeId) -> AttributeDefinition:
+        return await self._get(actor, _attributes, id)
+
+    # --- deleting (admins; only what no document uses) -------------------------------------------
+
+    async def delete_contact(self, actor: UserId, id: ContactId) -> None:
+        await self._delete(actor, _contacts, id, lambda uow: uow.documents.exists(contact=id))
+
+    async def delete_document_type(self, actor: UserId, id: DocumentTypeId) -> None:
+        async def used(uow: UnitOfWork) -> bool:
+            if await uow.documents.exists(document_type=id):
+                return True
+            return any(
+                id in (attribute.document_type_ids or ())
+                for attribute in await uow.attributes.list_all()
+            )
+
+        await self._delete(actor, _document_types, id, used)
+
+    async def delete_tag(self, actor: UserId, id: TagId) -> None:
+        await self._delete(actor, _tags, id, lambda uow: uow.documents.exists(tag=id))
+
+    async def delete_attribute(self, actor: UserId, id: AttributeId) -> None:
+        await self._delete(actor, _attributes, id, lambda uow: uow.documents.exists(attribute=id))
+
+    async def _list[E: MasterData](self, actor: UserId, repository: Repo[E]) -> list[E]:
+        async with self._uow() as uow:
+            await load_actor(uow, actor)
+            items = await repository(uow).list_all()
+        return sorted(items, key=lambda item: item.name.casefold())
+
+    async def _get[E: MasterData](self, actor: UserId, repository: Repo[E], id: Any) -> E:
+        async with self._uow() as uow:
+            await load_actor(uow, actor)
+            return await repository(uow).get(id)
+
+    async def _delete[E: MasterData](
+        self,
+        actor: UserId,
+        repository: Repo[E],
+        id: Any,
+        used: Callable[[UnitOfWork], Awaitable[bool]],
+    ) -> None:
+        async with self._uow() as uow:
+            await _require_admin(uow, actor)
+            item = await repository(uow).get(id)
+            if await used(uow):
+                raise ConflictError(f"'{item.name}' is in use")
+            await repository(uow).remove(id)
+            await uow.commit()
 
     def _now(self) -> datetime:
         return self._clock.now()
