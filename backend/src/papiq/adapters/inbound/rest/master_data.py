@@ -13,9 +13,11 @@ from papiq.adapters.inbound.rest.problems import problem_responses
 from papiq.adapters.inbound.rest.schemas import (
     AttributeCreate,
     AttributeOut,
+    AttributePatch,
     MasterDataOut,
     NameIn,
 )
+from papiq.core.domain.documents import UNSET, Unset
 from papiq.core.domain.ids import AttributeId, DocumentTypeId
 from papiq.core.domain.master_data import MasterData
 
@@ -147,15 +149,28 @@ async def get_attribute(id: UUID, user: CurrentUser, context: Context) -> Attrib
 
 @attributes.patch(
     "/{id}",
-    summary="Rename an attribute definition",
-    description=ADMINS_ONLY,
+    summary="Change an attribute definition",
+    description=(
+        ADMINS_ONLY + " Name, choices and scope; the data type stays. Values documents use are "
+        "never changed: removing a used choice or narrowing the scope past documents with "
+        "values is a conflict (409)."
+    ),
     response_model=AttributeOut,
     responses=problem_responses(401, 403, 404, 409, 422),
 )
-async def rename_attribute(
-    id: UUID, body: NameIn, user: CurrentUser, context: Context
+async def change_attribute(
+    id: UUID, body: AttributePatch, user: CurrentUser, context: Context
 ) -> AttributeOut:
-    item = await context.master_data.rename_attribute(user, AttributeId(id), body.name)
+    scope: list[DocumentTypeId] | Unset | None = UNSET
+    if "document_type_ids" in body.model_fields_set:
+        scope = (
+            None
+            if body.document_type_ids is None
+            else [DocumentTypeId(type_id) for type_id in body.document_type_ids]
+        )
+    item = await context.master_data.change_attribute(
+        user, AttributeId(id), name=body.name, choices=body.choices, document_type_ids=scope
+    )
     return AttributeOut.of(item)
 
 

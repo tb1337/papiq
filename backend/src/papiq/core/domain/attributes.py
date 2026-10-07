@@ -106,6 +106,25 @@ class AttributeDefinition(MasterData):
             created_at=now,
         )
 
+    def change_choices(self, choices: Collection[str]) -> frozenset[str]:
+        """New choices for a choice attribute; returns the choices that are gone. Values in
+        use are the caller's to check."""
+        if self.data_type is not AttributeType.CHOICE:
+            raise ValidationError("only choice attributes have choices")
+        old = set(self.choices)
+        changed = AttributeDefinition(**{**self.__dict__, "choices": tuple(choices)})
+        self.choices = changed.choices
+        return frozenset(old - set(self.choices))
+
+    def change_scope(self, document_type_ids: Collection[DocumentTypeId] | None) -> bool:
+        """Global (None) or for these document types; returns whether the scope got narrower
+        (then values of documents outside it are the caller's to check)."""
+        new = None if document_type_ids is None else frozenset(document_type_ids)
+        if new is not None and not new:
+            raise ValidationError("give at least one document type, or null for global")
+        old, self.document_type_ids = self.document_type_ids, new
+        return new is not None and (old is None or not old <= new)
+
     @property
     def is_global(self) -> bool:
         return self.document_type_ids is None

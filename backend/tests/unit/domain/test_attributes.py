@@ -105,3 +105,25 @@ def test_scope_is_global_or_bound_to_document_types() -> None:
     assert bound.applies_to(invoice)
     assert not bound.applies_to(letter)
     assert not bound.applies_to(None)
+
+
+def test_choices_and_scope_change() -> None:
+    kind = AttributeDefinition.create(
+        name="Kind", data_type=AttributeType.CHOICE, now=NOW, choices=["a", "b"]
+    )
+    assert kind.change_choices(["b", "c"]) == frozenset({"a"})
+    assert kind.choices == ("b", "c")
+    with pytest.raises(ValidationError):
+        kind.change_choices([])
+    with pytest.raises(ValidationError):
+        kind.change_choices(["x", "x"])
+    text = AttributeDefinition.create(name="Note", data_type=AttributeType.TEXT, now=NOW)
+    with pytest.raises(ValidationError):
+        text.change_choices(["a"])
+    one, two = DocumentTypeId(new_id()), DocumentTypeId(new_id())
+    assert text.change_scope([one, two]) is True  # global -> two types
+    assert text.change_scope([one, two]) is False
+    assert text.change_scope([one]) is True
+    assert text.change_scope(None) is False  # global again
+    with pytest.raises(ValidationError):
+        text.change_scope([])

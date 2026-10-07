@@ -278,6 +278,20 @@ class MemoryDocumentRepository(MemoryRepository[DocumentId, Document]):
             raise NotFoundError(self._table.name, id)
         self._uow._write(self._table, id, _REMOVED)
 
+    async def attribute_in_use(
+        self,
+        attribute: AttributeId,
+        *,
+        values: Collection[str] | None = None,
+        outside_types: Collection[DocumentTypeId] | None = None,
+    ) -> bool:
+        return any(
+            attribute in row.attributes
+            and (values is None or row.attributes[attribute] in set(values))
+            and (outside_types is None or row.document_type_id not in set(outside_types))
+            for row in self._all()
+        )
+
     async def query_visible(
         self,
         user: UserId,

@@ -116,3 +116,39 @@ async def test_only_unused_master_data_is_deleted_by_admins(world: World) -> Non
     assert [t.name for t in await world.master_data.list_tags(admin.id)] == ["tax"]
     with pytest.raises(NotFoundError):
         await world.master_data.delete_tag(admin.id, unused.id)
+
+
+async def test_attribute_definitions_change_without_breaking_values(world: World) -> None:
+    admin, owner = await world.user(role=Role.ADMIN), await world.user()
+    invoice = await world.master_data.create_document_type(admin.id, "Invoice")
+    letter = await world.master_data.create_document_type(admin.id, "Letter")
+    kind = await world.master_data.create_attribute(
+        admin.id, "Kind", AttributeType.CHOICE, choices=["a", "b"]
+    )
+    document = await world.pipeline().receive(owner.id, incoming(b"%PDF-1.7 x"), filename="x.pdf")
+    await world.drain()
+    await world.documents.update_metadata(
+        owner.id,
+        document.id,
+        DocumentChanges(document_type_id=invoice.id, attributes={kind.id: "a"}),
+    )
+    change = world.master_data.change_attribute
+
+    with pytest.raises(PermissionDeniedError):
+        await change(owner.id, kind.id, name="Sort")
+    changed = await change(admin.id, kind.id, name="Sort", choices=["a", "b", "c"])
+    assert changed.name == "Sort" and changed.choices == ("a", "b", "c")
+    await change(admin.id, kind.id, choices=["c", "a"])  # b is unused
+    with pytest.raises(ConflictError):
+        await change(admin.id, kind.id, choices=["c"])  # a is in use
+    with pytest.raises(ConflictError):
+        await change(admin.id, kind.id, document_type_ids=[letter.id])  # narrower
+    await change(admin.id, kind.id, document_type_ids=[invoice.id, letter.id])
+    await change(admin.id, kind.id, document_type_ids=[invoice.id])  # values all inside
+    await change(admin.id, kind.id, document_type_ids=None)
+    with pytest.raises(NotFoundError):
+        await change(admin.id, kind.id, document_type_ids=[DocumentTypeId(new_id())])
+    stored = await world.master_data.get_attribute(owner.id, kind.id)
+    assert stored.choices == ("c", "a") and stored.document_type_ids is None
+    document_now = await world.documents.get(owner.id, document.id)
+    assert document_now.attributes == {kind.id: "a"}
