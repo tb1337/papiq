@@ -17,6 +17,7 @@ from papiq.core.domain.pipeline import Lane, Step, StepResult
 from papiq.core.domain.users import User
 from papiq.core.services.maintenance import CLEANUP_JOB
 from tests import builders
+from tests.builders import incoming
 from tests.contracts.processing import SAMPLES
 
 FAST = timedelta(milliseconds=10)
@@ -96,7 +97,7 @@ async def test_documents_are_processed_and_events_delivered() -> None:
     user = await owner(container)
     async with running(worker(container, services)):
         document = await services.pipeline.receive(
-            user.id, (SAMPLES / "scan.pdf").read_bytes(), filename="a.pdf", media_type="x/y"
+            user.id, incoming((SAMPLES / "scan.pdf").read_bytes()), filename="a.pdf"
         )
         await until(lambda: received and received[-1].type == "document.lane_changed")
     assert await lane(services, user, document) is Lane.GREEN
@@ -119,7 +120,7 @@ async def test_stop_lets_running_jobs_finish() -> None:
     services = with_ocr(build_services(container), step)
     user = await owner(container)
     document = await services.pipeline.receive(
-        user.id, (SAMPLES / "scan.pdf").read_bytes(), filename="a.pdf", media_type="x/y"
+        user.id, incoming((SAMPLES / "scan.pdf").read_bytes()), filename="a.pdf"
     )
     async with running(worker(container, services)):
         await step.started.wait()
@@ -133,7 +134,7 @@ async def test_jobs_still_running_after_the_timeout_are_released() -> None:
     services = with_ocr(build_services(container), step)
     user = await owner(container)
     await services.pipeline.receive(
-        user.id, (SAMPLES / "scan.pdf").read_bytes(), filename="a.pdf", media_type="x/y"
+        user.id, incoming((SAMPLES / "scan.pdf").read_bytes()), filename="a.pdf"
     )
     async with running(worker(container, services, shutdown_timeout=FAST)):
         await step.started.wait()

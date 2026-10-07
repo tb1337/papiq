@@ -20,6 +20,7 @@ from papiq.core.services.objects import (
 )
 from papiq.core.services.pipeline import PipelineService
 from papiq.core.services.steps import OcrStep, ParseStep, has_text
+from tests.builders import incoming
 from tests.contracts.processing import SAMPLES
 from tests.unit.services.conftest import World
 
@@ -45,8 +46,7 @@ def pipeline(
 async def ingest(world: World, service: PipelineService, sample: str) -> tuple[User, Document]:
     owner = await world.user()
     data = (SAMPLES / sample).read_bytes()
-    media_type = "image/jpeg" if sample.endswith(".jpg") else "application/pdf"
-    document = await service.receive(owner.id, data, filename=sample, media_type=media_type)
+    document = await service.receive(owner.id, incoming(data), filename=sample)
     await world.drain(service)
     return owner, await world.documents.get(owner.id, document.id)
 

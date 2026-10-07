@@ -21,6 +21,7 @@ from papiq.core.domain.pipeline import Lane, Step
 from papiq.core.ports import ObjectStore
 from papiq.core.services.objects import archive_key, markdown_key, preview_key, structure_key
 from tests import builders
+from tests.builders import incoming
 from tests.contracts.processing import SAMPLES
 from tests.integration.conftest import s3_test_store
 
@@ -65,7 +66,7 @@ async def test_scan_and_photo_are_processed(
         await uow.commit()
 
     document = await services.pipeline.receive(
-        owner.id, (SAMPLES / sample).read_bytes(), filename=sample, media_type=media_type
+        owner.id, incoming((SAMPLES / sample).read_bytes()), filename=sample
     )
     while await services.pipeline.run_next_job():
         pass
