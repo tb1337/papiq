@@ -1,7 +1,7 @@
 """The worker service: runs background jobs, delivers events and keeps the cleanup scheduled.
 
-- `concurrency` job loops claim and run due jobs (pipeline steps first, then the cleanup); a
-  loop that finds nothing waits `poll_interval`.
+- `concurrency` job loops claim and run due jobs (the cleanup when due, else pipeline steps);
+  a loop that finds nothing waits `poll_interval`.
 - One loop dispatches the outbox (`EventBus.dispatch`) every `dispatch_interval` while there is
   nothing to deliver, and at once again while there is.
 - After an error, a loop waits longer, doubling up to `MAX_BACKOFF`.
@@ -97,7 +97,9 @@ class Worker:
                 await self._sleep(interval)
 
     async def _run_job(self) -> bool:
-        return await self._pipeline.run_next_job() or await self._maintenance.run_next_job()
+        # The cleanup first: it is due once per interval and would otherwise wait for a quiet
+        # moment, which a long bulk ingest never has.
+        return await self._maintenance.run_next_job() or await self._pipeline.run_next_job()
 
     async def _dispatch(self) -> bool:
         return await self._bus.dispatch() > 0

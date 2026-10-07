@@ -20,10 +20,12 @@ from papiq.core.ports.parser import ParseResult
 
 
 class DoclingParser:
-    def __init__(self, *, models: Path, timeout: timedelta) -> None:
-        """`models`: directory with the Docling models (`docling-tools models download`)."""
+    def __init__(self, *, models: Path, timeout: timedelta, threads: int | None = None) -> None:
+        """`models`: directory with the Docling models (`docling-tools models download`).
+        `threads`: CPU threads of one conversion; default: all cores."""
         self._models = models
         self._timeout = timeout
+        self._env = None if threads is None else {"OMP_NUM_THREADS": str(threads)}
 
     async def parse(self, source: Path, *, markdown: Path, structure: Path) -> ParseResult:
         suffix = f".{uuid.uuid4().hex}.tmp"
@@ -41,6 +43,7 @@ class DoclingParser:
                     str(self._models),
                 ],
                 timeout=self._timeout,
+                env=self._env,
             )
             reason = _last_line(completed.stderr)
             if completed.returncode == convert.UNPROCESSABLE:

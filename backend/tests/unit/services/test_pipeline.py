@@ -257,7 +257,7 @@ async def test_a_step_that_keeps_killing_the_worker_ends_red(world: World) -> No
     stored = await world.documents.get(owner.id, document.id)
     assert stored.lane is Lane.RED
     log = await world.documents.processing_log(owner.id, document.id)
-    assert log[-1].result.reason is not None and "lease expired" in log[-1].result.reason
+    assert log[-1].result.reason is not None and "ran out of time" in log[-1].result.reason
     assert not await pipeline.run_next_job()
 
 

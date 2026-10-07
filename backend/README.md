@@ -103,16 +103,24 @@ Receive → OCR → parse run as jobs (`pipeline.step`); the steps after parsing
 - OCRmyPDF (`adapters/outbound/ocrmypdf`) and Docling (`adapters/outbound/docling`) run as
   child processes per document with a time limit (`PAPIQ_OCR_TIMEOUT`, `PAPIQ_PARSE_TIMEOUT`);
   on timeout or cancellation the process group is killed. The job lease is the longer limit
-  plus two minutes, so a running step never loses its claim.
+  plus two minutes, so a step normally keeps its claim; if it overruns (e.g. a slow S3
+  transfer), another worker takes the job over and the late result is discarded. A step
+  interrupted by a stopping worker is released at once; that still counts as an attempt.
 - OCRmyPDF: `--skip-text` (pages with text are not recognised again), `--output-type pdfa`,
   languages `PAPIQ_OCR_LANGUAGES`. Images whose stated resolution gives an implausible page
-  size (none, or 72 dpi from a phone) are scaled to the long edge of A4.
+  size (none, or 72 dpi from a phone) are scaled to the long edge of A4; transparency is put on
+  white, CMYK is converted, all pages of a TIFF are kept. OCRmyPDF and Docling share the CPU
+  cores among `PAPIQ_WORKER_CONCURRENCY` jobs.
 - Docling uses the text layer of the archive (no OCR of its own) and the layout and table
   models in `PAPIQ_DOCLING_MODELS_PATH`; it never downloads models (`HF_HUB_OFFLINE=1`). The
   image stage `docling-models` downloads the models of the locked Docling version to
   `/opt/docling-models`; the devcontainer has them. Elsewhere:
   `uv run docling-tools models download layout tableformer -o <dir>`.
-- Previews: PDFium (pypdfium2) renders, Pillow encodes WebP.
+- Previews: PDFium (pypdfium2) renders, Pillow encodes WebP. PDFium is not thread-safe; all
+  its use in a process shares one lock.
+- Known gap: an original is stored before its document is created; if creating fails (e.g.
+  the drawer's rights changed meanwhile), the object stays without a document. Removing such
+  objects is left to a later cleanup of the object store.
 
 ## REST API
 
@@ -128,7 +136,7 @@ Receive → OCR → parse run as jobs (`pipeline.step`); the steps after parsing
 | `POST /documents/{id}/retry` | Repeat the failed step (owner) |
 | `POST /documents/{id}/reprocess` | `{"from_step": "ocr"}`: process again from a step (owner) |
 | `GET /events` | Server-sent events of the documents the caller may read; `?document_id=` |
-| `GET /health` | Database and object store reachable; `200` or `503`, no authentication |
+| `GET /health` | Database reachable, bucket or storage directory usable; `200` or `503`, no authentication |
 
 - Uploads are streamed into a temporary file and hashed on the way; the limit
   `PAPIQ_UPLOAD_MAX_SIZE` applies while receiving (`413`). The type is recognised from the
@@ -156,7 +164,8 @@ Receive → OCR → parse run as jobs (`pipeline.step`); the steps after parsing
   `PAPIQ_WORKER_POLL_INTERVAL` when nothing is due. One loop delivers outbox events
   (`EventBus.dispatch`) every `PAPIQ_EVENTS_POLL_INTERVAL`. Postgres `LISTEN/NOTIFY` is not
   used.
-- The cleanup (`maintenance.cleanup`, one job with a fixed dedup key) runs every
+- The cleanup (`maintenance.cleanup`, one job with a fixed dedup key; it goes before pipeline
+  steps when due) runs every
   `PAPIQ_CLEANUP_INTERVAL` and removes finished jobs and delivered events older than
   `PAPIQ_RETENTION`.
 - SIGTERM or SIGINT: no new jobs; running jobs may finish within

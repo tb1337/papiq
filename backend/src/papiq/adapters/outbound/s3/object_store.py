@@ -107,6 +107,11 @@ class S3ObjectStore:
         s3 = await self._s3()
         await s3.delete_object(Bucket=self._bucket, Key=self._key(key))
 
+    async def check(self) -> None:
+        """For health checks: raises unless the bucket exists and the credentials work."""
+        s3 = await self._s3()
+        await s3.head_bucket(Bucket=self._bucket)
+
     async def aclose(self) -> None:
         """Close the client; a later call opens a new one."""
         await self._stack.aclose()

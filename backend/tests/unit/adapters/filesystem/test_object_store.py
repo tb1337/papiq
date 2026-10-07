@@ -47,3 +47,11 @@ async def test_a_directory_is_not_an_object(root: Path) -> None:
     assert not await store.exists("a")
     await store.delete("a")
     assert await store.get("a/b") == b"x"
+
+
+async def test_check_needs_a_usable_root(tmp_path: Path) -> None:
+    await FilesystemObjectStore(tmp_path / "new" / "objects").check()  # created if missing
+    blocked = tmp_path / "file"
+    blocked.write_bytes(b"")
+    with pytest.raises(OSError):
+        await FilesystemObjectStore(blocked).check()
