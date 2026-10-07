@@ -27,6 +27,7 @@ async def test_the_fixed_answers_give_the_expected_lanes(tmp_path: Path) -> None
         assert result.lane is result.case.fake.lane, (result.case.name, result.reasons)
         assert result.violations == (), result.case.name
     assert evaluation.false_green == 0
+    assert evaluation.green_but_wrong == 0
     assert evaluation.violations == 0
 
     text = report.read_text(encoding="utf-8")
@@ -68,6 +69,19 @@ def test_the_set_is_checked(tmp_path: Path) -> None:
         load_set(tmp_path / "set")
 
 
+async def test_green_with_a_wrong_value_counts(tmp_path: Path) -> None:
+    shutil.copytree(SET, tmp_path / "set", ignore=shutil.ignore_patterns("reports"))
+    case = tmp_path / "set" / "cases" / "01-stromrechnung.json"
+    data = json.loads(case.read_text(encoding="utf-8"))
+    data["expected"]["document_date"] = "2026-01-01"
+    case.write_text(json.dumps(data), encoding="utf-8")
+    evaluation = await run_evaluation(
+        Settings.model_construct(), cases=tmp_path / "set", fake=True, output=tmp_path / "r.md"
+    )
+    assert evaluation.green_but_wrong == 1
+    assert "01-stromrechnung (document_date)" in (tmp_path / "r.md").read_text(encoding="utf-8")
+
+
 def test_the_command(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
@@ -77,4 +91,6 @@ def test_the_command(
     assert "01-stromrechnung: green" in capsys.readouterr().out
     with pytest.raises(SystemExit):
         main(["check", "--fake"])
+    with pytest.raises(SystemExit):
+        main(["check", "--cases", str(SET)])
     assert main(["evaluate", "--cases", str(tmp_path)]) == 1

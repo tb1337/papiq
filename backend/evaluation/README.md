@@ -25,4 +25,4 @@ otherwise (e.g. `PAPIQ_ROLE=worker`). The report goes to `reports/<date>-<model>
 per field, tag precision and recall, lanes expected against lanes got, documents that came out
 green although they should not have, run time per document, and what the instructions in the
 text achieved. The command exits with status 1 if any document came out green that should not
-have, or a field changed without a passed check.
+have or with a wrong value, or a field changed without a passed check.
