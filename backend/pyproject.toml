@@ -11,9 +11,12 @@ dependencies = [
     "alembic>=1.20.0",
     "argon2-cffi>=25.1.0",
     "asyncpg>=0.31.0",
+    "authlib>=1.8.0",
     "cryptography>=50.0.2",
     "docling>=2.134.0",
     "fastapi>=0.142.2",
+    "httpx2>=2.13.1",
+    "joserfc>=1.7.5",
     "ocrmypdf>=17.13.0",
     "pillow>=12.3.0",
     "pydantic>=2.13.5",
@@ -30,7 +33,6 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
     "import-linter",
     "mypy",
     "pytest",
@@ -110,6 +112,8 @@ forbidden_modules = [
     "docling",
     "fastapi",
     "httpx",
+    "httpx2",
+    "joserfc",
     "meilisearch",
     "ocrmypdf",
     "PIL",

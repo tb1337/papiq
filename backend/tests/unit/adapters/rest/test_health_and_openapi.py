@@ -2,7 +2,7 @@
 
 from typing import Any
 
-import httpx
+import httpx2
 
 from papiq.adapters.inbound.rest import PREFIX, ApiContext, create_app
 from papiq.composition.container import build_memory_container, build_services
@@ -37,8 +37,8 @@ async def test_a_failing_check_makes_the_api_unavailable() -> None:
             max_upload_size=1,
         )
     )
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://papiq"
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app), base_url="http://papiq"
     ) as client:
         response = await client.get(f"{PREFIX}/health")
     assert response.status_code == 503

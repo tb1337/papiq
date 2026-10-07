@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from uuid import UUID
 
-import httpx
+import httpx2
 import pytest
 
 from papiq.adapters.inbound.rest import PREFIX
@@ -348,8 +348,8 @@ async def test_unauthenticated_uploads_are_not_read(api: Api) -> None:
 async def test_the_limit_is_configured() -> None:
     container = build_memory_container()
     app = make_app(container, build_services(container), max_upload=10)
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://papiq"
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app), base_url="http://papiq"
     ) as client:
         response = await client.post(
             DOCUMENTS, files=pdf(), headers={USER_HEADER: str(UUID(int=1))}
@@ -365,8 +365,8 @@ async def test_unexpected_errors_are_problems_without_details(
 
     monkeypatch.setattr(api.services.documents, "get", broken)
     owner = await api.user()
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=api.app, raise_app_exceptions=False),
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=api.app, raise_app_exceptions=False),
         base_url="http://papiq",
     ) as client:
         response = await client.get(f"{DOCUMENTS}/{UUID(int=1)}", headers=auth(owner))

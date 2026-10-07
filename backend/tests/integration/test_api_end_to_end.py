@@ -12,7 +12,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 
 from papiq.adapters.inbound.rest import PREFIX
@@ -61,7 +61,7 @@ class Interruptible:
 class System:
     container: Container
     ocr: Interruptible
-    client: httpx.AsyncClient
+    client: httpx2.AsyncClient
 
     async def user(self) -> User:
         user = builders.user()
@@ -71,7 +71,7 @@ class System:
             await uow.commit()
         return user
 
-    async def upload(self, user: User, sample: str, **data: str) -> httpx.Response:
+    async def upload(self, user: User, sample: str, **data: str) -> httpx2.Response:
         files = {"file": (sample, (SAMPLES / sample).read_bytes(), "application/octet-stream")}
         return await self.client.post(DOCUMENTS, files=files, data=data, headers=auth(user))
 
@@ -156,7 +156,7 @@ async def system(stores: tuple[Database, ObjectStore], settings: Settings) -> As
     app = allow_test_users(build_app(container, tuning))
     running = asyncio.create_task(worker.run())
     try:
-        async with serving(app) as url, httpx.AsyncClient(base_url=url, timeout=30) as client:
+        async with serving(app) as url, httpx2.AsyncClient(base_url=url, timeout=30) as client:
             yield System(container, ocr, client)
     finally:
         worker.stop()

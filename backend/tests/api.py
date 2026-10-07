@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
-import httpx
+import httpx2
 import uvicorn
 from fastapi import FastAPI, Request
 
@@ -71,14 +71,14 @@ class Stream:
         return {event["document_id"] for event in self.events}
 
 
-async def listen(client: httpx.AsyncClient, user: User, stream: Stream, **params: str) -> None:
+async def listen(client: httpx2.AsyncClient, user: User, stream: Stream, **params: str) -> None:
     """Collect events into `stream` until the server ends the stream or goes away."""
-    with contextlib.suppress(httpx.ReadError, httpx.RemoteProtocolError):
+    with contextlib.suppress(httpx2.ReadError, httpx2.RemoteProtocolError):
         await _listen(client, user, stream, params)
 
 
 async def _listen(
-    client: httpx.AsyncClient, user: User, stream: Stream, params: dict[str, str]
+    client: httpx2.AsyncClient, user: User, stream: Stream, params: dict[str, str]
 ) -> None:
     async with client.stream(
         "GET", f"{PREFIX}/events", headers=auth(user), params=params
