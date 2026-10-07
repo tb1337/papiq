@@ -10,7 +10,7 @@ from papiq.core.domain.drawers import Drawer
 from papiq.core.domain.ids import DrawerId, UserId
 from papiq.core.domain.pipeline import Outcome, Step, StepResult
 from papiq.core.domain.users import Role, User
-from papiq.core.services.pipeline import IncomingFile
+from papiq.core.services.pipeline import IncomingFile, PipelineService, PlaceholderStep
 
 NOW = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 
@@ -105,3 +105,11 @@ def incoming(data: bytes) -> IncomingFile:
     path = Path(_INCOMING.name) / uuid.uuid4().hex
     path.write_bytes(data)
     return IncomingFile.of(path)
+
+
+def skip_classification(pipeline: PipelineService) -> PipelineService:
+    """Let classification and attribute extraction pass as OK, for tests about other things
+    (without a language model, they would make every document yellow)."""
+    for step in (Step.CLASSIFY, Step.EXTRACT_ATTRIBUTES):
+        pipeline._executors[step] = PlaceholderStep()
+    return pipeline

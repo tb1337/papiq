@@ -151,6 +151,7 @@ async def system(stores: tuple[Database, ObjectStore], settings: Settings) -> As
         events_poll_interval=timedelta(milliseconds=50),
     )
     services = build_services(container, tuning)
+    builders.skip_classification(services.pipeline)
     worker = Worker(
         pipeline=services.pipeline,
         maintenance=services.maintenance,

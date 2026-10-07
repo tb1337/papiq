@@ -48,6 +48,10 @@ def minimal_instance(schema: JsonValue) -> JsonValue:
     strings, the first enum value, objects with their required properties."""
     if not isinstance(schema, dict):
         return None
+    options = schema.get("anyOf")
+    if isinstance(options, list) and options:
+        values = [minimal_instance(option) for option in options]
+        return None if None in values else values[0]
     kinds = schema.get("type")
     kinds = kinds if isinstance(kinds, list) else [kinds]
     if "null" in kinds:

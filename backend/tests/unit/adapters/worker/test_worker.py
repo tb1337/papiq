@@ -10,7 +10,8 @@ import pytest
 
 from papiq.adapters.inbound.worker import Worker
 from papiq.adapters.outbound.memory import MemoryEventBus
-from papiq.composition.container import Container, Services, build_memory_container, build_services
+from papiq.composition.container import Container, Services, build_memory_container
+from papiq.composition.container import build_services as build_all_services
 from papiq.core.domain.documents import Document
 from papiq.core.domain.events import DomainEvent
 from papiq.core.domain.pipeline import Lane, Step, StepResult
@@ -77,6 +78,12 @@ class Slow:
             await asyncio.Event().wait()
         await asyncio.sleep(self.seconds or 0)
         return builders.OK
+
+
+def build_services(container: Container) -> Services:
+    services = build_all_services(container)
+    builders.skip_classification(services.pipeline)
+    return services
 
 
 def with_ocr(services: Services, executor: Slow) -> Services:
