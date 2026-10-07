@@ -20,6 +20,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import UTC, datetime, time
+from time import monotonic
 from typing import Any
 from uuid import UUID
 
@@ -56,6 +57,7 @@ FILTERABLE = ["owner_id", "drawer_id", "lane", "contact_id", "document_type_id",
 SORTABLE = ["document_date", "created_at"]
 STATE_FIELDS = ["id", "version", "embedding_model", "embedding_digest"]
 MAX_TOTAL_HITS = 1000
+READY_FOR = 30.0  # seconds an index counts as set up before its settings are looked at again
 _UNORDERED = {"filterableAttributes", "sortableAttributes"}
 
 
@@ -83,7 +85,7 @@ class MeilisearchIndex:
         self._client = httpx2.AsyncClient(
             base_url=url, headers=headers, timeout=timeout, transport=transport
         )
-        self._ready = False
+        self._ready_until = 0.0  # monotonic time until which the index counts as set up
         self._lock = asyncio.Lock()
 
     async def aclose(self) -> None:
@@ -186,7 +188,9 @@ class MeilisearchIndex:
                         )
         body = [self._payload(document) for document in documents]
         # An update: fields that are left out stay as they are (the vectors of `vectors=None`).
-        task = await self._request("PUT", f"/indexes/{index}/documents", json=body)
+        task = await self._request(
+            "PUT", f"/indexes/{index}/documents", json=body, params={"primaryKey": "id"}
+        )
         await self._wait(task)
 
     async def _swap_in_build(self) -> None:
@@ -208,12 +212,15 @@ class MeilisearchIndex:
     # --- preparation ----------------------------------------------------------------------------
 
     async def _ensure_ready(self) -> None:
-        if self._ready:
+        """Create the index and apply the settings if needed. Checked again every `READY_FOR`
+        seconds and after an answer "index not found", so a Meilisearch that lost its data
+        (a new volume) is set up again and the reconciliation can fill it."""
+        if monotonic() < self._ready_until:
             return
         async with self._lock:
-            if not self._ready:
+            if monotonic() >= self._ready_until:
                 await self._prepare(self._index)
-                self._ready = True
+                self._ready_until = monotonic() + READY_FOR
 
     async def _prepare(self, index: str) -> None:
         """Create the index if it is missing and bring its settings to the wanted ones."""
@@ -299,7 +306,10 @@ class MeilisearchIndex:
         return response
 
     async def _request(self, method: str, path: str, **arguments: Any) -> dict[str, Any]:
-        return _json(_checked(await self._send(method, path, **arguments)))
+        response = await self._send(method, path, **arguments)
+        if response.status_code == 404 and _code(response) == "index_not_found":
+            self._ready_until = 0.0
+        return _json(_checked(response))
 
     async def _wait(self, task: Mapping[str, Any]) -> None:
         """Wait for the task that a write answered with; raise if it failed."""
@@ -407,6 +417,13 @@ def _json(response: httpx2.Response) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise SearchIndexError("Meilisearch sent no JSON object")
     return data
+
+
+def _code(response: httpx2.Response) -> str | None:
+    try:
+        return str(response.json()["code"])
+    except (ValueError, KeyError, TypeError):
+        return None
 
 
 def _message(response: httpx2.Response) -> str:
