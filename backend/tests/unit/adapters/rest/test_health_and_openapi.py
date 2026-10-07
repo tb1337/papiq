@@ -212,7 +212,11 @@ async def test_bodies_and_answers_are_described(api: Api) -> None:
             for status, response in operation["responses"].items():
                 assert response.get("description"), (path, method, status)
     login = schema["paths"][f"{PREFIX}/auth/login"]["post"]
-    assert set(login["responses"]) >= {"200", "401", "415", "422", "429", "500"}
+    assert set(login["responses"]) >= {"200", "401", "413", "415", "422", "429", "500"}
+    for path, item in schema["paths"].items():
+        for method, operation in item.items():
+            if "requestBody" in operation:
+                assert "413" in operation["responses"], (path, method)
     assert login["requestBody"]["content"]["application/json"]
 
 

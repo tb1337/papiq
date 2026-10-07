@@ -1,5 +1,6 @@
 """Endpoints for users, master data, drawers and document metadata: they do what they say."""
 
+from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID
 
@@ -299,3 +300,45 @@ async def test_attribute_definitions_change(api: Api) -> None:
         assert (await api.client.patch(url, json=bad, headers=a)).status_code == 422
     denied = await api.client.patch(url, json={"name": "X"}, headers=auth(owner))
     assert denied.status_code == 403
+
+
+# --- M4-04: request sizes ----------------------------------------------------------
+
+
+async def test_json_bodies_are_bounded(api: Api) -> None:
+    """M4-04: only multipart uploads have a size limit (`PAPIQ_UPLOAD_MAX_SIZE`). A JSON body of
+    any size is read into memory before validation, also at the public sign-in."""
+    huge = '{"username": "' + "a" * (16 * 1024 * 1024) + '", "password": "x"}'
+    response = await api.client.post(
+        f"{PREFIX}/auth/login", content=huge, headers={"content-type": "application/json"}
+    )
+    assert response.status_code == 413, response.status_code
+
+
+async def test_bodies_without_length_are_bounded_while_read(api: Api) -> None:
+    user = await api.user()
+    sent = 0
+
+    async def chunks() -> AsyncIterator[bytes]:
+        nonlocal sent
+        yield b'{"name": "'
+        for _ in range(64):
+            sent += 64 * 1024
+            yield b"a" * (64 * 1024)
+        yield b'"}'
+
+    response = await api.client.post(
+        f"{PREFIX}/drawers",
+        content=chunks(),
+        headers={**auth(user), "content-type": "application/json"},
+    )
+    assert response.status_code == 413
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["detail"] == "the request body is larger than 1048576 bytes"
+
+
+async def test_bodies_below_the_limit_pass(api: Api) -> None:
+    user = await api.user()
+    name = "a" * 200
+    response = await api.client.post(f"{PREFIX}/drawers", json={"name": name}, headers=auth(user))
+    assert response.status_code == 201

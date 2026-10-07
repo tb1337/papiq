@@ -59,6 +59,7 @@ def build_app(
             event_bus=container.event_bus,
             health_checks=health_checks(container),
             max_upload_size=int(settings.upload_max_size),
+            max_request_size=int(settings.request_max_size),
             events_poll_interval=settings.events_poll_interval,
         )
     )

@@ -61,7 +61,7 @@ _PROBLEMS: dict[int, tuple[str, str]] = {
     403: ("Forbidden", "only the owner controls processing of this document"),
     404: ("Not Found", "document 01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b not found"),
     409: ("Conflict", "duplicate of document 01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b"),
-    413: ("Content Too Large", "the file is larger than 104857600 bytes"),
+    413: ("Content Too Large", "the request body is larger than 1048576 bytes"),
     415: ("Unsupported Media Type", "unsupported file type"),
     422: ("Unprocessable Content", "from_step: Input should be 'ocr', 'parse', ..."),
     500: ("Internal Server Error", "an unexpected error occurred"),
