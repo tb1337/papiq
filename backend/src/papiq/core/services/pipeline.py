@@ -4,21 +4,23 @@ import asyncio
 import hashlib
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 from uuid import UUID
 
 from papiq.core.domain import media_types
-from papiq.core.domain.documents import Document, Sha256
+from papiq.core.domain.documents import Document, DocumentChanges, Sha256
 from papiq.core.domain.errors import (
     ConcurrencyError,
     ConflictError,
     DuplicateDocumentError,
+    NotFoundError,
     PermissionDeniedError,
     UnprocessableDocumentError,
     UnsupportedMediaTypeError,
+    ValidationError,
 )
 from papiq.core.domain.ids import DocumentId, DrawerId, JobId, UserId
 from papiq.core.domain.jobs import Job, JobStatus
@@ -27,7 +29,12 @@ from papiq.core.domain.permissions import can_file_into, is_document_owner
 from papiq.core.domain.pipeline import PIPELINE, Outcome, Step, StepResult, StepRun
 from papiq.core.domain.users import User
 from papiq.core.ports import Clock, ObjectStore, UnitOfWork, UnitOfWorkFactory
-from papiq.core.services._access import load_actor, readable_document, visible_drawer
+from papiq.core.services._access import (
+    check_references,
+    load_actor,
+    readable_document,
+    visible_drawer,
+)
 from papiq.core.services.objects import original_key
 
 log = logging.getLogger(__name__)
@@ -39,6 +46,16 @@ STEP_JOB = "pipeline.step"
 """Job kind of a pipeline step; payload: document id, step, processing run."""
 
 
+@dataclass(frozen=True)
+class MetadataResult:
+    """A step result together with a change of the document's metadata (classification).
+    Both are stored in the same transaction. If the change no longer fits (master data was
+    removed meanwhile), nothing is changed and the step is uncertain."""
+
+    result: StepResult
+    changes: DocumentChanges
+
+
 class StepExecutor(Protocol):
     """Does the work of one pipeline step (OCR, parsing, classification, ...).
 
@@ -47,7 +64,7 @@ class StepExecutor(Protocol):
     which fails the step at once.
     """
 
-    async def run(self, document: Document) -> StepResult: ...
+    async def run(self, document: Document) -> StepResult | MetadataResult: ...
 
 
 class PlaceholderStep:
@@ -290,10 +307,11 @@ class PipelineService:
             )
             await self._record(job, document_id, step, run, _failed(reason), started)
             return
+        changes: DocumentChanges | None = None
         try:
-            result = await self._executors[step].run(document)
+            outcome = await self._executors[step].run(document)
         except UnprocessableDocumentError as error:
-            result = _failed(str(error))
+            outcome = _failed(str(error))
         except Exception as error:
             reason = f"{type(error).__name__}: {error}"
             retry_at = self._retry.next_run(job.tries, self._clock.now())
@@ -313,7 +331,11 @@ class PipelineService:
                 log.warning("lost the claim of a step job", extra={"job_id": str(job.id)})
             return
 
-        await self._record(job, document_id, step, run, result, started)
+        if isinstance(outcome, MetadataResult):
+            result, changes = outcome.result, outcome.changes
+        else:
+            result = outcome
+        await self._record(job, document_id, step, run, result, started, changes)
 
     async def _record(
         self,
@@ -323,13 +345,14 @@ class PipelineService:
         run: int,
         result: StepResult,
         started: datetime,
+        changes: DocumentChanges | None = None,
     ) -> None:
-        """Store a step result. A concurrent change of the document (e.g. a metadata edit) is
-        retried; if the job's claim was lost, another worker owns the step and nothing is
-        stored."""
+        """Store a step result (and its metadata change). A concurrent change of the document
+        (e.g. a metadata edit) is retried; if the job's claim was lost, another worker owns
+        the step and nothing is stored."""
         for attempt in range(1, _RECORD_ATTEMPTS + 1):
             try:
-                await self._record_once(job, document_id, step, run, result, started)
+                await self._record_once(job, document_id, step, run, result, started, changes)
                 return
             except ConcurrencyError:
                 if not await self._still_claimed(job):
@@ -346,6 +369,7 @@ class PipelineService:
         run: int,
         result: StepResult,
         started: datetime,
+        changes: DocumentChanges | None,
     ) -> None:
         now = self._clock.now()
         async with self._uow() as uow:
@@ -354,6 +378,8 @@ class PipelineService:
                 await uow.jobs.complete(job)
                 await uow.commit()
                 return
+            if changes is not None:
+                result = await _apply(uow, document, changes, result, now)
             next_step = document.record_result(step, run, result, now)
             await uow.documents.update(document)
             await self._log(uow, document.id, step, run, result, started, now)
@@ -439,6 +465,21 @@ async def _enqueue_step(uow: UnitOfWork, document: Document, now: datetime) -> J
     return await uow.jobs.enqueue(
         STEP_JOB, payload, run_at=now, dedup_key=f"{document.id}:{run}:{step.value}"
     )
+
+
+async def _apply(
+    uow: UnitOfWork, document: Document, changes: DocumentChanges, result: StepResult, now: datetime
+) -> StepResult:
+    """Apply a step's metadata change; if it no longer fits, change nothing and make the
+    step uncertain."""
+    try:
+        await check_references(uow, changes)
+        definitions = {item.id: item for item in await uow.attributes.list_all()}
+        document.apply_changes(changes, definitions, now)
+    except (NotFoundError, ValidationError) as error:
+        reason = f"the master data changed during the step; nothing was applied ({error})"
+        return replace(result, outcome=Outcome.UNCERTAIN, reason=reason)
+    return result
 
 
 def _failed(reason: str) -> StepResult:

@@ -43,7 +43,10 @@ class DocumentAccepted(BaseModel):
 
 class Processing(BaseModel):
     status: ProcessingStatus = Field(
-        description="`processing`: `current_step` is due; `completed`; `failed` at `current_step`."
+        description=(
+            "`processing`: `current_step` is due; `review`: stopped before `current_step` until "
+            "the uncertain fields are confirmed; `completed`; `failed` at `current_step`."
+        )
     )
     current_step: Step | None
     run: int = Field(description="Grows with every retry or reprocessing.")

@@ -5,7 +5,7 @@ from enum import StrEnum
 from pathlib import Path, PurePath
 
 from papiq.core.domain import media_types
-from papiq.core.domain.documents import Document, DocumentChanges, Unset
+from papiq.core.domain.documents import Document, DocumentChanges
 from papiq.core.domain.drawers import Drawer, ShareLevel
 from papiq.core.domain.errors import NotFoundError, PermissionDeniedError
 from papiq.core.domain.ids import DocumentId, DrawerId, UserId
@@ -19,6 +19,7 @@ from papiq.core.domain.pipeline import StepRun
 from papiq.core.ports import Clock, DocumentFilter, ObjectStore, UnitOfWork, UnitOfWorkFactory
 from papiq.core.ports.preview import PREVIEW_MEDIA_TYPE
 from papiq.core.services._access import (
+    check_references,
     load_actor,
     readable_document,
     visible_drawer,
@@ -165,7 +166,7 @@ class DocumentService:
         """Needs write access. Referenced contact, type, tags and attributes must exist."""
         async with self._uow() as uow:
             document, _ = await writable_document(uow, await load_actor(uow, actor), id)
-            await _check_references(uow, changes)
+            await check_references(uow, changes)
             definitions = {item.id: item for item in await uow.attributes.list_all()}
             document.apply_changes(changes, definitions, self._clock.now())
             await _save(uow, document)
@@ -213,14 +214,3 @@ class DocumentService:
 async def _save(uow: UnitOfWork, document: Document) -> None:
     await uow.documents.update(document)
     await uow.outbox.add(document.pull_events())
-
-
-async def _check_references(uow: UnitOfWork, changes: DocumentChanges) -> None:
-    if not isinstance(changes.contact_id, Unset) and changes.contact_id is not None:
-        await uow.contacts.get(changes.contact_id)
-    if not isinstance(changes.document_type_id, Unset) and changes.document_type_id is not None:
-        await uow.document_types.get(changes.document_type_id)
-    if not isinstance(changes.tag_ids, Unset):
-        for tag in changes.tag_ids:
-            if await uow.tags.find(tag) is None:
-                raise NotFoundError("tag", tag)

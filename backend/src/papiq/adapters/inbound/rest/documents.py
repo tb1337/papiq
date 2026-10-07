@@ -341,7 +341,8 @@ async def retry(id: UUID, user: CurrentUser, context: Context) -> DocumentDetail
     summary="Process again from a step",
     description=(
         "Owner only. Discards the results from `from_step` on, e.g. after a model change. Not "
-        "while processing runs, and not past a failed step."
+        "while processing runs, not past a failed step, and not from `file` while uncertain "
+        "fields wait for confirmation."
     ),
     response_model=DocumentDetails,
     responses=problem_responses(401, 403, 404, 409, 422),
