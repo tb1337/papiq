@@ -133,11 +133,18 @@ def create_app(context: ApiContext) -> FastAPI:
         for context in iter_route_contexts(app.routes):
             route = context.original_route
             if isinstance(route, APIRoute) and route.include_in_schema:
+                security = security_of(route)
                 for method in context.methods or ():
                     operation = schema["paths"][context.path_format][method.lower()]
-                    operation["security"] = security_of(route)
-                    if "requestBody" in operation and "413" not in operation["responses"]:
-                        operation["responses"]["413"] = problems.problem_responses(413)[413]
+                    operation["security"] = security
+                    responses = operation["responses"]
+                    if "requestBody" in operation and "413" not in responses:
+                        responses["413"] = problems.problem_responses(413)[413]
+                    # A `read` token or a missing CSRF header is refused on every change; a
+                    # token wherever a session is needed.
+                    refusable = security == SESSION_ONLY or (security and method != "GET")
+                    if refusable and "403" not in responses:
+                        responses["403"] = problems.problem_responses(403)[403]
         return schema
 
     app.openapi = openapi  # type: ignore[method-assign]
