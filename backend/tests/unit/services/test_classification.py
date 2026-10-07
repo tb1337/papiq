@@ -557,6 +557,21 @@ async def test_uncertain_attributes(
     assert result.result.outcome is Outcome.UNCERTAIN
 
 
+async def test_a_date_equal_to_the_document_date_is_only_suggested(world: World) -> None:
+    """Models put the document date into a due date the text does not give."""
+    seeded = await seed(world)
+    document = await document_with(world, type=seeded.types["Rechnung"])
+    document.document_date = date(2026, 3, 31)
+    answer = extraction(a2={"value": "2026-03-31", "evidence": "Musterstadt, 31.03.2026"})
+    result = await extract_step(world, model(answer)).run(document)
+    assert isinstance(result, MetadataResult)
+    check = attribute_check(seeded, result, "Fällig am")
+    assert check.outcome is Outcome.UNCERTAIN
+    assert check.reason == "'Fällig am': the same date as the document date"
+    assert check.suggestion == "2026-03-31"
+    assert seeded.attributes["Fällig am"].id not in result.changes.attributes
+
+
 async def test_values_are_read_leniently(world: World) -> None:
     seeded, result = await extract(
         world,
