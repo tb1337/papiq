@@ -4,14 +4,12 @@
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import timedelta
-from uuid import UUID
 
 import httpx
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 
-from papiq.adapters.inbound.rest import ApiContext, create_app, current_user
-from papiq.adapters.inbound.rest.problems import AuthenticationRequiredError
+from papiq.adapters.inbound.rest import ApiContext, create_app
 from papiq.adapters.outbound.memory import ManualClock
 from papiq.composition.container import (
     Container,
@@ -19,19 +17,11 @@ from papiq.composition.container import (
     build_memory_container,
     build_services,
 )
-from papiq.core.domain.ids import UserId
 from papiq.core.domain.users import User
 from tests import builders
+from tests.api import allow_test_users
 
-USER_HEADER = "x-test-user"
 MAX_UPLOAD = 1024 * 1024
-
-
-async def header_user(request: Request) -> UserId:
-    value = request.headers.get(USER_HEADER)
-    if value is None:
-        raise AuthenticationRequiredError("no test user")
-    return UserId(UUID(value))
 
 
 def make_app(
@@ -54,8 +44,7 @@ def make_app(
             events_poll_interval=poll,
         )
     )
-    app.dependency_overrides[current_user] = header_user
-    return app
+    return allow_test_users(app)
 
 
 @dataclass
@@ -76,10 +65,6 @@ class Api:
     async def drain(self) -> None:
         while await self.services.pipeline.run_next_job():
             pass
-
-
-def auth(user: User) -> dict[str, str]:
-    return {USER_HEADER: str(user.id)}
 
 
 @pytest.fixture
