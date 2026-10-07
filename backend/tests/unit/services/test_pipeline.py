@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta
 
 import pytest
@@ -9,6 +10,7 @@ from papiq.core.domain.errors import (
     InvalidTransitionError,
     NotFoundError,
     PermissionDeniedError,
+    UnprocessableDocumentError,
 )
 from papiq.core.domain.events import (
     DocumentFiled,
@@ -26,12 +28,12 @@ from papiq.core.domain.pipeline import (
     StepResult,
 )
 from papiq.core.domain.users import User
+from papiq.core.services.objects import original_key
 from papiq.core.services.pipeline import (
     STEP_JOB,
     PipelineService,
     PlaceholderStep,
     RetryPolicy,
-    original_key,
 )
 from tests.builders import FAILED, NOW, UNCERTAIN
 from tests.unit.services.conftest import Raises, Returns, World
@@ -309,3 +311,58 @@ def test_retry_policy() -> None:
     assert policy.next_run(1, NOW) == NOW + timedelta(seconds=10)
     assert policy.next_run(2, NOW) == NOW + timedelta(seconds=20)
     assert policy.next_run(3, NOW) is None
+
+
+class Blocks:
+    """Step executor that waits until cancelled."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+
+    async def run(self, document: Document) -> StepResult:
+        self.started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("not reached")
+
+
+class Unprocessable:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def run(self, document: Document) -> StepResult:
+        self.calls += 1
+        raise UnprocessableDocumentError("the PDF is encrypted")
+
+
+async def test_an_unprocessable_document_fails_at_once(world: World) -> None:
+    ocr = Unprocessable()
+    pipeline = world.pipeline({Step.OCR: ocr})
+    owner, document = await receive(world, pipeline)
+    await world.drain(pipeline)
+    stored = await world.documents.get(owner.id, document.id)
+    assert stored.lane is Lane.RED
+    assert ocr.calls == 1  # no automatic retry
+    log = await world.documents.processing_log(owner.id, document.id)
+    assert (log[-1].step, log[-1].result.reason) == (Step.OCR, "the PDF is encrypted")
+    (job,) = [job for job in world.database.jobs.values() if job.payload["step"] == "ocr"]
+    assert job.status is JobStatus.FAILED
+
+
+async def test_a_cancelled_step_releases_its_job_at_once(world: World) -> None:
+    blocking = Blocks()
+    pipeline = world.pipeline({Step.OCR: blocking})
+    owner, document = await receive(world, pipeline)
+    task = asyncio.create_task(pipeline.run_next_job())
+    await blocking.started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    (job,) = [job for job in world.database.jobs.values() if job.payload["step"] == "ocr"]
+    assert (job.status, job.run_at, job.last_error) == (
+        JobStatus.QUEUED,
+        world.clock.now(),
+        "interrupted: the worker stopped",
+    )
+    await world.drain()  # another worker takes it over without waiting for the lease
+    assert (await world.documents.get(owner.id, document.id)).lane is Lane.GREEN
