@@ -78,6 +78,68 @@ def test_llm_and_embedding_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.embedding_model == "bge-m3"
 
 
+def test_classification_defaults() -> None:
+    settings = load_settings()
+    assert settings.llm_temperature == 0
+    assert settings.llm_seed is None
+    assert settings.llm_timeout == timedelta(minutes=5)
+    assert settings.llm_response_format == "json_schema"
+    assert settings.llm_input_budget == 12_000
+    assert settings.llm_max_tags == 200
+    assert settings.embedding_timeout == timedelta(minutes=1)
+    assert settings.confidence_threshold == 0.9
+    assert settings.contact_suggest_threshold == 0.75
+
+
+def test_classification_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_env(
+        monkeypatch,
+        {
+            "PAPIQ_LLM_TEMPERATURE": "0.2",
+            "PAPIQ_LLM_SEED": "42",
+            "PAPIQ_LLM_TIMEOUT": "PT10M",
+            "PAPIQ_LLM_RESPONSE_FORMAT": "JSON_Object",
+            "PAPIQ_LLM_INPUT_BUDGET": "20000",
+            "PAPIQ_CONFIDENCE_THRESHOLD": "0.8",
+            "PAPIQ_CONTACT_SUGGEST_THRESHOLD": "0.8",
+        },
+    )
+    settings = load_settings()
+    assert settings.llm_temperature == 0.2
+    assert settings.llm_seed == 42
+    assert settings.llm_timeout == timedelta(minutes=10)
+    assert settings.llm_response_format == "json_object"
+    assert settings.llm_input_budget == 20_000
+    assert settings.confidence_threshold == settings.contact_suggest_threshold == 0.8
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("PAPIQ_LLM_TEMPERATURE", "-1"),
+        ("PAPIQ_LLM_RESPONSE_FORMAT", "text"),
+        ("PAPIQ_LLM_INPUT_BUDGET", "10"),
+        ("PAPIQ_LLM_TIMEOUT", "0"),
+        ("PAPIQ_CONFIDENCE_THRESHOLD", "0"),
+        ("PAPIQ_CONFIDENCE_THRESHOLD", "1.5"),
+    ],
+)
+def test_invalid_classification_settings(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    assert name in error_message(monkeypatch, {name: value})
+
+
+def test_the_suggestion_threshold_is_not_above_acceptance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message = error_message(
+        monkeypatch,
+        {"PAPIQ_CONFIDENCE_THRESHOLD": "0.7", "PAPIQ_CONTACT_SUGGEST_THRESHOLD": "0.75"},
+    )
+    assert "PAPIQ_CONTACT_SUGGEST_THRESHOLD must not be above PAPIQ_CONFIDENCE_THRESHOLD" in message
+
+
 def test_log_level_is_case_insensitive(monkeypatch: pytest.MonkeyPatch) -> None:
     set_env(monkeypatch, {"PAPIQ_LOG_LEVEL": "debug"})
     assert load_settings().log_level == "DEBUG"
