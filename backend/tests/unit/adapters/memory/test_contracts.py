@@ -3,9 +3,12 @@
 import pytest
 
 from papiq.adapters.outbound.memory import (
+    FakeCipher,
     FakeOcr,
     FakeParser,
+    FakePasswordHasher,
     FakePreviewRenderer,
+    FakeTotp,
     ManualClock,
     MemoryDatabase,
     MemoryEventBus,
@@ -16,6 +19,12 @@ from papiq.core.ports import Clock, DeliveryRetry, EventBus, ObjectStore, UnitOf
 from papiq.core.ports.event_bus import DEFAULT_DELIVERY_RETRY
 from tests.contracts.clock import ClockContract
 from tests.contracts.event_bus import EventBusContract, EventBusFactory
+from tests.contracts.identity import (
+    IdentityRepositoriesContract,
+    PasswordHasherContract,
+    SecretCipherContract,
+    TotpContract,
+)
 from tests.contracts.job_queue import JobQueueContract
 from tests.contracts.object_store import ObjectStoreContract
 from tests.contracts.processing import OcrContract, ParserContract, PreviewRendererContract
@@ -96,4 +105,35 @@ class TestFakeParser(ParserContract):
 
 
 class TestFakePreviewRenderer(PreviewRendererContract):
+    pass
+
+
+class TestMemoryIdentityRepositories(IdentityRepositoriesContract):
+    pass
+
+
+@pytest.fixture
+def password_hasher() -> FakePasswordHasher:
+    return FakePasswordHasher()
+
+
+@pytest.fixture
+def cipher() -> FakeCipher:
+    return FakeCipher()
+
+
+@pytest.fixture
+def totp() -> FakeTotp:
+    return FakeTotp()
+
+
+class TestFakePasswordHasher(PasswordHasherContract):
+    pass
+
+
+class TestFakeCipher(SecretCipherContract):
+    pass
+
+
+class TestFakeTotp(TotpContract):
     pass

@@ -4,6 +4,7 @@ They behave like the real adapters, including transactions: nothing is stored wi
 """
 
 from papiq.adapters.outbound.memory.clock import ManualClock
+from papiq.adapters.outbound.memory.crypto import FakeCipher, FakePasswordHasher, FakeTotp
 from papiq.adapters.outbound.memory.database import MemoryDatabase
 from papiq.adapters.outbound.memory.event_bus import MemoryEventBus
 from papiq.adapters.outbound.memory.object_store import MemoryObjectStore
@@ -11,9 +12,12 @@ from papiq.adapters.outbound.memory.processing import FakeOcr, FakeParser, FakeP
 from papiq.adapters.outbound.memory.unit_of_work import MemoryUnitOfWork, MemoryUnitOfWorkFactory
 
 __all__ = [
+    "FakeCipher",
     "FakeOcr",
     "FakeParser",
+    "FakePasswordHasher",
     "FakePreviewRenderer",
+    "FakeTotp",
     "ManualClock",
     "MemoryDatabase",
     "MemoryEventBus",

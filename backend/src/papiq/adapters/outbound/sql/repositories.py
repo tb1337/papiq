@@ -97,6 +97,12 @@ class SqlRepository[K: UUID, E]:
     async def list_all(self) -> list[E]:
         return await self._load(true())
 
+    async def remove(self, id: K) -> None:
+        """Child tables go with the row (ON DELETE CASCADE)."""
+        result = await self._tx.write(delete(self.table).where(self.table.c.id == id))
+        if result.rowcount == 0:
+            raise NotFoundError(self.kind, id)
+
     async def _load(self, where: ColumnElement[bool]) -> list[E]:
         rows = (await self._tx.read(select(self.table).where(where))).all()
         return await self._entities(rows)
@@ -162,6 +168,7 @@ class SqlUserRepository(SqlRepository[UserId, User]):
             "username_key": name_key(entity.username),
             "role": entity.role.value,
             "created_at": entity.created_at,
+            "active": entity.active,
             "version": entity.version,
         }
 
@@ -171,6 +178,7 @@ class SqlUserRepository(SqlRepository[UserId, User]):
             username=row.username,
             role=Role(row.role),
             created_at=row.created_at,
+            active=row.active,
             version=row.version,
         )
 
@@ -360,11 +368,42 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
             )
         )
 
-    async def remove(self, id: DocumentId) -> None:
-        """Tags, attribute values and the processing log go with it (ON DELETE CASCADE)."""
-        result = await self._tx.write(delete(t.documents).where(t.documents.c.id == id))
-        if result.rowcount == 0:
-            raise NotFoundError(self.kind, id)
+    async def exists(
+        self,
+        *,
+        owner: UserId | None = None,
+        drawer: DrawerId | None = None,
+        contact: ContactId | None = None,
+        document_type: DocumentTypeId | None = None,
+        tag: TagId | None = None,
+        attribute: AttributeId | None = None,
+    ) -> bool:
+        documents = t.documents
+        criteria: list[ColumnElement[bool]] = []
+        if owner is not None:
+            criteria.append(documents.c.owner_id == owner)
+        if drawer is not None:
+            criteria.append(documents.c.drawer_id == drawer)
+        if contact is not None:
+            criteria.append(documents.c.contact_id == contact)
+        if document_type is not None:
+            criteria.append(documents.c.document_type_id == document_type)
+        if tag is not None:
+            tags = t.document_tags
+            criteria.append(
+                documents.c.id.in_(select(tags.c.document_id).where(tags.c.tag_id == tag))
+            )
+        if attribute is not None:
+            values = t.document_attributes
+            criteria.append(
+                documents.c.id.in_(
+                    select(values.c.document_id).where(values.c.attribute_id == attribute)
+                )
+            )
+        if not criteria:
+            raise ValueError("exists needs at least one criterion")
+        found = await self._tx.read(select(documents.c.id).where(*criteria).limit(1))
+        return found.first() is not None
 
     async def _entities(self, rows: Sequence[Row[Any]]) -> list[Document]:
         ids = [row.id for row in rows]

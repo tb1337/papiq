@@ -16,12 +16,17 @@ from papiq.core.domain.users import User
 from papiq.core.ports import EventBus, UnitOfWorkFactory
 from tests import builders
 from tests.contracts.event_bus import EventBusContract, Recorder, publish, received
+from tests.contracts.identity import IdentityRepositoriesContract
 from tests.contracts.job_queue import JobQueueContract
 from tests.contracts.unit_of_work import UnitOfWorkContract
 from tests.sql_suite import MigrationSuite, SqlAdapterSuite
 
 
 class TestPostgresUnitOfWork(UnitOfWorkContract):
+    pass
+
+
+class TestPostgresIdentityRepositories(IdentityRepositoriesContract):
     pass
 
 

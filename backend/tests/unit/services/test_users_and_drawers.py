@@ -2,6 +2,7 @@ import pytest
 
 from papiq.core.domain.drawers import DEFAULT_DRAWER_NAME, ShareLevel
 from papiq.core.domain.errors import (
+    AuthenticationError,
     ConflictError,
     NotFoundError,
     PermissionDeniedError,
@@ -34,9 +35,17 @@ async def test_usernames_are_unique(world: World) -> None:
         await world.users.create_user(admin.id, "ROOT", Role.USER)
 
 
-async def test_unknown_actor(world: World) -> None:
-    with pytest.raises(NotFoundError):
+async def test_unknown_or_deactivated_actor_is_not_authenticated(world: World) -> None:
+    with pytest.raises(AuthenticationError):
         await world.users.create_user(UserId(new_id()), "x", Role.USER)
+    admin = await world.user(role=Role.ADMIN)
+    async with world.uow() as uow:
+        stored = await uow.users.get(admin.id)
+        stored.active = False
+        await uow.users.update(stored)
+        await uow.commit()
+    with pytest.raises(AuthenticationError):
+        await world.users.create_user(admin.id, "x", Role.USER)
 
 
 async def test_owner_creates_renames_and_shares_drawers(world: World) -> None:

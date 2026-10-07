@@ -4,6 +4,9 @@ from dataclasses import dataclass, field
 import pytest
 
 from papiq.adapters.outbound.memory import (
+    FakeCipher,
+    FakePasswordHasher,
+    FakeTotp,
     ManualClock,
     MemoryDatabase,
     MemoryObjectStore,
@@ -12,8 +15,10 @@ from papiq.adapters.outbound.memory import (
 from papiq.core.domain.documents import Document
 from papiq.core.domain.drawers import Drawer
 from papiq.core.domain.events import DomainEvent
+from papiq.core.domain.identity import Credential, check_new_password
 from papiq.core.domain.pipeline import PIPELINE, Step, StepResult
 from papiq.core.domain.users import Role, User
+from papiq.core.services.auth import AuthService
 from papiq.core.services.documents import DocumentService
 from papiq.core.services.drawers import DrawerService
 from papiq.core.services.master_data import MasterDataService
@@ -58,6 +63,9 @@ class World:
     executors: dict[Step, StepExecutor] = field(
         default_factory=lambda: {step: PlaceholderStep() for step in PIPELINE[1:]}
     )
+    hasher: FakePasswordHasher = field(default_factory=FakePasswordHasher)
+    cipher: FakeCipher = field(default_factory=FakeCipher)
+    totp: FakeTotp = field(default_factory=FakeTotp)
 
     @property
     def uow(self) -> MemoryUnitOfWorkFactory:
@@ -65,7 +73,13 @@ class World:
 
     @property
     def users(self) -> UserService:
-        return UserService(self.uow, self.clock)
+        return UserService(self.uow, self.clock, self.hasher)
+
+    @property
+    def auth(self) -> AuthService:
+        return AuthService(
+            self.uow, self.clock, hasher=self.hasher, cipher=self.cipher, totp=self.totp
+        )
 
     @property
     def drawers(self) -> DrawerService:
@@ -94,6 +108,21 @@ class World:
         async with self.uow() as uow:
             await uow.users.add(user)
             await uow.drawers.add(builders.default_drawer(user))
+            await uow.commit()
+        return user
+
+    async def account(
+        self, name: str | None = None, role: Role = Role.USER, password: str = builders.PASSWORD
+    ) -> User:
+        """A user with default drawer and password."""
+        user = await self.user(name, role)
+        async with self.uow() as uow:
+            await uow.credentials.add(
+                Credential(
+                    user_id=user.id,
+                    password_hash=await self.hasher.hash(check_new_password(password, "-")),
+                )
+            )
             await uow.commit()
         return user
 

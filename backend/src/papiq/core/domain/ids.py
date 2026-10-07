@@ -14,6 +14,9 @@ TagId = NewType("TagId", UUID)
 AttributeId = NewType("AttributeId", UUID)
 EventId = NewType("EventId", UUID)
 JobId = NewType("JobId", UUID)
+SessionId = NewType("SessionId", UUID)
+ApiTokenId = NewType("ApiTokenId", UUID)
+ExternalIdentityId = NewType("ExternalIdentityId", UUID)
 
 _TIMESTAMP_BITS = 48
 _RANDOM_BITS = 80

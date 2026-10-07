@@ -10,6 +10,7 @@ from papiq.core.domain.attributes import AttributeDefinition
 from papiq.core.domain.documents import Document
 from papiq.core.domain.drawers import Drawer
 from papiq.core.domain.events import DomainEvent
+from papiq.core.domain.identity import ApiToken, ExternalIdentity, Session
 from papiq.core.domain.ids import EventId, JobId
 from papiq.core.domain.jobs import Job
 from papiq.core.domain.master_data import MasterData
@@ -49,6 +50,22 @@ def _document_keys(document: Document) -> Iterable[Hashable]:
     return [("sha256", document.owner_id, document.sha256)]
 
 
+def _no_keys(item: object) -> Iterable[Hashable]:
+    return []
+
+
+def _session_keys(session: Session) -> Iterable[Hashable]:
+    return [("token", session.token_hash)]
+
+
+def _token_keys(token: ApiToken) -> Iterable[Hashable]:
+    return [("token", token.token_hash)]
+
+
+def _external_identity_keys(identity: ExternalIdentity) -> Iterable[Hashable]:
+    return [("subject", identity.issuer, identity.subject)]
+
+
 USERS = Table("user", _user_keys)
 DRAWERS = Table("drawer", _drawer_keys)
 CONTACTS = Table("contact", _name_keys)
@@ -56,6 +73,11 @@ DOCUMENT_TYPES = Table("document type", _name_keys)
 TAGS = Table("tag", _name_keys)
 ATTRIBUTES = Table("attribute", _attribute_keys)
 DOCUMENTS = Table("document", _document_keys)
+CREDENTIALS = Table("credential", _no_keys)
+SESSIONS = Table("session", _session_keys)
+API_TOKENS = Table("API token", _token_keys)
+EXTERNAL_IDENTITIES = Table("external identity", _external_identity_keys)
+LOGIN_FAILURES = Table("login failures", _no_keys)
 
 
 @dataclass

@@ -57,6 +57,11 @@ class UserRepository(Repository[UserId, User], Protocol):
         """Case-insensitive lookup."""
         ...
 
+    async def remove(self, id: UserId) -> None:
+        """Delete the user; NotFoundError if missing. Documents, drawers, shares and identity
+        data that refer to the user must be removed first."""
+        ...
+
 
 class DrawerRepository(Repository[DrawerId, Drawer], Protocol):
     async def get_default(self, owner: UserId) -> Drawer:
@@ -65,6 +70,11 @@ class DrawerRepository(Repository[DrawerId, Drawer], Protocol):
 
     async def list_accessible(self, user: UserId) -> list[Drawer]:
         """Drawers the user owns or that are shared with them."""
+        ...
+
+    async def remove(self, id: DrawerId) -> None:
+        """Delete the drawer and its shares; NotFoundError if missing. It must hold no
+        documents."""
         ...
 
 
@@ -93,6 +103,20 @@ class DocumentRepository(Repository[DocumentId, Document], Protocol):
 
     async def remove(self, id: DocumentId) -> None:
         """Delete the document and its processing log; NotFoundError if it does not exist."""
+        ...
+
+    async def exists(
+        self,
+        *,
+        owner: UserId | None = None,
+        drawer: DrawerId | None = None,
+        contact: ContactId | None = None,
+        document_type: DocumentTypeId | None = None,
+        tag: TagId | None = None,
+        attribute: AttributeId | None = None,
+    ) -> bool:
+        """Whether any document matches all given criteria, regardless of who may read it
+        (for checks before deleting what documents refer to). At least one is required."""
         ...
 
 

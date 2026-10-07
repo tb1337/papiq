@@ -559,3 +559,79 @@ class UnitOfWorkContract:
             await uow.processing_log.append(entries[0])
         async with uow_factory() as uow:
             assert len(await uow.processing_log.list_for(document.id)) == 3
+
+    # --- removal and references -----------------------------------------------------------------
+
+    async def test_users_keep_their_active_flag(self, uow_factory: UnitOfWorkFactory) -> None:
+        user = builders.user()
+        user.active = False
+        await seed(uow_factory, user)
+        async with uow_factory() as uow:
+            stored = await uow.users.get(user.id)
+            assert stored.active is False
+            stored.active = True
+            await uow.users.update(stored)
+            await uow.commit()
+        async with uow_factory() as uow:
+            assert (await uow.users.get(user.id)).active is True
+
+    async def test_users_and_drawers_are_removed(self, uow_factory: UnitOfWorkFactory) -> None:
+        owner, drawer = await owner_with_drawer(uow_factory)
+        other = builders.user()
+        shared = builders.drawer(owner)
+        shared.share(other.id, ShareLevel.READ)
+        await seed(uow_factory, other, drawers=(shared,))
+        async with uow_factory() as uow:
+            await uow.drawers.remove(shared.id)
+            await uow.drawers.remove(drawer.id)
+            await uow.users.remove(owner.id)
+            await uow.commit()
+        async with uow_factory() as uow:
+            assert await uow.users.find(owner.id) is None
+            assert await uow.drawers.find(shared.id) is None
+            assert await uow.drawers.list_accessible(other.id) == []
+            with pytest.raises(NotFoundError):
+                await uow.users.remove(owner.id)
+            with pytest.raises(NotFoundError):
+                await uow.drawers.remove(drawer.id)
+
+    async def test_documents_exist_by_reference(self, uow_factory: UnitOfWorkFactory) -> None:
+        owner, drawer = await owner_with_drawer(uow_factory)
+        stranger, empty = await owner_with_drawer(uow_factory)
+        contact = Contact.create(name="ACME", now=NOW)
+        document_type = DocumentType.create(name="Invoice", now=NOW)
+        tag = Tag.create(name="tax", now=NOW)
+        attribute = AttributeDefinition.create(name="note", data_type=AttributeType.TEXT, now=NOW)
+        document = builders.document(owner, drawer)
+        document.apply_changes(
+            DocumentChanges(
+                contact_id=contact.id,
+                document_type_id=document_type.id,
+                tag_ids=frozenset({tag.id}),
+                attributes={attribute.id: "x"},
+            ),
+            {attribute.id: attribute},
+            NOW,
+        )
+        async with uow_factory() as uow:
+            await uow.contacts.add(contact)
+            await uow.document_types.add(document_type)
+            await uow.tags.add(tag)
+            await uow.attributes.add(attribute)
+            await uow.documents.add(document)
+            await uow.commit()
+        unused_tag = Tag.create(name="unused", now=NOW)
+        async with uow_factory() as uow:
+            assert await uow.documents.exists(owner=owner.id)
+            assert await uow.documents.exists(drawer=drawer.id)
+            assert await uow.documents.exists(contact=contact.id)
+            assert await uow.documents.exists(document_type=document_type.id)
+            assert await uow.documents.exists(tag=tag.id)
+            assert await uow.documents.exists(attribute=attribute.id)
+            assert await uow.documents.exists(owner=owner.id, tag=tag.id)
+            assert not await uow.documents.exists(owner=stranger.id)
+            assert not await uow.documents.exists(drawer=empty.id)
+            assert not await uow.documents.exists(owner=stranger.id, tag=tag.id)
+            assert not await uow.documents.exists(tag=unused_tag.id)
+            with pytest.raises(ValueError):
+                await uow.documents.exists()
