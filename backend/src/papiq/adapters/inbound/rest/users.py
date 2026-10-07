@@ -98,11 +98,7 @@ async def get_user(id: UUID, principal: Authenticated, context: Context) -> Acco
     responses=problem_responses(401, 403, 404, 409, 422),
 )
 async def update_user(id: UUID, body: UserPatch, user: CurrentUser, context: Context) -> UserOut:
-    changed = (await context.users.account(user, UserId(id))).user  # admins only
-    if body.role is not None:
-        changed = await context.users.change_role(user, UserId(id), body.role)
-    if body.active is not None:
-        changed = await context.users.set_active(user, UserId(id), body.active)
+    changed = await context.users.update(user, UserId(id), role=body.role, active=body.active)
     return UserOut.of(changed)
 
 
