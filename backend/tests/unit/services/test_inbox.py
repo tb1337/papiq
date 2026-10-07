@@ -18,16 +18,17 @@ from papiq.core.domain.errors import (
     PermissionDeniedError,
     ValidationError,
 )
-from papiq.core.domain.ids import ContactId
+from papiq.core.domain.ids import ContactId, DrawerId, UserId
 from papiq.core.domain.master_data import Contact
 from papiq.core.domain.pipeline import Lane, Outcome, ProcessingStatus, Step, StepResult
 from papiq.core.domain.users import User
 from papiq.core.services.inbox import PERSON, OpenStep, decide, field_checks
 from papiq.core.services.pipeline import PipelineService
-from tests.builders import FAILED, NOW, incoming
+from tests.builders import FAILED, NOW, document, incoming
 from tests.unit.services.conftest import Returns, World
 
 UNSURE = "not shown in the text"
+DOCUMENT = document(UserId(UUID(int=1)), DrawerId(UUID(int=2)))
 
 
 @dataclass
@@ -176,9 +177,37 @@ async def test_a_confirmed_document_is_filed(world: World) -> None:
         "outcome_before": "uncertain",
         "accepted": ["contact"],
         "entered": ["document_date"],
+        "kept": [],
     }
     # The model's proposals stay readable, for the rules.
     assert field_checks(log)["contact"].proposed == "Stadtwerk"
+
+
+async def test_values_set_meanwhile_are_kept(world: World) -> None:
+    """A value the owner set after the run (PATCH) decides its field; suggestions fill only
+    the empty ones."""
+    s = await scene(world)
+    chosen = Contact.create(name="Gemeindewerke", now=NOW)
+    async with world.uow() as uow:
+        await uow.contacts.add(chosen)
+        await uow.commit()
+    await world.documents.update_metadata(
+        s.owner.id, s.document.id, DocumentChanges(contact_id=chosen.id)
+    )
+    await s.pipeline.confirm(
+        s.owner.id,
+        s.document.id,
+        DocumentChanges(document_date=date(2026, 3, 31)),
+        accept_suggestions=True,
+    )
+    await world.drain(s.pipeline)
+    document = await world.documents.get(s.owner.id, s.document.id)
+    assert document.contact_id == chosen.id
+    assert document.attributes[s.amount.id] == Money(Decimal("84.20"), "EUR")
+    log = await world.documents.processing_log(s.owner.id, s.document.id)
+    confirmed = next(entry for entry in log if entry.result.model_version == PERSON)
+    assert confirmed.result.output["kept"] == ["contact"]
+    assert confirmed.result.output["accepted"] == []
 
 
 async def test_after_a_type_correction_attributes_are_extracted_again(world: World) -> None:
@@ -263,9 +292,10 @@ def test_suggestions_that_do_not_fit_are_refused() -> None:
     )
     open = [OpenStep(Step.CLASSIFY, Outcome.UNCERTAIN, "x", (check,))]
     with pytest.raises(ValidationError, match="cannot be taken"):
-        decide(open, DocumentChanges(), accept_suggestions=True, definitions={})
+        decide(open, DOCUMENT, DocumentChanges(), accept_suggestions=True, definitions={})
     decision = decide(
         open,
+        DOCUMENT,
         DocumentChanges(contact_id=ContactId(UUID(int=7))),
         accept_suggestions=True,
         definitions={},
@@ -280,5 +310,5 @@ def test_fields_of_removed_attributes_need_no_decision() -> None:
         field=attribute_field(gone.id), outcome=Outcome.UNCERTAIN, confidence=0, reason="x"
     )
     open = [OpenStep(Step.EXTRACT_ATTRIBUTES, Outcome.UNCERTAIN, "x", (check,))]
-    decision = decide(open, DocumentChanges(), accept_suggestions=False, definitions={})
+    decision = decide(open, DOCUMENT, DocumentChanges(), accept_suggestions=False, definitions={})
     assert decision.changes == DocumentChanges()
