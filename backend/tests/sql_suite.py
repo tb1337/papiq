@@ -5,6 +5,7 @@ Test modules subclass the suites and provide the fixtures `database` (migrated, 
 """
 
 import asyncio
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -20,17 +21,17 @@ from papiq.adapters.outbound.sql import Database, migrate
 from papiq.adapters.outbound.sql import tables as t
 from papiq.core.domain.attributes import AttributeDefinition, AttributeType, Money
 from papiq.core.domain.documents import Document, DocumentChanges
-from papiq.core.domain.errors import ConflictError
+from papiq.core.domain.errors import ConflictError, DuplicateDocumentError
 from papiq.core.domain.events import DomainEvent
 from papiq.core.domain.ids import new_id
 from papiq.core.domain.jobs import Job
 from papiq.core.domain.pipeline import PIPELINE
 from papiq.core.domain.users import User
-from papiq.core.ports import EventBus, UnitOfWorkFactory
+from papiq.core.ports import DeliveryRetry, EventBus, UnitOfWorkFactory
 from papiq.core.services.pipeline import PipelineService, PlaceholderStep
 from tests import builders
-from tests.builders import NOW
-from tests.contracts.event_bus import Recorder, publish, received
+from tests.builders import NOW, incoming
+from tests.contracts.event_bus import EventBusFactory, Recorder, publish, received
 from tests.contracts.unit_of_work import owner_with_drawer
 
 LEASE = timedelta(minutes=5)
@@ -161,13 +162,11 @@ class SqlAdapterSuite:
         )
 
         async def upload() -> Document:
-            return await pipeline.receive(
-                owner.id, b"%PDF same", filename="a.pdf", media_type="application/pdf"
-            )
+            return await pipeline.receive(owner.id, incoming(b"%PDF-1.7 same"), filename="a.pdf")
 
         results = await asyncio.gather(*(upload() for _ in range(3)), return_exceptions=True)
-        assert len([r for r in results if isinstance(r, Document)]) == 1
-        assert all(isinstance(r, Document | ConflictError) for r in results), results
+        assert len([r for r in results if isinstance(r, Document)]) == 1, results
+        assert all(isinstance(r, Document | DuplicateDocumentError) for r in results), results
         async with uow_factory() as uow:
             assert len(await uow.documents.list_visible_to(owner.id)) == 1
 
@@ -236,19 +235,48 @@ class SqlAdapterSuite:
     async def test_failed_deliveries_are_kept_per_subscriber(
         self,
         uow_factory: UnitOfWorkFactory,
-        event_bus_factory: Callable[[], EventBus],
+        event_bus_factory: EventBusFactory,
         database: Database,
     ) -> None:
-        bus = event_bus_factory()
+        clock = ManualClock(NOW)
+        bus = event_bus_factory(clock=clock, retry=DeliveryRetry(delay=timedelta(seconds=10)))
         failing = Recorder(failures=3)
         bus.subscribe("failing", failing)
         await publish(uow_factory, received(1))
         await bus.dispatch()
+        clock.advance(timedelta(seconds=10))
         await bus.dispatch()
         async with database.reading() as connection:
             rows = (await connection.execute(select(t.event_retries))).all()
         assert [(row.subscriber, row.attempts) for row in rows] == [("failing", 2)]
         assert "handler failed" in rows[0].last_error
+        assert rows[0].retry_at == NOW + timedelta(seconds=30)
+
+    async def test_enqueue_with_dedup_key_many_times(self, uow_factory: UnitOfWorkFactory) -> None:
+        """Postgres plans a prepared statement generically from its sixth run on; the partial
+        index of the dedup key must still match then."""
+        for number in range(12):
+            async with uow_factory() as uow:
+                assert await uow.jobs.enqueue("test", {}, run_at=NOW, dedup_key=f"k{number}")
+                assert (
+                    await uow.jobs.enqueue("test", {}, run_at=NOW, dedup_key=f"k{number}") is None
+                )
+                await uow.commit()
+
+    async def test_dispatch_logs_at_info_level(
+        self,
+        uow_factory: UnitOfWorkFactory,
+        event_bus_factory: EventBusFactory,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Log records must not use reserved attribute names (`name` raised KeyError)."""
+        caplog.set_level(logging.INFO)
+        bus = event_bus_factory()
+        recorder = Recorder()
+        bus.subscribe("index", recorder)
+        await publish(uow_factory, received(1))
+        assert await bus.dispatch() == 1
+        assert any(record.message == "event subscription created" for record in caplog.records)
 
 
 class MigrationSuite:

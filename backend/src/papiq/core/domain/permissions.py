@@ -9,7 +9,8 @@
   admin, any document into any drawer. Shares never allow moving.
 - Only admins manage users and master data. Apart from moving, admins have no extra rights on
   documents or drawers.
-- Deleting, retrying and reprocessing a document is up to its owner.
+- Deleting, retrying and reprocessing a document is up to its owner; so is reading its
+  processing log, which may hold technical details of failed runs.
 """
 
 from papiq.core.domain.documents import Document

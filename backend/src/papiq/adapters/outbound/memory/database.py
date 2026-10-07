@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Hashable, Iterable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -9,7 +10,7 @@ from papiq.core.domain.attributes import AttributeDefinition
 from papiq.core.domain.documents import Document
 from papiq.core.domain.drawers import Drawer
 from papiq.core.domain.events import DomainEvent
-from papiq.core.domain.ids import JobId
+from papiq.core.domain.ids import EventId, JobId
 from papiq.core.domain.jobs import Job
 from papiq.core.domain.master_data import MasterData
 from papiq.core.domain.pipeline import StepRun
@@ -58,11 +59,20 @@ DOCUMENTS = Table("document", _document_keys)
 
 
 @dataclass
+class Retry:
+    """A failed delivery, due again at `due`."""
+
+    position: int
+    attempts: int
+    due: datetime
+
+
+@dataclass
 class SubscriptionState:
     """Delivery state of one subscriber, kept with the outbox so it survives the bus."""
 
     cursor: int  # outbox position of the next new event
-    retries: list[int] = field(default_factory=list)  # positions of failed events
+    retries: list[Retry] = field(default_factory=list)  # failed events, in order of failure
 
 
 @dataclass
@@ -72,6 +82,8 @@ class MemoryDatabase:
     tables: dict[str, dict[UUID, Any]] = field(default_factory=dict)
     processing_log: list[StepRun] = field(default_factory=list)
     outbox: list[DomainEvent] = field(default_factory=list)
+    recorded_at: dict[EventId, datetime] = field(default_factory=dict)  # when committed
+    purged: set[int] = field(default_factory=set)  # outbox positions removed by `purge`
     jobs: dict[JobId, Job] = field(default_factory=dict)
     subscriptions: dict[str, SubscriptionState] = field(default_factory=dict)
 

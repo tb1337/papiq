@@ -8,7 +8,7 @@ still has the version it had when the unit first touched it, and that uniqueness
 import copy
 import dataclasses
 from collections.abc import Collection, Hashable, Iterable, Mapping
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from types import TracebackType
 from typing import Any, Self
 from uuid import UUID
@@ -66,6 +66,7 @@ class MemoryUnitOfWork:
         self._events: list[DomainEvent] = []
         self._jobs: dict[JobId, Job] = {}
         self._job_base: dict[JobId, Job | None] = {}
+        self._purged_jobs: set[JobId] = set()
 
         self.users = MemoryUserRepository(self, USERS)
         self.drawers = MemoryDrawerRepository(self, DRAWERS)
@@ -113,7 +114,11 @@ class MemoryUnitOfWork:
             entry for entry in self._db.processing_log if entry.document_id not in removed
         ]
         self._db.outbox.extend(self._events)
+        recorded_at = datetime.now(UTC)
+        self._db.recorded_at.update((event.id, recorded_at) for event in self._events)
         self._db.jobs.update(self._jobs)
+        for id in self._purged_jobs:
+            self._db.jobs.pop(id, None)
         self._closed = True
 
     async def rollback(self) -> None:
@@ -143,6 +148,7 @@ class MemoryUnitOfWork:
                 for other in self._db.jobs.values():
                     if (
                         other.id not in self._jobs
+                        and other.id not in self._purged_jobs
                         and other.dedup_key == job.dedup_key
                         and other.status.is_active
                     ):
@@ -369,6 +375,19 @@ class MemoryJobQueue:
             )
         )
 
+    async def release(self, job: Job, *, run_at: datetime, error: str) -> None:
+        current = await self._claimed(job)
+        self._write(
+            dataclasses.replace(
+                current,
+                status=JobStatus.QUEUED,
+                releases=current.releases + 1,
+                run_at=require_utc(run_at, "run_at"),
+                locked_until=None,
+                last_error=error,
+            )
+        )
+
     async def fail(self, job: Job, *, error: str) -> None:
         current = await self._claimed(job)
         self._write(
@@ -386,14 +405,23 @@ class MemoryJobQueue:
     async def get(self, job: JobId) -> Job:
         self._uow._check_open()
         found = self._uow._jobs.get(job) or self._uow._db.jobs.get(job)
-        if found is None:
+        if found is None or job in self._uow._purged_jobs:
             raise NotFoundError("job", job)
         return copy.deepcopy(found)
+
+    async def purge(self, *, before: datetime) -> int:
+        finished = [
+            job.id
+            for job in self._all()
+            if job.status in {JobStatus.DONE, JobStatus.FAILED} and job.run_at < before
+        ]
+        self._uow._purged_jobs.update(finished)
+        return len(finished)
 
     def _all(self) -> list[Job]:
         self._uow._check_open()
         jobs = {**self._uow._db.jobs, **self._uow._jobs}
-        return list(jobs.values())
+        return [job for id, job in jobs.items() if id not in self._uow._purged_jobs]
 
     def _write(self, job: Job) -> None:
         self._uow._check_open()

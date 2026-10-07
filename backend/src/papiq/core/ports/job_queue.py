@@ -36,14 +36,20 @@ class JobQueue(Protocol):
         job whose lease has expired. Counts the attempt. None if no job is due."""
         ...
 
-    # `complete`, `reschedule` and `fail` take the claimed job as returned by `claim`. They raise
-    # ConcurrencyError if the job is no longer running under that claim, e.g. because the lease
-    # ran out and another worker claimed it: only the current claim may finish a job.
+    # `complete`, `reschedule`, `release` and `fail` take the claimed job as returned by `claim`.
+    # They raise ConcurrencyError if the job is no longer running under that claim, e.g. because
+    # the lease ran out and another worker claimed it: only the current claim may finish a job.
 
     async def complete(self, job: Job) -> None: ...
 
     async def reschedule(self, job: Job, *, run_at: datetime, error: str) -> None:
         """Release the job to run again at `run_at`, e.g. after a failed attempt."""
+        ...
+
+    async def release(self, job: Job, *, run_at: datetime, error: str) -> None:
+        """Give the job back unfinished, e.g. because the worker stops: it runs again at
+        `run_at`. The claim still counts in `attempts`, but also in `releases`, so `Job.tries`
+        leaves it out."""
         ...
 
     async def fail(self, job: Job, *, error: str) -> None:
@@ -52,4 +58,9 @@ class JobQueue(Protocol):
 
     async def get(self, job: JobId) -> Job:
         """NotFoundError if the job does not exist."""
+        ...
+
+    async def purge(self, *, before: datetime) -> int:
+        """Remove done and failed jobs that were due before `before`; returns how many. Queued
+        and running jobs stay."""
         ...

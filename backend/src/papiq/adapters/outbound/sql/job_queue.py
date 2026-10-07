@@ -9,14 +9,15 @@ Finishing a job checks the claim in the same statement (`status = 'running'` and
 count of the claim): only the current claim can complete, reschedule or fail it.
 
 Deduplication uses a unique index on `dedup_key` over queued and running jobs only;
-`INSERT ... ON CONFLICT DO NOTHING` adds nothing while such a job exists.
+`INSERT ... ON CONFLICT DO NOTHING` adds nothing while such a job exists. The index predicate
+in ON CONFLICT is literal SQL (see `_ACTIVE`).
 """
 
 from collections.abc import Collection, Mapping
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Row, and_, insert, or_, select, update
+from sqlalchemy import Row, and_, delete, insert, or_, select, text, update
 from sqlalchemy.dialects import postgresql, sqlite
 
 from papiq.adapters.outbound.sql import tables as t
@@ -28,6 +29,11 @@ from papiq.core.domain.json_value import JsonValue
 from papiq.core.domain.validation import require_utc
 
 _jobs = t.jobs
+
+# The predicate of the partial dedup index, as literal SQL: Postgres matches the index of
+# ON CONFLICT against it, which fails for bind parameters once a prepared statement is
+# planned generically (from its sixth run on).
+_ACTIVE = text("status IN (" + ", ".join(f"'{status}'" for status in t.ACTIVE_JOB_STATUSES) + ")")
 
 
 class SqlJobQueue:
@@ -50,6 +56,7 @@ class SqlJobQueue:
             "dedup_key": dedup_key,
             "status": JobStatus.QUEUED.value,
             "attempts": 0,
+            "releases": 0,
             "run_at": require_utc(run_at, "run_at"),
         }
         if dedup_key is None:
@@ -61,7 +68,7 @@ class SqlJobQueue:
             .values(values)
             .on_conflict_do_nothing(
                 index_elements=[_jobs.c.dedup_key],
-                index_where=_jobs.c.status.in_(t.ACTIVE_JOB_STATUSES),
+                index_where=_ACTIVE,
             )
             .returning(_jobs.c.id)
         )
@@ -106,6 +113,15 @@ class SqlJobQueue:
             job, status=JobStatus.QUEUED, run_at=require_utc(run_at, "run_at"), last_error=error
         )
 
+    async def release(self, job: Job, *, run_at: datetime, error: str) -> None:
+        await self._finish(
+            job,
+            status=JobStatus.QUEUED,
+            run_at=require_utc(run_at, "run_at"),
+            last_error=error,
+            releases=_jobs.c.releases + 1,
+        )
+
     async def fail(self, job: Job, *, error: str) -> None:
         await self._finish(job, status=JobStatus.FAILED, last_error=error)
 
@@ -114,6 +130,15 @@ class SqlJobQueue:
         if row is None:
             raise NotFoundError("job", job)
         return _job(row)
+
+    async def purge(self, *, before: datetime) -> int:
+        result = await self._tx.write(
+            delete(_jobs).where(
+                _jobs.c.status.in_([JobStatus.DONE.value, JobStatus.FAILED.value]),
+                _jobs.c.run_at < require_utc(before, "before"),
+            )
+        )
+        return int(result.rowcount)
 
     async def _finish(self, job: Job, *, status: JobStatus, **values: Any) -> None:
         result = await self._tx.write(
@@ -141,4 +166,5 @@ def _job(row: Row[Any]) -> Job:
         run_at=row.run_at,
         locked_until=row.locked_until,
         last_error=row.last_error,
+        releases=row.releases,
     )
