@@ -226,3 +226,14 @@ async def test_the_first_admin_does_not_take_over_a_user(world: World) -> None:
     with pytest.raises(ValidationError):
         await world.users.bootstrap_admin("root", "short")
     await world.auth.login("alice", PASSWORD)
+
+
+async def test_admins_do_not_reset_their_own_sign_in_here(world: World) -> None:
+    """M4-03: the own password and TOTP are changed through AuthService, which needs the
+    current password or a code."""
+    admin = await world.account("root", Role.ADMIN)
+    with pytest.raises(PermissionDeniedError):
+        await world.users.reset_password(admin.id, admin.id, NEW_PASSWORD)
+    with pytest.raises(PermissionDeniedError):
+        await world.users.disable_totp(admin.id, admin.id)
+    await world.auth.login("root", PASSWORD)

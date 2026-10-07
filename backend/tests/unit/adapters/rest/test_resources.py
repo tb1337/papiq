@@ -206,29 +206,41 @@ async def test_drawers_and_shares(api: Api) -> None:
 
 async def test_user_management(api: Api) -> None:
     admin = await api.admin("root")
-    created = await post(api, "/users", {"username": "carol", "password": PASSWORD}, auth(admin))
-    assert created["role"] == "user" and created["active"] is True
-    login = await api.client.post(
-        f"{PREFIX}/auth/login", json={"username": "carol", "password": PASSWORD}
-    )
-    assert login.status_code == 200
-    url = f"{PREFIX}/users/{created['id']}"
-    promoted = await api.client.patch(url, json={"role": "admin"}, headers=auth(admin))
-    assert promoted.json()["role"] == "admin"
-    weak = await api.client.post(f"{url}/password", json={"password": "short"}, headers=auth(admin))
-    assert weak.status_code == 422
-    reset = await api.client.post(
-        f"{url}/password", json={"password": "a brand new passphrase"}, headers=auth(admin)
-    )
-    assert reset.status_code == 204
-    last = await api.client.patch(
-        f"{PREFIX}/users/{admin.id}", json={"active": False}, headers=auth(admin)
-    )
-    assert last.status_code == 200  # carol is an active admin now
-    taken = await api.client.post(
-        f"{PREFIX}/users", json={"username": "CAROL"}, headers=auth(admin)
-    )
-    assert taken.status_code == 401  # the admin just deactivated themselves
+    async with api.sign_in(admin) as session:
+        client, csrf = session.client, session.headers
+        response = await client.post(
+            f"{PREFIX}/users", json={"username": "carol", "password": PASSWORD}, headers=csrf
+        )
+        assert response.status_code == 201, response.text
+        created = response.json()
+        assert created["role"] == "user" and created["active"] is True
+        login = await api.client.post(
+            f"{PREFIX}/auth/login", json={"username": "carol", "password": PASSWORD}
+        )
+        assert login.status_code == 200
+        url = f"{PREFIX}/users/{created['id']}"
+        promoted = await client.patch(url, json={"role": "admin"}, headers=csrf)
+        assert promoted.json()["role"] == "admin"
+        weak = await client.post(f"{url}/password", json={"password": "short"}, headers=csrf)
+        assert weak.status_code == 422
+        reset = await client.post(
+            f"{url}/password", json={"password": "a brand new passphrase"}, headers=csrf
+        )
+        assert reset.status_code == 204
+        own = await client.post(
+            f"{PREFIX}/users/{admin.id}/password",
+            json={"password": "a brand new passphrase"},
+            headers=csrf,
+        )
+        assert own.status_code == 403  # the own password: POST /auth/password
+        own_totp = await client.delete(f"{PREFIX}/users/{admin.id}/totp", headers=csrf)
+        assert own_totp.status_code == 403
+        last = await client.patch(
+            f"{PREFIX}/users/{admin.id}", json={"active": False}, headers=csrf
+        )
+        assert last.status_code == 200  # carol is an active admin now
+        taken = await client.post(f"{PREFIX}/users", json={"username": "CAROL"}, headers=csrf)
+        assert taken.status_code == 401  # the admin just deactivated themselves
 
 
 async def test_the_last_admin_stays(api: Api) -> None:
@@ -244,11 +256,12 @@ async def test_the_last_admin_stays(api: Api) -> None:
 
 async def test_secrets_do_not_come_back(api: Api) -> None:
     admin = await api.admin()
-    response = await api.client.post(
-        f"{PREFIX}/users",
-        json={"username": "dave", "password": "x"},
-        headers=auth(admin),
-    )
+    async with api.sign_in(admin) as session:
+        response = await session.client.post(
+            f"{PREFIX}/users",
+            json={"username": "dave", "password": "x"},
+            headers=session.headers,
+        )
     assert response.status_code == 422
     assert '"x"' not in response.text and "'x'" not in response.text
     response = await api.client.post(
