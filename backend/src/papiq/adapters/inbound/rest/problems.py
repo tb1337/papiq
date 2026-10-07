@@ -3,6 +3,7 @@
 Domain errors map to HTTP statuses here; every endpoint documents the problems it can return.
 """
 
+import logging
 from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
@@ -23,6 +24,8 @@ from papiq.core.domain.errors import (
     UnsupportedMediaTypeError,
     ValidationError,
 )
+
+log = logging.getLogger(__name__)
 
 PROBLEM_JSON = "application/problem+json"
 
@@ -53,12 +56,14 @@ _PROBLEMS: dict[int, tuple[str, str]] = {
     413: ("Content Too Large", "the file is larger than 104857600 bytes"),
     415: ("Unsupported Media Type", "unsupported file type"),
     422: ("Unprocessable Content", "from_step: Input should be 'ocr', 'parse', ..."),
+    500: ("Internal Server Error", "an unexpected error occurred"),
     503: ("Service Unavailable", "database: unreachable"),
 }
 
 
 def problem_responses(*statuses: int) -> dict[int | str, dict[str, Any]]:
-    """OpenAPI `responses` for the given statuses, with problem schema and example."""
+    """OpenAPI `responses` for the given statuses and 500, with problem schema and example."""
+    statuses = (*statuses, 500)
     return {
         status: {
             "description": _PROBLEMS[status][0],
@@ -125,8 +130,14 @@ def install(app: FastAPI) -> None:
         assert isinstance(error, HTTPException)
         return problem(error.status_code, str(error.detail), headers=error.headers)
 
+    async def unexpected_error(request: Request, error: Exception) -> JSONResponse:
+        # Details stay in the server log; the client learns only that something broke.
+        log.error("request failed", exc_info=error)
+        return problem(500, _PROBLEMS[500][1])
+
     for kind, _ in _STATUSES:
         app.add_exception_handler(kind, domain_error)
+    app.add_exception_handler(Exception, unexpected_error)
     app.add_exception_handler(RequestValidationError, validation_error)
     app.add_exception_handler(HTTPException, http_error)
 

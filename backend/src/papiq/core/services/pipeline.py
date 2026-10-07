@@ -14,6 +14,7 @@ from papiq.core.domain import media_types
 from papiq.core.domain.documents import Document, Sha256
 from papiq.core.domain.errors import (
     ConcurrencyError,
+    ConflictError,
     DuplicateDocumentError,
     PermissionDeniedError,
     UnprocessableDocumentError,
@@ -133,8 +134,8 @@ class PipelineService:
         The media type is recognised from the content; an unsupported type raises
         UnsupportedMediaTypeError and nothing is stored. Without `drawer` the document goes to
         the owner's default drawer; otherwise the owner needs write access to it. A file the
-        owner already has is rejected with DuplicateDocumentError; if the same file arrives
-        twice at the same moment, the later commit fails with ConflictError instead. An
+        owner already has is rejected with DuplicateDocumentError, also if the same file arrives
+        twice at the same moment. An
         original that is stored already (another owner has the same file) is not stored again.
         """
         started = self._clock.now()
@@ -150,11 +151,31 @@ class PipelineService:
         if not await self._store.exists(key):
             await self._store.upload(key, file.path, content_type=media_type)
 
-        now = self._clock.now()
         result = StepResult(
             outcome=Outcome.OK,
             output={"sha256": sha256.hex, "size": file.size, "media_type": media_type},
         )
+        try:
+            return await self._create(actor, target, sha256, filename, media_type, result, started)
+        except ConflictError:
+            # The same file arrived twice at the same moment; the other upload won.
+            async with self._uow() as uow:
+                existing = await uow.documents.find_by_sha256(actor, sha256)
+            if existing is None:
+                raise
+            raise DuplicateDocumentError(existing.id) from None
+
+    async def _create(
+        self,
+        actor: UserId,
+        target: DrawerId,
+        sha256: Sha256,
+        filename: str,
+        media_type: str,
+        result: StepResult,
+        started: datetime,
+    ) -> Document:
+        now = self._clock.now()
         async with self._uow() as uow:
             # Check again: rights or a duplicate may have changed while the file was stored.
             await self._target_drawer(uow, actor, target, sha256)

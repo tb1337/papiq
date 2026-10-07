@@ -116,6 +116,32 @@ async def test_the_limit_holds_without_content_length(api: Api) -> None:
     assert sent < 2 * MAX_UPLOAD  # reading stopped early
 
 
+async def test_fields_count_against_the_limit(api: Api) -> None:
+    """Many fields in a chunked body are neither kept nor read without end."""
+    owner = await api.user()
+    boundary = "papiq-test-boundary"
+    sent = 0
+
+    async def body() -> AsyncIterator[bytes]:
+        nonlocal sent
+        for number in range(100_000):
+            part = (
+                f'--{boundary}\r\nContent-Disposition: form-data; name="f{number}"\r\n\r\n'
+                f"{'x' * 100}\r\n"
+            ).encode()
+            sent += len(part)
+            yield part
+        yield f"--{boundary}--\r\n".encode()
+
+    response = await api.client.post(
+        DOCUMENTS,
+        content=body(),
+        headers={**auth(owner), "content-type": f"multipart/form-data; boundary={boundary}"},
+    )
+    assert response.status_code == 413
+    assert sent < 2 * MAX_UPLOAD
+
+
 @pytest.mark.parametrize(
     ("kwargs", "status", "detail"),
     [
@@ -328,3 +354,22 @@ async def test_the_limit_is_configured() -> None:
             DOCUMENTS, files=pdf(), headers={USER_HEADER: str(UUID(int=1))}
         )
     assert response.status_code == 413
+
+
+async def test_unexpected_errors_are_problems_without_details(
+    api: Api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def broken(*args: object, **kwargs: object) -> object:
+        raise OSError("s3://secret-bucket/originals unreachable")
+
+    monkeypatch.setattr(api.services.documents, "get", broken)
+    owner = await api.user()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=api.app, raise_app_exceptions=False),
+        base_url="http://papiq",
+    ) as client:
+        response = await client.get(f"{DOCUMENTS}/{UUID(int=1)}", headers=auth(owner))
+    assert response.status_code == 500
+    assert response.headers["content-type"] == PROBLEM
+    assert response.json()["detail"] == "an unexpected error occurred"
+    assert "secret" not in response.text

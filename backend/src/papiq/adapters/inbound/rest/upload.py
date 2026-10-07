@@ -1,8 +1,10 @@
 """Streaming multipart upload: the file part goes to a temporary file in chunks and is hashed
 on the way, so an upload is never held in memory. The size limit is enforced while receiving:
-early by `Content-Length`, otherwise as soon as the file part grows beyond it.
+early by `Content-Length`, otherwise as soon as the file part, or the whole body, grows beyond
+it (the body may exceed the file limit by `_OVERHEAD` for framing and fields).
 
-Expected form: one part `file` with a filename, and optional small text fields.
+Expected form: one part `file` with a filename, and optional small text fields; only the
+fields the caller names are kept, others are skipped.
 """
 
 import asyncio
@@ -10,7 +12,7 @@ import hashlib
 import os
 import re
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, BinaryIO, cast
@@ -49,9 +51,9 @@ class Upload:
     fields: dict[str, str]
 
 
-async def read_upload(request: Request, *, max_size: int) -> Upload:
-    """Read the multipart body of `request`. The caller removes `upload.file.path` when done;
-    on error nothing is left behind."""
+async def read_upload(request: Request, *, max_size: int, fields: Collection[str] = ()) -> Upload:
+    """Read the multipart body of `request`, keeping the text fields named in `fields`. The
+    caller removes `upload.file.path` when done; on error nothing is left behind."""
     content_type, options = parse_options_header(request.headers.get("content-type"))
     boundary = options.get(b"boundary")
     if content_type != b"multipart/form-data" or not boundary:
@@ -64,9 +66,13 @@ async def read_upload(request: Request, *, max_size: int) -> Upload:
     path = Path(name)
     try:
         with os.fdopen(descriptor, "wb") as target:
-            state = _State(target, max_size)
+            state = _State(target, max_size, frozenset(fields))
             parser = MultipartParser(boundary, cast("MultipartCallbacks", state.callbacks()))
+            received = 0
             async for chunk in request.stream():
+                received += len(chunk)
+                if received > max_size + _OVERHEAD:
+                    raise UploadTooLargeError(max_size)
                 try:
                     parser.write(chunk)
                 except MultipartParseError as error:
@@ -93,6 +99,7 @@ class _State:
 
     target: BinaryIO
     max_size: int
+    wanted: frozenset[str]
     digest: Any = field(default_factory=hashlib.sha256)
     size: int = 0
     filename: str | None = None
@@ -156,8 +163,8 @@ class _State:
             raw = options.get(b"filename", b"").decode("utf-8", errors="replace")
             self.filename = clean_filename(raw)
             self._part = FILE_FIELD
-        elif b"filename" in options:
-            self._part = None  # other files are ignored
+        elif b"filename" in options or name not in self.wanted:
+            self._part = None  # other files and unknown fields are skipped
         else:
             self._part = name
 

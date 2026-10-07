@@ -22,6 +22,21 @@ M4: until then every request that needs a user is answered with 401.
 """
 
 
+EVENT_ITEM = {
+    "type": "object",
+    "required": ["event", "id", "data"],
+    "properties": {
+        "event": {"type": "string", "description": "The event type, as in `data.type`."},
+        "id": {"type": "string", "description": "The event id, as in `data.id`."},
+        "data": {
+            "type": "string",
+            "contentMediaType": "application/json",
+            "contentSchema": {"$ref": "#/components/schemas/EventMessage"},
+        },
+    },
+}
+
+
 def create_app(context: ApiContext) -> FastAPI:
     """The API on the given services. While the app runs (lifespan), it delivers outbox events
     to its event streams."""
@@ -63,6 +78,14 @@ def create_app(context: ApiContext) -> FastAPI:
         components = schema.setdefault("components", {}).setdefault("schemas", {})
         components.setdefault("EventMessage", EventMessage.model_json_schema())
         components.setdefault("Problem", problems.Problem.model_json_schema())
+        # The stream: a string for OpenAPI 3.1 tools, `itemSchema` (OpenAPI 3.2) per event,
+        # whose `data` is the JSON of an EventMessage.
+        stream = schema["paths"][f"{PREFIX}/events"]["get"]["responses"]["200"]["content"]
+        stream["text/event-stream"] = {
+            "schema": {"type": "string", "description": "Server-sent events"},
+            "itemSchema": EVENT_ITEM,
+            "example": stream["text/event-stream"]["example"],
+        }
         # Validation errors are problems too; FastAPI's own schemas for them are unused.
         for unused in ("HTTPValidationError", "ValidationError"):
             components.pop(unused, None)

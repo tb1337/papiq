@@ -1,5 +1,6 @@
 """The database transaction of one unit of work, shared by its repositories."""
 
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -9,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from papiq.adapters.outbound.sql.database import Database
 from papiq.core.domain.errors import ConcurrencyError, ConflictError
+
+log = logging.getLogger(__name__)
 
 # Postgres: deadlock_detected, serialization_failure.
 _CONCURRENCY_SQLSTATES = {"40P01", "40001"}
@@ -52,9 +55,12 @@ class Transaction:
         except DBAPIError as error:
             self._failed = True
             if isinstance(error, IntegrityError):
-                raise ConflictError(f"conflicting data: {error.orig}") from error
+                # The database's message names tables and constraints: logs only.
+                log.info("constraint violated", extra={"error": str(error.orig)})
+                raise ConflictError("the change conflicts with existing data") from error
             if getattr(error.orig, "sqlstate", None) in _CONCURRENCY_SQLSTATES:
-                raise ConcurrencyError(f"concurrent transaction: {error.orig}") from error
+                log.info("concurrent transaction", extra={"error": str(error.orig)})
+                raise ConcurrencyError("a concurrent change interfered; try again") from error
             raise
 
     async def commit(self) -> None:

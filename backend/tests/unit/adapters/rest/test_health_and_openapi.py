@@ -81,17 +81,8 @@ async def test_errors_are_documented_as_problems_with_examples(api: Api) -> None
                 assert content[PROBLEM]["schema"] == {"$ref": "#/components/schemas/Problem"}
                 assert content[PROBLEM]["example"]["status"] == int(status)
     upload = schema["paths"][f"{PREFIX}/documents"]["post"]
-    assert set(upload["responses"]) == {
-        "202",
-        "400",
-        "401",
-        "403",
-        "404",
-        "409",
-        "413",
-        "415",
-        "422",
-    }
+    statuses = {"202", "400", "401", "403", "404", "409", "413", "415", "422", "500"}
+    assert set(upload["responses"]) == statuses
     problem = schema["components"]["schemas"]["Problem"]["properties"]
     assert {"type", "title", "status", "detail", "existing_document_id"} <= set(problem)
     assert "HTTPValidationError" not in schema["components"]["schemas"]
@@ -120,4 +111,8 @@ async def test_schemas_of_status_log_and_events(api: Api) -> None:
     step = schemas[reprocess["$ref"].rsplit("/", 1)[1]]
     assert "receive" not in step["enum"]
     events = schema["paths"][f"{PREFIX}/events"]["get"]["responses"]["200"]["content"]
-    assert "text/event-stream" in events
+    stream = events["text/event-stream"]
+    assert stream["schema"]["type"] == "string"
+    data = stream["itemSchema"]["properties"]["data"]
+    assert data["contentSchema"] == {"$ref": "#/components/schemas/EventMessage"}
+    assert "$ref" not in stream["itemSchema"]

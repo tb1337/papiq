@@ -50,7 +50,6 @@ async def _visible_document(
             "description": "Event stream",
             "content": {
                 "text/event-stream": {
-                    "itemSchema": {"$ref": "#/components/schemas/EventMessage"},
                     "example": (
                         "event: document.step_completed\n"
                         "id: 01999d5f-1b2c-7d3e-8f40-5a6b7c8d9e0f\n"
