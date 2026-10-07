@@ -166,7 +166,7 @@ class AuthService:
             stored or await self._dummy(), normalize_password(password)
         )
         if user is None or credential is None or stored is None or not valid or not user.active:
-            _log_failure(reserved)
+            _log_failure(None if user is None else user.id, source)
             if source_blocked is not None:
                 raise TooManyAttemptsError(source_blocked)
             raise AuthenticationError("invalid username or password")
@@ -187,6 +187,7 @@ class AuthService:
             recovery_code=recovery_code,
             new_hash=new_hash,
             source_blocked=source_blocked,
+            source=source,
         )
 
     async def _complete_login(
@@ -199,6 +200,7 @@ class AuthService:
         recovery_code: str | None,
         new_hash: str | None,
         source_blocked: timedelta | None,
+        source: str | None,
     ) -> SignedIn:
         async with self._uow() as uow:
             user = await uow.users.get(user_id)
@@ -216,7 +218,7 @@ class AuthService:
                 await _release(uow, others)
                 await uow.commit()
         if not valid:
-            _log_failure(reserved)
+            _log_failure(user_id, source)
             if source_blocked is not None:
                 raise TooManyAttemptsError(source_blocked)
             raise AuthenticationError("invalid one-time code")
@@ -299,7 +301,7 @@ class AuthService:
         reserved, _ = await self._reserve(_throttles(user.username, None), now)
         stored = None if credential is None else credential.password_hash
         if stored is None or not await self._hasher.verify(stored, normalize_password(current)):
-            _log_failure(reserved)
+            _log_failure(actor, None)
             raise PermissionDeniedError("the current password is wrong")
         new_hash = await self._hasher.hash(check_new_password(new, user.username))
 
@@ -404,7 +406,7 @@ class AuthService:
                 await _release(uow, reserved)
                 await uow.commit()
         if not valid:
-            _log_failure(reserved)
+            _log_failure(actor, None)
             raise PermissionDeniedError("the code is not valid")
 
     # --- API tokens -----------------------------------------------------------------------------
@@ -522,8 +524,10 @@ async def _release(uow: UnitOfWork, reserved: Sequence[tuple[str, ThrottleRule]]
         await uow.login_failures.release(key, rule)
 
 
-def _log_failure(reserved: Sequence[tuple[str, ThrottleRule]]) -> None:
-    log.info("sign-in failed", extra={"keys": [key for key, _ in reserved]})
+def _log_failure(user: UserId | None, source: str | None) -> None:
+    """Never with the name as typed: it may be a password typed into the wrong field."""
+    who: dict[str, object] = {"account_known": False} if user is None else {"user_id": str(user)}
+    log.info("sign-in failed", extra={**who, "source": source})
 
 
 async def _credential(uow: UnitOfWork, user: UserId) -> Credential:
