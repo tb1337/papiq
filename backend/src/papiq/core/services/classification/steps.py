@@ -242,12 +242,10 @@ class ClassifyStep(_ModelStep):
                 outcome=Outcome.UNCERTAIN, confidence=0, reason="no contact recognised", **common
             )
         match = best_match(name, [(contact, contact.name) for contact in contacts])
-        text_key = name_key(facts.raw)
-        named = mentions(text_key, name_key(name)) or (
-            match.best is not None and mentions(text_key, name_key(match.best.name))
-        )
-        ambiguous = match.best is not None and match.runner_up >= match.score - _AMBIGUITY
         best = match.best
+        # The contact itself must be named in the text, not just something similar.
+        named = best is not None and mentions(name_key(facts.raw), name_key(best.name))
+        ambiguous = best is not None and match.runner_up >= match.score - _AMBIGUITY
         if best is not None and match.score >= self._policy.suggest_contact:
             if match.score >= self._policy.accept and named and not ambiguous:
                 return FieldCheck(
@@ -256,7 +254,7 @@ class ClassifyStep(_ModelStep):
             if ambiguous:
                 reason = f"several contacts are similar to '{name}'; the closest is '{best.name}'"
             elif not named:
-                reason = f"'{name}' does not appear in the text"
+                reason = f"the contact '{best.name}' does not appear in the text"
             else:
                 reason = f"'{name}' is similar to the contact '{best.name}'"
             capped = match.score if named and not ambiguous else min(match.score, 0.5)

@@ -1,7 +1,7 @@
 {
-  "description": "The letterhead has a typo in the contact's name (OCR error).",
+  "description": "The letterhead has a typo in the contact's name (OCR error): the contact is only suggested.",
   "expected": {
-    "lane": "green",
+    "lane": "yellow",
     "contact": "Stadtwerke Musterstadt GmbH",
     "document_type": "Rechnung",
     "tags": [
