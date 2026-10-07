@@ -4,11 +4,13 @@ import tempfile
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from papiq.core.domain.documents import Document, Sha256
 from papiq.core.domain.drawers import Drawer
-from papiq.core.domain.ids import DrawerId, UserId
-from papiq.core.domain.pipeline import Outcome, Step, StepResult
+from papiq.core.domain.ids import DocumentId, DrawerId, UserId, new_id
+from papiq.core.domain.pipeline import Lane, Outcome, Step, StepResult
+from papiq.core.domain.search import IndexDocument
 from papiq.core.domain.users import Role, User
 from papiq.core.services.pipeline import IncomingFile, PipelineService, PlaceholderStep
 
@@ -113,3 +115,20 @@ def skip_classification(pipeline: PipelineService) -> PipelineService:
     for step in (Step.CLASSIFY, Step.EXTRACT_ATTRIBUTES):
         pipeline._executors[step] = PlaceholderStep()
     return pipeline
+
+
+def index_document(**fields: Any) -> IndexDocument:
+    """A green document of a random owner in a random drawer, for the search index; `fields`
+    override any of its attributes."""
+    values: dict[str, Any] = {
+        "id": DocumentId(new_id()),
+        "version": 1,
+        "owner_id": UserId(new_id()),
+        "drawer_id": DrawerId(new_id()),
+        "lane": Lane.GREEN,
+        "title": _unique("title"),
+        "filename": "scan.pdf",
+        "created_at": NOW,
+    }
+    values.update(fields)
+    return IndexDocument(**values)
