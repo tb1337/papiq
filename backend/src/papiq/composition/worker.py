@@ -26,6 +26,7 @@ async def run_worker(settings: Settings) -> None:
             dispatch_interval=settings.events_poll_interval,
             shutdown_timeout=settings.worker_shutdown_timeout,
             indexing=services.indexing,
+            rules=services.rule_applications,
         )
         loop = asyncio.get_running_loop()
         for signum in (signal.SIGTERM, signal.SIGINT):

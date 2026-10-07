@@ -63,6 +63,7 @@ def build_app(
             pipeline=services.pipeline,
             documents=services.documents,
             rules=services.rules,
+            rule_applications=services.rule_applications,
             event_bus=container.event_bus,
             health_checks=health_checks(container),
             optional_checks=frozenset({"search"}),

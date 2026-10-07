@@ -31,6 +31,7 @@ from papiq.adapters.inbound.rest.schemas import (
     DocumentDetails,
     DocumentPage,
     DocumentPatch,
+    DocumentPreviewOut,
     InboxItemOut,
     InboxPage,
     LogEntry,
@@ -38,10 +39,11 @@ from papiq.adapters.inbound.rest.schemas import (
     ReprocessRequest,
     ReviewOut,
     RuleReportOut,
+    VisibilityOut,
 )
 from papiq.adapters.inbound.rest.upload import FILE_FIELD, read_upload
 from papiq.core.domain.attributes import AttributeDefinition, AttributeType, Money, Url
-from papiq.core.domain.documents import UNSET, Channel, DocumentChanges
+from papiq.core.domain.documents import UNSET, Channel, Document, DocumentChanges
 from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import ValidationError
 from papiq.core.domain.ids import (
@@ -250,6 +252,35 @@ async def update_document(
 
 
 @router.post(
+    "/{id}/dry-run",
+    summary="Try a metadata change",
+    description=(
+        "What `PATCH /documents/{id}` with this body would do, without storing anything: the "
+        "document afterwards, the fields that would change, what the rules would do (owner "
+        "only) and who would see it. Needs write access."
+    ),
+    response_model=DocumentPreviewOut,
+    responses=problem_responses(401, 403, 404, 409, 422),
+)
+async def preview_change(
+    id: UUID, body: DocumentPatch, user: CurrentUser, context: Context
+) -> DocumentPreviewOut:
+    changes = await _changes(body, user, context)
+    change = await context.documents.change_metadata(user, DocumentId(id), changes, dry_run=True)
+    readable = change.access is not None
+    return DocumentPreviewOut(
+        document=DocumentDetails.of(change.document, change.access) if change.access else None,
+        changed=_differences(change.before, change.document) if change.before else [],
+        rules=(
+            None
+            if change.rules is None
+            else [RuleReportOut.of(report) for report in change.rules.plan.reports]
+        ),
+        visibility=VisibilityOut.of(change.document, change.drawer, user) if readable else None,
+    )
+
+
+@router.post(
     "/{id}/move",
     status_code=204,
     summary="Move a document to another drawer",
@@ -434,6 +465,23 @@ async def list_inbox(
     items = await context.documents.inbox(user, before=_decode_cursor(cursor), limit=limit)
     next_cursor = _encode_cursor(items[-1].document.id) if len(items) == limit else None
     return InboxPage(items=[InboxItemOut.of(item) for item in items], next_cursor=next_cursor)
+
+
+def _differences(before: Document, after: Document) -> list[str]:
+    fields: dict[str, tuple[object, object]] = {
+        "title": (before.title, after.title),
+        "contact": (before.contact_id, after.contact_id),
+        "document_type": (before.document_type_id, after.document_type_id),
+        "tags": (before.tag_ids, after.tag_ids),
+        "document_date": (before.document_date, after.document_date),
+        "drawer": (before.drawer_id, after.drawer_id),
+    }
+    for attribute in sorted(set(before.attributes) | set(after.attributes)):
+        fields[f"attribute:{attribute}"] = (
+            before.attributes.get(attribute),
+            after.attributes.get(attribute),
+        )
+    return [name for name, (old, new) in fields.items() if old != new]
 
 
 def _changed(change: MetadataChange) -> DocumentChanged:

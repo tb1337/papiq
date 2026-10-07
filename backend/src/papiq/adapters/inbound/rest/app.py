@@ -110,6 +110,7 @@ def create_app(context: ApiContext) -> FastAPI:
         *master_data.ROUTERS,
         drawers.router,
         rules.router,
+        rules.applications,
         search.router,  # before documents: `/documents/search` is no document id
         documents.router,
         documents.inbox,

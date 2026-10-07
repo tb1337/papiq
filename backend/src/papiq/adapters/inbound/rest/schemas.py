@@ -32,9 +32,11 @@ from papiq.core.domain.pipeline import (
 )
 from papiq.core.domain.rule_engine import RuleReport
 from papiq.core.domain.rules import (
+    ApplicationStatus,
     ConditionField,
     Operator,
     Rule,
+    RuleApplication,
     RuleScope,
     RuleVersion,
     Trigger,
@@ -1250,3 +1252,145 @@ class DocumentChanged(DocumentDetails):
             "and what they did. Nothing turns yellow; what could not be applied is listed."
         ),
     )
+
+
+class VisibilityOut(BaseModel):
+    """Who sees the document. Its owner always; while it is green also the drawer's owner and
+    the users the drawer is shared with."""
+
+    owner_id: UUID = Field(description="The document's owner.")
+    drawer_id: UUID
+    drawer_owner_id: UUID | None = Field(description="None unless the document is green.")
+    shares: list[ShareOut] | None = Field(
+        description=(
+            "The drawer's shares, if the document is green and the caller owns the drawer; "
+            "otherwise not shown."
+        )
+    )
+
+    @classmethod
+    def of(cls, document: Document, drawer: Drawer, viewer: UserId) -> "VisibilityOut":
+        green = document.lane is Lane.GREEN
+        shares = None
+        if green and drawer.owner_id == viewer:
+            shares = [
+                ShareOut(user_id=u, level=level) for u, level in sorted(drawer.shares.items())
+            ]
+        return cls(
+            owner_id=document.owner_id,
+            drawer_id=drawer.id,
+            drawer_owner_id=drawer.owner_id if green else None,
+            shares=shares,
+        )
+
+
+class DocumentPreviewOut(BaseModel):
+    """What a change would do; nothing is stored."""
+
+    document: DocumentDetails | None = Field(
+        description="The document after the change; null if the caller could not read it then."
+    )
+    changed: list[str] = Field(
+        description="Fields that would change: `title`, `contact`, `document_type`, `tags`, "
+        "`document_date`, `attribute:<id>`, `drawer`."
+    )
+    rules: list[RuleReportOut] | None = Field(
+        description="For the owner: the rules the change would set off, and what they would do."
+    )
+    visibility: VisibilityOut | None = Field(
+        description="Who would see the document; null if the caller could not read it then."
+    )
+
+
+class ApplyPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [{"limit": 50}]})
+
+    cursor: str | None = Field(default=None, max_length=64, description="`next_cursor`.")
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class ApplyPreviewItemOut(BaseModel):
+    document_id: UUID
+    title: str
+    changes: list[RuleEffectOut] = Field(description="What the rule would change.")
+    conflicts: list[RuleNoteOut] = Field(
+        description=(
+            "Fields that have another value: changed only if the document is in `accept_conflicts`."
+        )
+    )
+    notes: list[RuleNoteOut] = Field(description="Other actions that would not act, and why.")
+
+
+class ApplyPreviewOut(BaseModel):
+    rule_id: UUID
+    version: int = Field(description="The version the preview used; pass it to apply.")
+    items: list[ApplyPreviewItemOut]
+    next_cursor: str | None = Field(
+        description=(
+            "Pass as `cursor` for the next page; null when all documents were looked at. A page "
+            "may hold fewer items than `limit` and still have a next one."
+        )
+    )
+
+
+class ApplyRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "version": 2,
+                    "document_ids": ["01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b"],
+                    "accept_conflicts": [],
+                }
+            ]
+        },
+    )
+
+    version: int = Field(ge=1, description="The rule version to apply (from the preview).")
+    document_ids: list[UUID] = Field(min_length=1, max_length=100_000)
+    accept_conflicts: list[UUID] = Field(
+        default_factory=list,
+        description="Selected documents where the rule's value replaces a different one.",
+    )
+
+
+class SkippedOut(BaseModel):
+    document_id: UUID
+    reason: str
+
+
+class RuleApplicationOut(BaseModel):
+    id: UUID
+    rule_id: UUID
+    version: int
+    status: ApplicationStatus
+    total: int = Field(description="Selected documents.")
+    done: int = Field(description="Documents worked through so far.")
+    applied: int
+    unchanged: int = Field(description="The rule no longer holds or changes nothing.")
+    skipped: list[SkippedOut] = Field(
+        description="Not changed: conflicts not accepted, no longer writable, ..."
+    )
+    error: str | None
+    created_at: datetime
+    finished_at: datetime | None
+
+    @classmethod
+    def of(cls, application: RuleApplication) -> "RuleApplicationOut":
+        return cls(
+            id=application.id,
+            rule_id=application.rule_id,
+            version=application.rule_version,
+            status=application.status,
+            total=len(application.documents),
+            done=application.position,
+            applied=application.applied,
+            unchanged=application.unchanged,
+            skipped=[
+                SkippedOut(document_id=id, reason=reason) for id, reason in application.skipped
+            ],
+            error=application.error,
+            created_at=application.created_at,
+            finished_at=application.finished_at,
+        )

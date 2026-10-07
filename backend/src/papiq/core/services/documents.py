@@ -1,3 +1,4 @@
+import copy
 import logging
 from collections.abc import Collection
 from dataclasses import dataclass
@@ -39,10 +40,12 @@ MAX_PAGE = 200
 @dataclass(frozen=True)
 class MetadataChange:
     """A changed document; the caller's access afterwards (None if the rules filed it where
-    the caller cannot see it); the rules' run, for the owner; the state before the change."""
+    the caller cannot see it); its drawer; the rules' run, for the owner; the state before the
+    change."""
 
     document: Document
     access: ShareLevel | None
+    drawer: Drawer
     rules: RuleRun | None = None
     before: Document | None = None
 
@@ -235,10 +238,10 @@ class DocumentService:
             await check_references(uow, changes)
             definitions = {item.id: item for item in await uow.attributes.list_all()}
             now = self._clock.now()
-            before = None if rules is None else rules.snapshot(document)
+            before = copy.deepcopy(document)
             document.apply_changes(changes, definitions, now)
             run = None
-            if rules is not None and before is not None:
+            if rules is not None:
                 run = await rules.after_change(
                     uow,
                     actor=user,
@@ -256,7 +259,7 @@ class DocumentService:
                 await _save(uow, document)
                 await uow.commit()
         owner = is_document_owner(user, document)
-        return MetadataChange(document, access, run if owner else None, before)
+        return MetadataChange(document, access, drawer, run if owner else None, before)
 
     async def move(self, actor: UserId, id: DocumentId, drawer: DrawerId) -> None:
         """The owner moves into a drawer they may write to; an admin moves any document into
