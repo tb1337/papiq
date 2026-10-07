@@ -4,7 +4,6 @@ import asyncio
 from decimal import Decimal
 
 import pytest
-
 from sqlalchemy import text
 
 from papiq.adapters.outbound.sql import Database

@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1
 
 # Papiq image, one Dockerfile for development and operation so both use the same system packages.
-#   dev      devcontainer: base + uv, Node.js, pnpm, Git
-#   runtime  production image (placeholder, built in M9)
+#   docling-models  Docling's layout and table models, downloaded at build time
+#   dev             devcontainer: base + uv, Node.js, pnpm, Git, Docling models
+#   runtime         production image (placeholder, built in M9)
 # All stages build for linux/amd64 and linux/arm64.
 
 FROM node:24.21.0-trixie-slim AS node
@@ -29,8 +30,25 @@ RUN apt-get update \
         unpaper \
     && rm -rf /var/lib/apt/lists/*
 
+# --- docling-models: the models Docling needs, never downloaded at run time ---------------------
+# Installs the locked dependencies (Docling, PyTorch CPU) in a throwaway environment and downloads
+# the models of exactly that Docling version. Rebuilt only when the lock file changes.
+FROM base AS docling-models
+
+COPY --from=uv /uv /usr/local/bin/
+ENV UV_PYTHON_DOWNLOADS=never \
+    UV_LINK_MODE=copy
+WORKDIR /build
+COPY backend/pyproject.toml backend/uv.lock ./
+RUN uv sync --frozen --no-install-project --no-dev \
+    && .venv/bin/docling-tools models download layout tableformer -o /opt/docling-models \
+    && rm -rf /build /root/.cache
+
 # --- dev: devcontainer ---------------------------------------------------------------------------
 FROM base AS dev
+
+# Docling models (PAPIQ_DOCLING_MODELS_PATH defaults to this directory).
+COPY --from=docling-models /opt/docling-models /opt/docling-models
 
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \

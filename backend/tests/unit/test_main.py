@@ -1,5 +1,9 @@
 import json
+import os
+import signal
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -67,3 +71,41 @@ def test_failed_migration_exits_one(
     assert main(["migrate"]) == 1
 
     assert "database migration failed" in capsys.readouterr().err
+
+
+def test_a_service_only_runs_in_its_role(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("PAPIQ_ROLE", "api")
+
+    assert main(["worker"]) == 1
+
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert events[-1]["event"] == "the worker does not run with PAPIQ_ROLE=api"
+
+
+def test_the_worker_stops_cleanly_on_sigterm(tmp_path: Path) -> None:
+    """In a process of its own: start on SQLite and the filesystem, then SIGTERM."""
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("PAPIQ_")}
+    environment |= {
+        "PAPIQ_DB_SQLITE_PATH": str(tmp_path / "papiq.db"),
+        "PAPIQ_STORAGE_PATH": str(tmp_path / "objects"),
+        "PAPIQ_LOG_LEVEL": "INFO",
+    }
+    command = [sys.executable, "-m", "papiq.composition"]
+    subprocess.run([*command, "migrate"], env=environment, check=True, capture_output=True)
+
+    with subprocess.Popen(
+        [*command, "worker"], env=environment, stderr=subprocess.PIPE, text=True
+    ) as process:
+        assert process.stderr is not None
+        lines: list[str] = []
+        for line in process.stderr:
+            lines.append(line)
+            if json.loads(line)["event"] == "worker started":
+                break
+        process.send_signal(signal.SIGTERM)
+        lines += process.stderr.readlines()
+        assert process.wait(timeout=30) == 0
+    events = [json.loads(line)["event"] for line in lines]
+    assert events[-2:] == ["worker stopping", "worker stopped"]
