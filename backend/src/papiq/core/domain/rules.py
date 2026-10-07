@@ -394,14 +394,13 @@ class RuleDefinition:
         attributes: set[AttributeId] = set()
         drawers: set[DrawerId] = set()
         for condition in self.conditions.conditions():
-            values = [UUID(str(value)) for value in condition.values]
             match condition.field:
                 case ConditionField.CONTACT:
-                    contacts.update(ContactId(id) for id in values)
+                    contacts.update(ContactId(id) for id in _ids(condition))
                 case ConditionField.DOCUMENT_TYPE:
-                    types.update(DocumentTypeId(id) for id in values)
+                    types.update(DocumentTypeId(id) for id in _ids(condition))
                 case ConditionField.TAGS:
-                    tags.update(TagId(id) for id in values)
+                    tags.update(TagId(id) for id in _ids(condition))
                 case ConditionField.ATTRIBUTE:
                     assert condition.attribute_id is not None
                     attributes.add(condition.attribute_id)
@@ -443,6 +442,10 @@ class RuleDefinition:
             for condition in self.conditions.conditions()
             if condition.op is Operator.MATCHES
         }
+
+
+def _ids(condition: Condition) -> list[UUID]:
+    return [UUID(str(value)) for value in condition.values]
 
 
 def _single_key(action: Action) -> str | None:
