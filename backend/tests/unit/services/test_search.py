@@ -211,6 +211,32 @@ async def test_paging_stops_at_the_hits_an_index_can_reach(scene: Scene) -> None
     assert near.next_offset is None
 
 
+async def test_a_search_with_meaning_pages_on_whatever_the_words_estimate(scene: Scene) -> None:
+    class Estimating(type(scene.setup.index)):  # type: ignore[misc]
+        """An index whose estimate of the hits is the page it has just given."""
+
+        async def search(self, query: SearchQuery) -> SearchResult:
+            result = await super().search(query)
+            return SearchResult(
+                hits=result.hits, estimated_total=len(result.hits), semantic=result.semantic
+            )
+
+    index = Estimating()
+    index.replace_all(dict(scene.setup.index.documents))
+    service = SearchService(scene.setup.world.uow, index, scene.setup.embeddings)
+    with_meaning = await service.search(scene.owner.id, "Rechnung", limit=1, semantic_ratio=0.5)
+    assert (with_meaning.semantic, with_meaning.next_offset) == (True, 1)
+    words = await service.search(scene.owner.id, "Rechnung", limit=1, semantic_ratio=0)
+    assert (words.semantic, words.next_offset) == (False, None)
+
+
+async def test_a_query_vector_of_another_length_goes_by_words(scene: Scene) -> None:
+    service = scene.search(SearchPolicy(dimensions=3))  # the fake vectors have more
+    page = await service.search(scene.owner.id, "Stromrechnung", semantic_ratio=0.5)
+    assert page.semantic is False
+    assert [item.document.id for item in page.items] == [scene.shared_document.id]
+
+
 async def test_with_embeddings_the_meaning_takes_part(scene: Scene) -> None:
     embeddings = scene.setup.embeddings
     assert isinstance(embeddings, FakeEmbeddings)

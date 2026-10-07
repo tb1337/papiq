@@ -153,7 +153,16 @@ class MeilisearchIndex:
                 raise SearchIndexError("the index has no embedder, so it takes no vectors")
             body["vector"] = list(query.vector or ())
             body["hybrid"] = {"embedder": EMBEDDER, "semanticRatio": query.semantic_ratio}
-        data = await self._request("POST", f"/indexes/{self._index}/search", json=body)
+        response = await self._send("POST", f"/indexes/{self._index}/search", json=body)
+        if response.status_code == 400 and _code(response) == "invalid_search_filter":
+            # The index was lost and created again by a write, without its settings: set it up
+            # and ask once more.
+            self._ready_until = 0.0
+            await self._ensure_ready()
+            response = await self._send("POST", f"/indexes/{self._index}/search", json=body)
+        if response.status_code == 404 and _code(response) == "index_not_found":
+            self._ready_until = 0.0
+        data = _json(_checked(response))
         try:
             hits = [_hit_of(item) for item in data["hits"]]
             total = int(data.get("estimatedTotalHits", data.get("totalHits", 0)))
@@ -171,9 +180,13 @@ class MeilisearchIndex:
 
     async def drop(self) -> None:
         """Delete the index and the remains of a rebuild; for throwaway indexes."""
-        await self._delete_index(self._index)
-        await self._delete_index(self._build_index)
-        self._ready_until = 0.0
+        try:
+            await self._delete_index(self._index)
+        finally:
+            try:
+                await self._delete_index(self._build_index)
+            finally:
+                self._ready_until = 0.0
 
     async def check(self) -> None:
         response = await self._send("GET", "/health")
@@ -230,6 +243,22 @@ class MeilisearchIndex:
 
     async def _prepare(self, index: str) -> None:
         """Create the index if it is missing and bring its settings to the wanted ones."""
+        try:
+            await self._apply_settings(index)
+        except _TaskFailedError as failure:
+            if failure.code != "vector_embedding_error" or self._dimensions is None:
+                raise
+            response = await self._send("GET", f"/indexes/{index}/settings")
+            if response.status_code != 200 or _json(response).get("embedders"):
+                raise  # an embedder is there: another model or length, an admin rebuilds
+            # A write created the index again after a loss, without an embedder, and its
+            # documents lack the vectors the embedder wants. The index is derived data: start
+            # again, the reconciliation fills it.
+            log.warning("search index recreated, it was set up without an embedder")
+            await self._delete_index(index)
+            await self._apply_settings(index)
+
+    async def _apply_settings(self, index: str) -> None:
         response = await self._send("GET", f"/indexes/{index}/settings")
         if response.status_code == 404:
             created = await self._request(
@@ -275,7 +304,7 @@ class MeilisearchIndex:
             "lane": document.lane_value,
             "title": document.title,
             "filename": document.filename,
-            "text": document.text,
+            "text": _unmarked(document.text),
             "contact_id": _text(document.contact_id),
             "contact": document.contact,
             "document_type_id": _text(document.document_type_id),
@@ -403,6 +432,12 @@ def _quote(value: object) -> str:
 
 def _stamp(document: IndexDocument, part: str) -> str | None:
     return None if document.embedding is None else str(getattr(document.embedding, part))
+
+
+def _unmarked(text: str) -> str:
+    """The text without the characters that mark matches in a snippet, so a document cannot
+    forge a match."""
+    return text.replace(HIGHLIGHT_START, "").replace(HIGHLIGHT_END, "")
 
 
 def _text(value: object) -> str | None:

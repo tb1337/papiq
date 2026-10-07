@@ -390,6 +390,7 @@ def indexing_policy_of(settings: Settings) -> IndexingPolicy:
         chunk_size=settings.search_chunk_size,
         max_chunks=settings.search_max_chunks,
         document_prefix=_prefix(settings.embedding_document_prefix),
+        dimensions=settings.embedding_dimensions,
         reconcile_interval=settings.search_reconcile_interval,
         # An indexing job may embed and write up to three times (see `IndexingService`).
         job_lease=3 * (settings.embedding_timeout + settings.meilisearch_task_timeout)
@@ -403,6 +404,7 @@ def search_policy_of(settings: Settings) -> SearchPolicy:
         semantic_ratio=settings.search_semantic_ratio,
         embed_timeout=settings.search_embed_timeout,
         query_prefix=_prefix(settings.embedding_query_prefix),
+        dimensions=settings.embedding_dimensions,
     )
 
 

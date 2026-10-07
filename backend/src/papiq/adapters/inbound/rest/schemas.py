@@ -199,7 +199,7 @@ class SearchResultPage(BaseModel):
         "caller may no longer read, or that are gone, are left out."
     )
     estimated_total: int = Field(
-        description="An upper bound of the hits, not exact. At most 1000 hits can be reached."
+        description="An estimate of the hits, not exact. At most 1000 hits can be reached."
     )
     next_offset: int | None = Field(
         description="Pass as `offset` for the next page; null on the last page."

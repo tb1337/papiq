@@ -194,6 +194,15 @@ async def test_writes_name_the_primary_key() -> None:
     assert write.url.params["primaryKey"] == "id"
 
 
+async def test_the_marks_of_a_match_cannot_come_from_a_document() -> None:
+    sim = SimulatedMeilisearch()
+    sim.settings = wanted_settings(sim)
+    text = f"vor {HIGHLIGHT_START}falsch{HIGHLIGHT_END} nach"
+    await sim.index().upsert([index_document(text=text)])
+    (write,) = sim.calls("PUT", "/documents")
+    assert sim.body(write)[0]["text"] == "vor falsch nach"
+
+
 async def test_only_the_differing_settings_are_applied() -> None:
     sim = SimulatedMeilisearch()
     sim.settings = wanted_settings(sim, dimensions=3)
@@ -393,6 +402,28 @@ async def test_the_search_request_and_its_answer() -> None:
     assert (second.score, second.snippet) == (None, ())
 
 
+async def test_an_index_that_was_created_without_settings_is_set_up_for_the_search() -> None:
+    sim = SimulatedMeilisearch()
+    sim.settings = wanted_settings(sim)
+    refused = [True]
+
+    def lost(request: httpx2.Request) -> httpx2.Response | None:
+        if request.url.path.endswith("/search") and refused:
+            refused.pop()
+            error = {"code": "invalid_search_filter", "message": "not filterable"}
+            return httpx2.Response(400, json=error)
+        return None
+
+    sim.fail = lost
+    index = sim.index()
+    await index.upsert([index_document()])  # the index counts as set up now
+    settings_checks = len(sim.calls("GET", "/settings"))
+    result = await index.search(_query())
+    assert result.hits == []
+    assert len(sim.calls("POST", "/search")) == 2
+    assert len(sim.calls("GET", "/settings")) == settings_checks + 1
+
+
 async def test_a_search_without_vector_or_with_ratio_zero_is_plain_full_text() -> None:
     sim = SimulatedMeilisearch()
     sim.settings = wanted_settings(sim, dimensions=2)
@@ -453,6 +484,16 @@ async def test_deleting_an_index_fails_on_other_errors() -> None:
     sim.task_status, sim.task_error = "failed", {"code": "internal", "message": "disk full"}
     with pytest.raises(SearchIndexError, match="disk full"):
         await (await sim.index().begin_rebuild()).abort()
+
+
+async def test_dropping_tries_both_indexes_even_if_the_first_fails() -> None:
+    sim = SimulatedMeilisearch()
+    sim.settings = wanted_settings(sim)
+    sim.task_status, sim.task_error = "failed", {"code": "internal", "message": "disk full"}
+    with pytest.raises(SearchIndexError, match="disk full"):
+        await sim.index().drop()
+    deleted = [request.url.path for request in sim.calls("DELETE")]
+    assert "/indexes/papiq-test-rebuild" in deleted
 
 
 async def test_dropping_removes_the_index_and_the_remains_of_a_rebuild() -> None:

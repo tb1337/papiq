@@ -256,8 +256,12 @@ meaning took part.
   three rounds, so a change made meanwhile is not lost. A failed job repeats after 30 s,
   doubling up to an hour, ten times; the last attempt writes the words without vectors. Renaming
   a contact, a type or a tag queues the documents that carry it: the index holds names for the
-  search by words. A reconciliation every `PAPIQ_SEARCH_RECONCILE_INTERVAL` compares the index
-  with the database and queues what is missing, stale or gone.
+  search by words. A reconciliation compares the index with the database and queues what is
+  missing, stale or gone: every `PAPIQ_SEARCH_RECONCILE_INTERVAL` and at every start of a worker.
+  If the embedding endpoint is down, the document is written at once with the vectors it has
+  and the job repeats for the new ones. If Meilisearch loses its data, the adapter sets the
+  index up again; restart the worker or call `POST /search/reindex` to fill it without waiting
+  for the next reconciliation.
 - **Rebuild at any time.** `POST /search/reindex` (admins) or `python -m papiq.composition
   reindex` builds `<index>-rebuild` from the database and the object store while the active
   index keeps serving, swaps it in and reconciles what changed meanwhile. The index holds no
@@ -274,7 +278,8 @@ meaning took part.
 - **Embeddings.** The query is embedded at request time (`PAPIQ_SEARCH_EMBED_TIMEOUT`); if the
   endpoint is down or slow, the search falls back to words (`semantic: false`).
   `PAPIQ_EMBEDDING_DIMENSIONS` is the length of the vectors and required with Meilisearch and an
-  embedding endpoint; changing the model means a rebuild. Some models want a prefix for queries
+  embedding endpoint; vectors of another length are refused (the query then goes by words).
+  Changing the model means a rebuild. Some models want a prefix for queries
   and documents (`PAPIQ_EMBEDDING_QUERY_PREFIX`, `PAPIQ_EMBEDDING_DOCUMENT_PREFIX`).
 - **Limits.** Meilisearch ranks the documents nearest in meaning even if no word matches, so
   a hybrid search always returns hits; there is no threshold yet. A rebuild occupies one worker
