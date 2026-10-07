@@ -83,6 +83,41 @@ def attribute_json(value: AttributeValue) -> str | bool | MoneyValue:
 class DocumentDetails(BaseModel):
     """A document's metadata and processing state, with the caller's access."""
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "id": "01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b",
+                    "title": "Electricity bill March",
+                    "original_filename": "scan_0042.pdf",
+                    "media_type": "application/pdf",
+                    "owner_id": "01999d5e-1111-7c1e-b6a3-2f4d5e6f7a8b",
+                    "drawer_id": "01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b",
+                    "access": "read_write",
+                    "contact_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b",
+                    "document_type_id": None,
+                    "tag_ids": [],
+                    "document_date": "2026-03-31",
+                    "attributes": {
+                        "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b": {
+                            "amount": "84.20",
+                            "currency": "EUR",
+                        }
+                    },
+                    "lane": "green",
+                    "processing": {
+                        "status": "completed",
+                        "current_step": None,
+                        "run": 1,
+                        "outcomes": {"ocr": "ok", "classify": "ok"},
+                    },
+                    "created_at": "2026-04-02T08:15:00Z",
+                    "updated_at": "2026-04-02T08:16:10Z",
+                }
+            ]
+        }
+    )
+
     id: UUID
     title: str
     original_filename: str
@@ -140,7 +175,25 @@ class DocumentPage(BaseModel):
 class DocumentPatch(BaseModel):
     """Fields left out stay as they are; null removes a value."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "title": "Electricity bill March",
+                    "contact_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b",
+                    "tag_ids": ["01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b"],
+                    "document_date": "2026-03-31",
+                    "attributes": {
+                        "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b": {
+                            "amount": "84.20",
+                            "currency": "EUR",
+                        }
+                    },
+                }
+            ]
+        },
+    )
 
     title: str | None = Field(default=None, min_length=1, max_length=500)
     contact_id: UUID | None = None
@@ -154,7 +207,10 @@ class DocumentPatch(BaseModel):
 
 
 class MoveRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"drawer_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b"}]},
+    )
 
     drawer_id: UUID
 
@@ -193,6 +249,8 @@ class LogEntry(BaseModel):
 
 
 class ReprocessRequest(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [{"from_step": "classify"}]})
+
     from_step: ReprocessStep = Field(
         description="Discard the results from this step on and process again from there."
     )
@@ -224,7 +282,12 @@ Code = Annotated[str, Field(min_length=1, max_length=64)]
 
 
 class LoginRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [{"username": "alice", "password": "********", "code": "123456"}]
+        },
+    )
 
     username: str = Field(min_length=1, max_length=150, examples=["alice"])
     password: Password = Field(examples=["********"])
@@ -283,6 +346,29 @@ class SessionOut(BaseModel):
 
 
 class Me(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "user": {
+                        "id": "01999d5e-1111-7c1e-b6a3-2f4d5e6f7a8b",
+                        "username": "alice",
+                        "role": "user",
+                        "active": True,
+                        "created_at": "2026-01-10T09:00:00Z",
+                    },
+                    "authenticated_with": "token",
+                    "csrf_token": None,
+                    "session_expires_at": None,
+                    "token_scope": "read",
+                    "has_password": True,
+                    "totp_enabled": False,
+                    "linked_accounts": [],
+                }
+            ]
+        }
+    )
+
     user: UserOut
     authenticated_with: Literal["session", "token"]
     csrf_token: str | None = Field(description="With a session: for `X-CSRF-Token`.")
@@ -294,7 +380,14 @@ class Me(BaseModel):
 
 
 class PasswordChange(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {"current_password": "********", "new_password": "********", "revoke_tokens": False}
+            ]
+        },
+    )
 
     current_password: Password
     new_password: Password = Field(description="12 to 256 characters, not the username.")
@@ -315,7 +408,10 @@ class TotpSetupOut(BaseModel):
 
 
 class CodeIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"code": "123456"}]},
+    )
 
     code: Code = Field(description="A TOTP code; where noted, a recovery code works too.")
 
@@ -327,7 +423,14 @@ class RecoveryCodes(BaseModel):
 
 
 class TokenCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {"name": "scanner", "scope": "read_write", "expires_at": "2027-01-01T00:00:00Z"}
+            ]
+        },
+    )
 
     name: str = Field(min_length=1, max_length=100, examples=["scanner"])
     scope: TokenScope
@@ -335,6 +438,21 @@ class TokenCreate(BaseModel):
 
 
 class TokenOut(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "id": "01999d5e-6666-7c1e-b6a3-2f4d5e6f7a8b",
+                    "name": "scanner",
+                    "scope": "read_write",
+                    "created_at": "2026-04-01T10:00:00Z",
+                    "expires_at": "2027-01-01T00:00:00Z",
+                    "last_used_at": "2026-04-02T07:30:00Z",
+                }
+            ]
+        }
+    )
+
     id: UUID
     name: str
     scope: TokenScope
@@ -355,6 +473,22 @@ class TokenOut(BaseModel):
 
 
 class TokenCreated(TokenOut):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "id": "01999d5e-6666-7c1e-b6a3-2f4d5e6f7a8b",
+                    "name": "scanner",
+                    "scope": "read_write",
+                    "created_at": "2026-04-01T10:00:00Z",
+                    "expires_at": "2027-01-01T00:00:00Z",
+                    "last_used_at": None,
+                    "token": "papiq_<token shown once>",
+                }
+            ]
+        }
+    )
+
     token: str = Field(
         description="The token itself; shown only now.", examples=["papiq_<token shown once>"]
     )
@@ -377,7 +511,12 @@ class Removed(BaseModel):
 
 
 class UserCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [{"username": "bob", "role": "user", "password": "********"}]
+        },
+    )
 
     username: str = Field(min_length=1, max_length=150)
     role: Role = Role.USER
@@ -387,7 +526,10 @@ class UserCreate(BaseModel):
 
 
 class UserPatch(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"role": "admin", "active": True}]},
+    )
 
     role: Role | None = None
     active: bool | None = Field(
@@ -396,7 +538,10 @@ class UserPatch(BaseModel):
 
 
 class PasswordReset(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"password": "********", "revoke_tokens": True}]},
+    )
 
     password: Password
     revoke_tokens: bool = False
@@ -414,7 +559,10 @@ Name = Annotated[str, Field(min_length=1, max_length=200, examples=["ACME Energy
 
 
 class NameIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"name": "ACME Energy"}]},
+    )
 
     name: Name
 
@@ -430,7 +578,18 @@ class MasterDataOut(BaseModel):
 
 
 class AttributeCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "name": "Amount",
+                    "data_type": "amount",
+                    "document_type_ids": ["01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b"],
+                }
+            ]
+        },
+    )
 
     name: Name
     data_type: AttributeType
@@ -445,7 +604,12 @@ class AttributeCreate(BaseModel):
 class AttributePatch(BaseModel):
     """Fields left out stay. The data type cannot change."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [{"name": "Payment method", "choices": ["Card", "Transfer", "Cash"]}]
+        },
+    )
 
     name: Name | None = None
     choices: list[Annotated[str, Field(min_length=1, max_length=200)]] | None = Field(
@@ -463,6 +627,21 @@ class AttributePatch(BaseModel):
 
 
 class AttributeOut(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "id": "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b",
+                    "name": "Amount",
+                    "data_type": "amount",
+                    "document_type_ids": None,
+                    "choices": [],
+                    "created_at": "2026-01-10T09:00:00Z",
+                }
+            ]
+        }
+    )
+
     id: UUID
     name: str
     data_type: AttributeType
@@ -518,6 +697,9 @@ class DrawerOut(BaseModel):
 
 
 class ShareIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"level": "read"}]},
+    )
 
     level: ShareLevel

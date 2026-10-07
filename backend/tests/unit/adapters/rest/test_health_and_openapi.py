@@ -5,8 +5,9 @@ import re
 from typing import Any
 
 import httpx2
+from pydantic import BaseModel
 
-from papiq.adapters.inbound.rest import PREFIX, ApiContext, create_app
+from papiq.adapters.inbound.rest import PREFIX, ApiContext, create_app, schemas
 from papiq.composition.container import build_memory_container, build_services
 from tests.builders import PASSWORD, SECRET_KEY
 from tests.unit.adapters.rest.conftest import Api
@@ -218,6 +219,31 @@ async def test_bodies_and_answers_are_described(api: Api) -> None:
             if "requestBody" in operation:
                 assert "413" in operation["responses"], (path, method)
     assert login["requestBody"]["content"]["application/json"]
+
+
+async def test_request_bodies_have_examples(api: Api) -> None:
+    schema = await openapi(api)
+    components = schema["components"]["schemas"]
+    for path, item in schema["paths"].items():
+        for method, operation in item.items():
+            content = operation.get("requestBody", {}).get("content", {})
+            if "application/json" in content:
+                name = content["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
+                assert components[name].get("examples"), (path, method, name)
+
+
+def test_examples_are_valid_bodies() -> None:
+    models = [
+        model
+        for model in vars(schemas).values()
+        if isinstance(model, type) and issubclass(model, BaseModel) and model is not BaseModel
+    ]
+    for model in models:
+        extra = model.model_config.get("json_schema_extra")
+        examples = extra.get("examples", []) if isinstance(extra, dict) else []
+        assert isinstance(examples, list), model
+        for example in examples:
+            model.model_validate(example)
 
 
 async def test_no_secrets_in_the_contract(api: Api) -> None:
