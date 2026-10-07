@@ -27,5 +27,6 @@ data/
 .idea/*
 !.idea/*.md
 !.idea/prompts/
+!.idea/reviews/
 .vscode/
 .DS_Store
