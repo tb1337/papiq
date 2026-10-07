@@ -178,9 +178,9 @@ async def test_a_verified_classification_is_applied(world: World) -> None:
     assert changes == DocumentChanges(
         contact_id=seeded.contacts["Stadtwerke Musterstadt GmbH"].id,
         document_type_id=seeded.types["Rechnung"].id,
-        tag_ids=frozenset({seeded.tags["Strom"].id}),
         document_date=date(2026, 3, 31),
     )
+    assert outcome.add_tags == frozenset({seeded.tags["Strom"].id})
     assert result.input["truncated"] is False
     assert result.input["model"] == "fake-llm 1"
     assert result.input["endpoint"] == "memory"
@@ -322,7 +322,7 @@ async def test_new_tags_are_only_proposed(world: World) -> None:
     assert tags.value == [str(seeded.tags["Strom"].id)]
     assert tags.suggestion == ["Abschlag", "Energie"]
     assert result.result.outcome is Outcome.OK
-    assert result.changes.tag_ids == frozenset({seeded.tags["Strom"].id})
+    assert result.add_tags == frozenset({seeded.tags["Strom"].id})
 
 
 @pytest.mark.parametrize(

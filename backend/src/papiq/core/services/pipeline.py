@@ -22,7 +22,7 @@ from papiq.core.domain.errors import (
     UnsupportedMediaTypeError,
     ValidationError,
 )
-from papiq.core.domain.ids import DocumentId, DrawerId, JobId, UserId
+from papiq.core.domain.ids import DocumentId, DrawerId, JobId, TagId, UserId
 from papiq.core.domain.jobs import Job, JobStatus
 from papiq.core.domain.json_value import JsonObject
 from papiq.core.domain.permissions import can_file_into, is_document_owner
@@ -51,10 +51,12 @@ STEP_JOB = "pipeline.step"
 class MetadataResult:
     """A step result together with a change of the document's metadata (classification).
     Both are stored in the same transaction. If the change no longer fits (master data was
-    removed meanwhile), nothing is changed and the step is uncertain."""
+    removed meanwhile), nothing is changed and the step is uncertain. `add_tags` are added to
+    the tags the document has when the result is stored, so tags set meanwhile stay."""
 
     result: StepResult
     changes: DocumentChanges
+    add_tags: frozenset[TagId] = frozenset()
 
 
 class StepExecutor(Protocol):
@@ -346,7 +348,7 @@ class PipelineService:
             )
             await self._record(job, document_id, step, run, _failed(reason), started)
             return
-        changes: DocumentChanges | None = None
+        metadata: MetadataResult | None = None
         try:
             outcome = await self._executors[step].run(document)
         except UnprocessableDocumentError as error:
@@ -371,10 +373,10 @@ class PipelineService:
             return
 
         if isinstance(outcome, MetadataResult):
-            result, changes = outcome.result, outcome.changes
+            result, metadata = outcome.result, outcome
         else:
             result = outcome
-        await self._record(job, document_id, step, run, result, started, changes)
+        await self._record(job, document_id, step, run, result, started, metadata)
 
     async def _record(
         self,
@@ -384,14 +386,14 @@ class PipelineService:
         run: int,
         result: StepResult,
         started: datetime,
-        changes: DocumentChanges | None = None,
+        metadata: MetadataResult | None = None,
     ) -> None:
         """Store a step result (and its metadata change). A concurrent change of the document
         (e.g. a metadata edit) is retried; if the job's claim was lost, another worker owns
         the step and nothing is stored."""
         for attempt in range(1, _RECORD_ATTEMPTS + 1):
             try:
-                await self._record_once(job, document_id, step, run, result, started, changes)
+                await self._record_once(job, document_id, step, run, result, started, metadata)
                 return
             except ConcurrencyError:
                 if not await self._still_claimed(job):
@@ -408,7 +410,7 @@ class PipelineService:
         run: int,
         result: StepResult,
         started: datetime,
-        changes: DocumentChanges | None,
+        metadata: MetadataResult | None,
     ) -> None:
         now = self._clock.now()
         async with self._uow() as uow:
@@ -417,8 +419,8 @@ class PipelineService:
                 await uow.jobs.complete(job)
                 await uow.commit()
                 return
-            if changes is not None:
-                result = await _apply(uow, document, changes, result, now)
+            if metadata is not None:
+                result = await _apply(uow, document, metadata, result, now)
             next_step = document.record_result(step, run, result, now)
             await uow.documents.update(document)
             await self._log(uow, document.id, step, run, result, started, now)
@@ -507,10 +509,13 @@ async def _enqueue_step(uow: UnitOfWork, document: Document, now: datetime) -> J
 
 
 async def _apply(
-    uow: UnitOfWork, document: Document, changes: DocumentChanges, result: StepResult, now: datetime
+    uow: UnitOfWork, document: Document, metadata: MetadataResult, result: StepResult, now: datetime
 ) -> StepResult:
     """Apply a step's metadata change; if it no longer fits, change nothing and make the
     step uncertain."""
+    changes = metadata.changes
+    if not metadata.add_tags <= document.tag_ids:
+        changes = replace(changes, tag_ids=frozenset(document.tag_ids | metadata.add_tags))
     try:
         await check_references(uow, changes)
         definitions = {item.id: item for item in await uow.attributes.list_all()}
