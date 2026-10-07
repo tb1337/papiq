@@ -432,11 +432,12 @@ async def test_an_upload_stores_the_original_again_if_it_vanished(world: World) 
 class Changes:
     """Classifies with a metadata change."""
 
-    def __init__(self, changes: DocumentChanges) -> None:
+    def __init__(self, changes: DocumentChanges, add_tags: frozenset[TagId] = frozenset()) -> None:
         self.changes = changes
+        self.add_tags = add_tags
 
     async def run(self, document: Document) -> MetadataResult:
-        return MetadataResult(StepResult(outcome=Outcome.OK), self.changes)
+        return MetadataResult(StepResult(outcome=Outcome.OK), self.changes, self.add_tags)
 
 
 async def test_a_step_changes_metadata_with_its_result(world: World) -> None:
@@ -450,6 +451,23 @@ async def test_a_step_changes_metadata_with_its_result(world: World) -> None:
     await world.drain(pipeline)
     stored = await world.documents.get(owner.id, document.id)
     assert stored.tag_ids == frozenset({tag.id})
+    assert stored.lane is Lane.GREEN
+
+
+async def test_classified_tags_are_added_to_the_documents_tags(world: World) -> None:
+    mine, strom = Tag.create(name="Mine", now=NOW), Tag.create(name="Strom", now=NOW)
+    async with world.uow() as uow:
+        await uow.tags.add(mine)
+        await uow.tags.add(strom)
+        await uow.commit()
+    pipeline = world.pipeline({Step.CLASSIFY: Changes(DocumentChanges(), frozenset({strom.id}))})
+    owner, document = await receive(world, pipeline)
+    await world.documents.update_metadata(
+        owner.id, document.id, DocumentChanges(tag_ids=frozenset({mine.id}))
+    )
+    await world.drain(pipeline)
+    stored = await world.documents.get(owner.id, document.id)
+    assert stored.tag_ids == frozenset({mine.id, strom.id})
     assert stored.lane is Lane.GREEN
 
 

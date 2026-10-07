@@ -220,10 +220,11 @@ class ClassifyStep(_ModelStep):
         changes = DocumentChanges(
             contact_id=_applied(checks[0], lambda value: ContactId(UUID(value))),
             document_type_id=_applied(checks[1], lambda value: _by_id(types, value).id),
-            tag_ids=frozenset(_by_id(tags, value).id for value in _list(checks[2].value)),
             document_date=_applied(checks[3], date.fromisoformat),
         )
-        return MetadataResult(_result(checks, answer.raw, answers, input), changes)
+        # Tags are added: those the document has (set by its owner) stay.
+        add_tags = frozenset(_by_id(tags, value).id for value in _list(checks[2].value))
+        return MetadataResult(_result(checks, answer.raw, answers, input), changes, add_tags)
 
     def _today(self) -> date:
         return self._clock.now().date()
