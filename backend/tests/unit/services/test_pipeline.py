@@ -3,6 +3,7 @@ from datetime import timedelta
 
 import pytest
 
+from papiq.adapters.outbound.memory import MemoryObjectStore
 from papiq.core.domain.documents import Document, Sha256
 from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import (
@@ -235,7 +236,8 @@ async def test_stale_jobs_are_skipped(world: World) -> None:
     assert await pipeline.run_next_job()
     assert calls.calls == 0
     assert not await pipeline.run_next_job()
-    assert all(job.status is JobStatus.DONE for job in world.database.jobs.values())
+    steps = [job for job in world.database.jobs.values() if job.kind == STEP_JOB]
+    assert all(job.status is JobStatus.DONE for job in steps)
 
 
 async def crash(world: World) -> None:
@@ -400,3 +402,23 @@ async def test_a_stored_original_is_not_uploaded_again(world: World) -> None:
     await world.object_store.put(key, b"%PDF-1.7 marker", content_type="application/pdf")
     await world.pipeline().receive(second.id, incoming(PDF), filename="b.pdf")
     assert await world.object_store.get(key) == b"%PDF-1.7 marker"
+
+
+class VanishingStore(MemoryObjectStore):
+    """Says an original exists at the first look, then it is gone: as if the files of a deleted
+    document were removed right between the two looks of an upload."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.looks = 0
+
+    async def exists(self, key: str) -> bool:
+        self.looks += 1
+        return self.looks == 1 or await super().exists(key)
+
+
+async def test_an_upload_stores_the_original_again_if_it_vanished(world: World) -> None:
+    world.object_store = VanishingStore()
+    owner = await world.user()
+    document = await world.pipeline().receive(owner.id, incoming(b"%PDF-1.7 x"), filename="x.pdf")
+    assert await world.object_store.get(original_key(document.sha256)) == b"%PDF-1.7 x"

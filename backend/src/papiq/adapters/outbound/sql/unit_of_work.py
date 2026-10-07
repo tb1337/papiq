@@ -44,6 +44,8 @@ from papiq.core.domain.events import DomainEvent
 
 # Key of the Postgres advisory lock that orders commits with events ("papiq:outbox").
 OUTBOX_LOCK_KEY = 0x7061_7069_713A_6F62
+# Class of the two-key advisory locks taken by `lock` ("papi"); a key space of its own.
+NAMED_LOCK_CLASS = 0x7061_7069
 
 
 class SqlOutbox:
@@ -82,6 +84,7 @@ class SqlOutbox:
 class SqlUnitOfWork:
     def __init__(self, database: Database) -> None:
         self._tx = Transaction(database)
+        self._locked = False
         self.users = SqlUserRepository(self._tx)
         self.drawers = SqlDrawerRepository(self._tx)
         self.contacts = SqlContactRepository(self._tx)
@@ -110,6 +113,19 @@ class SqlUnitOfWork:
     ) -> None:
         if not self._tx.closed:
             await self.rollback()
+
+    async def lock(self, name: str) -> None:
+        """Postgres: a transaction-level advisory lock on the name's hash (collisions only make
+        unrelated units wait). SQLite: the write lock, which serializes all writers anyway."""
+        if self._locked:
+            raise RuntimeError("a unit of work locks at most one name")
+        self._locked = True
+        if self._tx.database.is_sqlite:
+            await self._tx.write(select(1))
+        else:
+            await self._tx.write(
+                select(func.pg_advisory_xact_lock(NAMED_LOCK_CLASS, func.hashtext(name)))
+            )
 
     async def commit(self) -> None:
         await self.outbox.flush()

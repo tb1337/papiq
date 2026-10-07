@@ -172,6 +172,12 @@ Receive → OCR → parse run as jobs (`pipeline.step`); the steps after parsing
   `uv run docling-tools models download layout tableformer -o <dir>`.
 - Previews: PDFium (pypdfium2) renders, Pillow encodes WebP. PDFium is not thread-safe; all
   its use in a process shares one lock.
+- Deleting a document queues `documents.remove_files` in the same transaction: the worker
+  removes its derivatives and its original, unless a document of any owner still has the same
+  file (failures are repeated up to five times, from one minute, doubling). The removal and an
+  upload of the same file lock the original's key (`UnitOfWork.lock`: a Postgres advisory lock,
+  on SQLite the write lock); under that lock the upload stores the original again if it is
+  gone, so no document is left without its original.
 - Known gap: an original is stored before its document is created; if creating fails (e.g.
   the drawer's rights changed meanwhile), the object stays without a document. Removing such
   objects is left to a later cleanup of the object store.
@@ -253,7 +259,8 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
 - The cleanup (`maintenance.cleanup`, one job with a fixed dedup key; it goes before pipeline
   steps when due) runs every
   `PAPIQ_CLEANUP_INTERVAL` and removes finished jobs and delivered events older than
-  `PAPIQ_RETENTION`.
+  `PAPIQ_RETENTION`, ended sessions and stale counts of failed sign-ins. The same loop runs
+  the removal of a deleted document's files.
 - SIGTERM or SIGINT: no new jobs; running jobs may finish within
   `PAPIQ_WORKER_SHUTDOWN_TIMEOUT`, then they are cancelled and their jobs released to run again
   at once. Finally the database engine and the S3 client are closed.

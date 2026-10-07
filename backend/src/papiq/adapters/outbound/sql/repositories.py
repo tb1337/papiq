@@ -418,6 +418,7 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
         document_type: DocumentTypeId | None = None,
         tag: TagId | None = None,
         attribute: AttributeId | None = None,
+        sha256: Sha256 | None = None,
     ) -> bool:
         documents = t.documents
         criteria: list[ColumnElement[bool]] = []
@@ -441,6 +442,8 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
                     select(values.c.document_id).where(values.c.attribute_id == attribute)
                 )
             )
+        if sha256 is not None:
+            criteria.append(documents.c.sha256 == sha256.hex)
         if not criteria:
             raise ValueError("exists needs at least one criterion")
         found = await self._tx.read(select(documents.c.id).where(*criteria).limit(1))

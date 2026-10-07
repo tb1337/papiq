@@ -80,6 +80,13 @@ class UnitOfWork(Protocol):
         traceback: TracebackType | None,
     ) -> None: ...
 
+    async def lock(self, name: str) -> None:
+        """Hold an exclusive lock on `name` until this unit ends (commit or rollback). Other
+        units that lock the same name wait meanwhile. For work outside the database that must
+        not interleave, e.g. storing and deleting the same original. Lock at most one name per
+        unit, before its other writes."""
+        ...
+
     async def commit(self) -> None:
         """Make all changes durable and visible. ConflictError or ConcurrencyError if a
         uniqueness rule or a version check fails; then nothing is stored."""

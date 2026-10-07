@@ -143,6 +143,7 @@ class DocumentRepository(Repository[DocumentId, Document], Protocol):
         document_type: DocumentTypeId | None = None,
         tag: TagId | None = None,
         attribute: AttributeId | None = None,
+        sha256: Sha256 | None = None,
     ) -> bool:
         """Whether any document matches all given criteria, regardless of who may read it
         (for checks before deleting what documents refer to). At least one is required."""
