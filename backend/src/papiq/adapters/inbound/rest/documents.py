@@ -75,6 +75,24 @@ _LANES: dict[LaneFilter, Lane | None] = {
 
 DRAWER_FIELD = "drawer_id"
 
+
+def document_filter(
+    contact_id: UUID | None,
+    document_type_id: UUID | None,
+    tag_id: list[UUID] | None,
+    drawer_id: UUID | None,
+    lane: list[LaneFilter] | None,
+) -> DocumentFilter:
+    """The query parameters of the document list as a filter (also used by the search)."""
+    return DocumentFilter(
+        contact=None if contact_id is None else ContactId(contact_id),
+        document_type=None if document_type_id is None else DocumentTypeId(document_type_id),
+        tags=frozenset(TagId(tag) for tag in tag_id or ()),
+        drawer=None if drawer_id is None else DrawerId(drawer_id),
+        lanes=None if not lane else frozenset(_LANES[item] for item in lane),
+    )
+
+
 _UPLOAD_BODY: dict[str, Any] = {
     "requestBody": {
         "required": True,
@@ -156,8 +174,8 @@ async def upload(
     description=(
         "The documents the caller may read, newest first: their own, and green documents in "
         "drawers they own or that are shared with them. Filters combine; `tag_id` and `lane` "
-        "may repeat (all tags, any lane; `processing`: no lane yet). Full-text search follows "
-        "with the search index."
+        "may repeat (all tags, any lane; `processing`: no lane yet). To search by words and "
+        "meaning use `GET /documents/search`."
     ),
     response_model=DocumentPage,
     responses=problem_responses(401, 422),
@@ -173,13 +191,7 @@ async def list_documents(
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE)] = 50,
     cursor: Annotated[str | None, Query(max_length=64, description="`next_cursor`.")] = None,
 ) -> DocumentPage:
-    filter = DocumentFilter(
-        contact=None if contact_id is None else ContactId(contact_id),
-        document_type=None if document_type_id is None else DocumentTypeId(document_type_id),
-        tags=frozenset(TagId(tag) for tag in tag_id or ()),
-        drawer=None if drawer_id is None else DrawerId(drawer_id),
-        lanes=None if not lane else frozenset(_LANES[item] for item in lane),
-    )
+    filter = document_filter(contact_id, document_type_id, tag_id, drawer_id, lane)
     views = await context.documents.query(user, filter, before=_decode_cursor(cursor), limit=limit)
     next_cursor = _encode_cursor(views[-1].document.id) if len(views) == limit else None
     return DocumentPage(

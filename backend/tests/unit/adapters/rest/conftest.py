@@ -47,6 +47,8 @@ def make_app(
             drawers=services.drawers,
             master_data=services.master_data,
             oidc=services.oidc,
+            search=services.search,
+            indexing=services.indexing,
             pipeline=services.pipeline,
             documents=services.documents,
             event_bus=container.event_bus,
