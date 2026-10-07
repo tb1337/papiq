@@ -5,7 +5,7 @@ from enum import StrEnum
 from pathlib import Path, PurePath
 
 from papiq.core.domain import media_types
-from papiq.core.domain.documents import Document, DocumentChanges, Unset
+from papiq.core.domain.documents import Document, DocumentChanges
 from papiq.core.domain.drawers import Drawer, ShareLevel
 from papiq.core.domain.errors import NotFoundError, PermissionDeniedError
 from papiq.core.domain.ids import DocumentId, DrawerId, UserId
@@ -15,15 +15,17 @@ from papiq.core.domain.permissions import (
     document_access,
     is_document_owner,
 )
-from papiq.core.domain.pipeline import StepRun
+from papiq.core.domain.pipeline import Lane, StepRun
 from papiq.core.ports import Clock, DocumentFilter, ObjectStore, UnitOfWork, UnitOfWorkFactory
 from papiq.core.ports.preview import PREVIEW_MEDIA_TYPE
 from papiq.core.services._access import (
+    check_references,
     load_actor,
     readable_document,
     visible_drawer,
     writable_document,
 )
+from papiq.core.services.inbox import InboxItem, Review, open_steps, step_reviews
 from papiq.core.services.maintenance import REMOVE_FILES_JOB
 from papiq.core.services.objects import archive_key, original_key, preview_key
 
@@ -159,13 +161,42 @@ class DocumentService:
                 raise PermissionDeniedError(f"only the owner reads the processing log of {id}")
             return await uow.processing_log.list_for(id)
 
+    async def inbox(
+        self, actor: UserId, *, before: DocumentId | None = None, limit: int = 50
+    ) -> list[InboxItem]:
+        """The caller's yellow and red documents, newest first, with what is open in them."""
+        limit = max(1, min(limit, MAX_PAGE))
+        waiting = DocumentFilter(lanes=frozenset({Lane.YELLOW, Lane.RED}))
+        async with self._uow() as uow:
+            await load_actor(uow, actor)
+            documents = await uow.documents.query_visible(
+                actor, waiting, before=before, limit=limit
+            )
+            items = []
+            for document in documents:
+                if document.owner_id != actor:  # only owners see yellow and red documents
+                    continue
+                log = await uow.processing_log.list_for(document.id)
+                items.append(InboxItem(document, open_steps(document, log)))
+        return items
+
+    async def review(self, actor: UserId, id: DocumentId) -> Review:
+        """Owner only: what is open, and what the model proposed and how it was checked."""
+        async with self._uow() as uow:
+            user = await load_actor(uow, actor)
+            document, _ = await readable_document(uow, user, id)
+            if not is_document_owner(user, document):
+                raise PermissionDeniedError(f"only the owner reviews document {id}")
+            log = await uow.processing_log.list_for(id)
+        return Review(document, open_steps(document, log), step_reviews(log))
+
     async def update_metadata(
         self, actor: UserId, id: DocumentId, changes: DocumentChanges
     ) -> Document:
         """Needs write access. Referenced contact, type, tags and attributes must exist."""
         async with self._uow() as uow:
             document, _ = await writable_document(uow, await load_actor(uow, actor), id)
-            await _check_references(uow, changes)
+            await check_references(uow, changes)
             definitions = {item.id: item for item in await uow.attributes.list_all()}
             document.apply_changes(changes, definitions, self._clock.now())
             await _save(uow, document)
@@ -213,14 +244,3 @@ class DocumentService:
 async def _save(uow: UnitOfWork, document: Document) -> None:
     await uow.documents.update(document)
     await uow.outbox.add(document.pull_events())
-
-
-async def _check_references(uow: UnitOfWork, changes: DocumentChanges) -> None:
-    if not isinstance(changes.contact_id, Unset) and changes.contact_id is not None:
-        await uow.contacts.get(changes.contact_id)
-    if not isinstance(changes.document_type_id, Unset) and changes.document_type_id is not None:
-        await uow.document_types.get(changes.document_type_id)
-    if not isinstance(changes.tag_ids, Unset):
-        for tag in changes.tag_ids:
-            if await uow.tags.find(tag) is None:
-                raise NotFoundError("tag", tag)

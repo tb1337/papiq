@@ -1,0 +1,41 @@
+{
+  "description": "Cancellation confirmation, a notice.",
+  "expected": {
+    "lane": "green",
+    "contact": "FernNetz Telekommunikation GmbH",
+    "document_type": "Mitteilung",
+    "tags": [
+      "Telefon",
+      "Internet"
+    ],
+    "document_date": "2026-05-22",
+    "attributes": {
+      "Kundennummer": "KD-55 12 34"
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "FernNetz Telekommunikation GmbH",
+        "evidence": "FernNetz Telekommunikation GmbH"
+      },
+      "document_type": "Mitteilung",
+      "new_document_type": null,
+      "tags": [
+        "Telefon",
+        "Internet"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-05-22",
+        "evidence": "Hamburg, 22.05.2026"
+      }
+    },
+    "attributes": {
+      "Kundennummer": {
+        "value": "KD-55 12 34",
+        "evidence": "Kundennummer: KD-55 12 34"
+      }
+    }
+  }
+}

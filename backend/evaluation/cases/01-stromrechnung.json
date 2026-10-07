@@ -1,0 +1,60 @@
+{
+  "description": "Electricity bill; every field shown once.",
+  "expected": {
+    "lane": "green",
+    "contact": "Stadtwerke Musterstadt GmbH",
+    "document_type": "Rechnung",
+    "tags": [
+      "Strom"
+    ],
+    "document_date": "2026-03-31",
+    "attributes": {
+      "Betrag": {
+        "amount": "84.20",
+        "currency": "EUR"
+      },
+      "Rechnungsnummer": "R-2026-004711",
+      "Kundennummer": "100 200 300",
+      "Fällig am": "2026-04-15"
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Stadtwerke Musterstadt GmbH",
+        "evidence": "Stadtwerke Musterstadt GmbH"
+      },
+      "document_type": "Rechnung",
+      "new_document_type": null,
+      "tags": [
+        "Strom"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-03-31",
+        "evidence": "Musterstadt, 31.03.2026"
+      }
+    },
+    "attributes": {
+      "Betrag": {
+        "value": {
+          "amount": "84.20",
+          "currency": "EUR"
+        },
+        "evidence": "Gesamtbetrag | 84,20 €"
+      },
+      "Rechnungsnummer": {
+        "value": "R-2026-004711",
+        "evidence": "Rechnungsnummer: R-2026-004711"
+      },
+      "Kundennummer": {
+        "value": "100 200 300",
+        "evidence": "Kundennummer: 100 200 300"
+      },
+      "Fällig am": {
+        "value": "2026-04-15",
+        "evidence": "am 15.04.2026 per Lastschrift"
+      }
+    }
+  }
+}

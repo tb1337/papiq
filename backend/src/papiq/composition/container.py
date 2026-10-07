@@ -9,6 +9,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
 
+from pydantic import SecretStr
+
 from papiq import __version__
 from papiq.adapters.inbound.rest import PREFIX
 from papiq.adapters.outbound.crypto import (
@@ -33,6 +35,7 @@ from papiq.adapters.outbound.memory import (
 )
 from papiq.adapters.outbound.ocrmypdf import OcrmypdfEngine
 from papiq.adapters.outbound.oidc import AuthlibOidcProvider
+from papiq.adapters.outbound.openai_compat import OpenAiCompatEmbeddings, OpenAiCompatLanguageModel
 from papiq.adapters.outbound.pdfium import PdfiumPreviewRenderer
 from papiq.adapters.outbound.s3 import S3ObjectStore
 from papiq.adapters.outbound.sql import SqlEventBus, SqlUnitOfWorkFactory
@@ -60,6 +63,11 @@ from papiq.core.ports import (
     UnitOfWorkFactory,
 )
 from papiq.core.services.auth import AuthService, SessionPolicy
+from papiq.core.services.classification.steps import (
+    ClassificationPolicy,
+    ClassifyStep,
+    ExtractAttributesStep,
+)
 from papiq.core.services.documents import DocumentService
 from papiq.core.services.drawers import DrawerService
 from papiq.core.services.maintenance import MaintenanceService
@@ -122,9 +130,39 @@ OBJECT_STORES: dict[str, Factory[ObjectStore]] = {
     "filesystem": filesystem_store,
     "s3": s3_store,
 }
+
+
+def openai_language_model(settings: Settings) -> OpenAiCompatLanguageModel:
+    # Settings guarantee these together.
+    assert settings.llm_base_url is not None and settings.llm_model is not None
+    return OpenAiCompatLanguageModel(
+        base_url=str(settings.llm_base_url),
+        model=settings.llm_model,
+        api_key=_secret(settings.llm_api_key),
+        temperature=settings.llm_temperature,
+        seed=settings.llm_seed,
+        timeout=settings.llm_timeout.total_seconds(),
+        response_format=settings.llm_response_format,
+    )
+
+
+def openai_embeddings(settings: Settings) -> OpenAiCompatEmbeddings:
+    assert settings.embedding_base_url is not None and settings.embedding_model is not None
+    return OpenAiCompatEmbeddings(
+        base_url=str(settings.embedding_base_url),
+        model=settings.embedding_model,
+        api_key=_secret(settings.embedding_api_key),
+        timeout=settings.embedding_timeout.total_seconds(),
+    )
+
+
+def _secret(value: SecretStr | None) -> str | None:
+    return None if value is None else value.get_secret_value()
+
+
 SEARCH_INDEXES: dict[str, Factory[SearchIndex]] = {}
-LANGUAGE_MODELS: dict[str, Factory[LanguageModel]] = {}
-EMBEDDINGS: dict[str, Factory[Embeddings]] = {}
+LANGUAGE_MODELS: dict[str, Factory[LanguageModel]] = {"openai-compatible": openai_language_model}
+EMBEDDINGS: dict[str, Factory[Embeddings]] = {"openai-compatible": openai_embeddings}
 
 
 def _cores_per_job(settings: Settings) -> int:
@@ -309,17 +347,32 @@ class Services:
 LEASE_MARGIN = timedelta(minutes=2)
 
 
+def policy_of(settings: Settings) -> ClassificationPolicy:
+    """Thresholds and limits of classification and attribute extraction."""
+    return ClassificationPolicy(
+        accept=settings.confidence_threshold,
+        suggest_contact=settings.contact_suggest_threshold,
+        input_budget=settings.llm_input_budget,
+        max_tags=settings.llm_max_tags,
+    )
+
+
 def build_services(container: Container, settings: Settings | None = None) -> Services:
     """The use cases; tuning (retries, time limits, cleanup) from `settings`, or the defaults.
 
-    OCR and parsing run on the container's adapters. Classification, attributes, rules and
-    filing are placeholders until M5 and M7.
+    OCR, parsing, classification and attribute extraction run on the container's adapters
+    (without a language model, classification is uncertain). Rules and filing are
+    placeholders until M7.
     """
     settings = settings or Settings.model_construct()
     uow, clock, store = container.unit_of_work, container.clock, container.object_store
     executors: dict[Step, StepExecutor] = {step: PlaceholderStep() for step in PIPELINE[1:]}
     executors[Step.OCR] = OcrStep(store, container.ocr, container.previews)
     executors[Step.PARSE] = ParseStep(store, container.parser)
+    policy = policy_of(settings)
+    model = container.language_model
+    executors[Step.CLASSIFY] = ClassifyStep(uow, store, model, clock, policy)
+    executors[Step.EXTRACT_ATTRIBUTES] = ExtractAttributesStep(uow, store, model, clock, policy)
     auth = AuthService(
         uow,
         clock,
@@ -359,7 +412,9 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
                 max_attempts=settings.step_max_attempts, delay=settings.step_retry_delay
             ),
             # Longer than any step may take, so a running step never loses its claim.
-            lease=max(settings.ocr_timeout, settings.parse_timeout) + LEASE_MARGIN,
+            # A classification step may ask the model twice (once more after an invalid answer).
+            lease=max(settings.ocr_timeout, settings.parse_timeout, 2 * settings.llm_timeout)
+            + LEASE_MARGIN,
         ),
         maintenance=MaintenanceService(
             uow,

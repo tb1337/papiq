@@ -25,6 +25,14 @@ class ValidationError(DomainError):
     """A value or a change breaks a rule of the domain model."""
 
 
+class OpenFieldsError(ValidationError):
+    """Confirming a document needs a decision on each of its open fields."""
+
+    def __init__(self, fields: tuple[str, ...]) -> None:
+        super().__init__(f"decide the open fields first: {', '.join(fields)}")
+        self.fields = fields
+
+
 class InvalidTransitionError(DomainError):
     """The processing state does not allow the requested step or action."""
 
@@ -73,3 +81,12 @@ class TooManyAttemptsError(DomainError):
 
 class IdentityProviderError(DomainError):
     """The identity provider could not be reached or answered with something unusable."""
+
+
+class LanguageModelError(DomainError):
+    """The language model could not be reached or answered with an error (HTTP status, time
+    out, unusable response). Usually temporary, so the step is retried."""
+
+
+class EmbeddingsError(DomainError):
+    """The embedding model could not be reached or answered with an error."""

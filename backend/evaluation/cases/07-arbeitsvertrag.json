@@ -1,0 +1,39 @@
+{
+  "description": "Employment contract; start date written with the month name.",
+  "expected": {
+    "lane": "green",
+    "contact": "Nordlicht Software AG",
+    "document_type": "Vertrag",
+    "tags": [
+      "Arbeit"
+    ],
+    "document_date": "2026-02-10",
+    "attributes": {
+      "Vertragsbeginn": "2026-04-01"
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Nordlicht Software AG",
+        "evidence": "Nordlicht Software AG"
+      },
+      "document_type": "Vertrag",
+      "new_document_type": null,
+      "tags": [
+        "Arbeit"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-02-10",
+        "evidence": "Hamburg, 10.02.2026"
+      }
+    },
+    "attributes": {
+      "Vertragsbeginn": {
+        "value": "2026-04-01",
+        "evidence": "beginnt am 1. April 2026"
+      }
+    }
+  }
+}

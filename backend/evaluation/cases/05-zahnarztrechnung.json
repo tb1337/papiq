@@ -1,0 +1,51 @@
+{
+  "description": "Dentist's invoice. The fixed answer gives a wrong amount (312,40 instead of 321,40).",
+  "expected": {
+    "lane": "green",
+    "contact": "Zahnarztpraxis Dr. Lehmann",
+    "document_type": "Rechnung",
+    "tags": [
+      "Gesundheit"
+    ],
+    "document_date": "2026-03-03",
+    "attributes": {
+      "Betrag": {
+        "amount": "321.40",
+        "currency": "EUR"
+      },
+      "Rechnungsnummer": "Z-3141"
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Zahnarztpraxis Dr. Lehmann",
+        "evidence": "Zahnarztpraxis Dr. Lehmann"
+      },
+      "document_type": "Rechnung",
+      "new_document_type": null,
+      "tags": [
+        "Gesundheit"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-03-03",
+        "evidence": "Musterstadt, den 03.03.2026"
+      }
+    },
+    "attributes": {
+      "Betrag": {
+        "value": {
+          "amount": "312.40",
+          "currency": "EUR"
+        },
+        "evidence": "Gesamt 312,40 €"
+      },
+      "Rechnungsnummer": {
+        "value": "Z-3141",
+        "evidence": "Rechnung Z-3141"
+      }
+    },
+    "lane": "yellow"
+  }
+}

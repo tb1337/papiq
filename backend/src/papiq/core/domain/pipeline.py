@@ -99,6 +99,7 @@ class ProcessingStatus(StrEnum):
     PROCESSING = "processing"  # `current_step` is due
     COMPLETED = "completed"  # all steps done
     FAILED = "failed"  # stopped at `current_step`
+    REVIEW = "review"  # uncertain results; waits before `current_step` (filing) for the owner
 
 
 @dataclass(kw_only=True)
