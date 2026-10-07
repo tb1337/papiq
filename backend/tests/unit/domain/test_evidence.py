@@ -100,6 +100,8 @@ def test_currencies(written: str, code: str) -> None:
 
 def test_currency_not_shown() -> None:
     assert "USD" not in currencies_in(normalise("Betrag 84,20 €"))
+    # Three-letter words that are no ISO 4217 code.
+    assert currencies_in(normalise("bis den Sie von")) == set()
 
 
 def test_contains() -> None:
@@ -111,6 +113,9 @@ def test_contains() -> None:
     assert not contains(text, "Meier")
     assert not contains(text, "  ")
     assert not contains(normalise("1 2 3 4"), "1234")  # short values need their spaces
+    assert not contains(normalise("Rechnung Z-3141"), "Z-3")  # whole words only
+    assert not contains(normalise("vom 31.03.2026"), "31")
+    assert contains(normalise("Rechnung Z-3141, bezahlt"), "Z-3141")
 
 
 def test_document_text() -> None:

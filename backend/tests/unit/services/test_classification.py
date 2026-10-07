@@ -525,6 +525,24 @@ async def test_verified_attributes_are_applied(world: World) -> None:
             "'Bezahlt': the quoted passage does not appear in the text",
             True,
         ),
+        (
+            {"a1": {"value": True, "evidence": "31"}},
+            "Bezahlt",
+            "'Bezahlt': the quoted passage does not appear in the text",
+            True,
+        ),
+        (
+            {"a4": {"value": "R-2026", "evidence": None}},
+            "Rechnungsnummer",
+            "'Rechnungsnummer': the text does not appear in the text",
+            "R-2026",
+        ),
+        (
+            {"a3": {"value": {"amount": "84.20", "currency": "BIS"}, "evidence": None}},
+            "Rechnungsbetrag",
+            "'Rechnungsbetrag': the currency BIS does not appear in the text",
+            {"amount": "84.20", "currency": "BIS"},
+        ),
     ],
 )
 async def test_uncertain_attributes(
