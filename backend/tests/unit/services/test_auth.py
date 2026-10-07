@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import timedelta
 
 import pytest
@@ -244,6 +245,37 @@ async def test_a_concurrent_burst_does_not_bypass_the_throttle(world: World) -> 
     results, _ = await _burst(world, attempts)
     refused = sum(isinstance(result, TooManyAttemptsError) for result in results)
     assert refused >= attempts - 30, f"{refused} of {attempts} concurrent attempts were refused"
+
+
+async def test_failed_sign_ins_do_not_log_the_typed_username(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    """M4-07: `sign-in failed` logs the account key, i.e. the username as typed. A password
+    typed into the username field (a common slip) ends up in the log."""
+    typed_into_the_wrong_field = "my secret passphrase 42"
+    with (
+        caplog.at_level(logging.INFO, logger="papiq.core.services.auth"),
+        pytest.raises(AuthenticationError),
+    ):
+        await world.auth.login(typed_into_the_wrong_field, "x", source=SOURCE)
+    for record in caplog.records:
+        logged = record.getMessage() + repr(record.__dict__.get("keys"))
+        assert typed_into_the_wrong_field.casefold() not in logged.casefold(), logged
+
+
+async def test_failed_sign_ins_log_the_user_id_of_known_accounts(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    user = await world.account("alice")
+    with (
+        caplog.at_level(logging.INFO, logger="papiq.core.services.auth"),
+        pytest.raises(AuthenticationError),
+    ):
+        await world.auth.login("alice", "wrong password!", source=SOURCE)
+    [record] = [r for r in caplog.records if r.getMessage() == "sign-in failed"]
+    assert record.__dict__["user_id"] == str(user.id)
+    assert record.__dict__["source"] == SOURCE
+    assert "alice" not in repr(record.__dict__)
 
 
 # --- sessions -----------------------------------------------------------------------------------
