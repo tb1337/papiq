@@ -15,8 +15,9 @@ from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import UnprocessableDocumentError
 from papiq.core.domain.pipeline import Step
 from papiq.core.services.objects import original_key
+from tests.api import USER_HEADER, auth
 from tests.contracts.processing import SAMPLES
-from tests.unit.adapters.rest.conftest import MAX_UPLOAD, USER_HEADER, Api, auth, make_app
+from tests.unit.adapters.rest.conftest import MAX_UPLOAD, Api, make_app
 
 DOCUMENTS = f"{PREFIX}/documents"
 PROBLEM = "application/problem+json"
