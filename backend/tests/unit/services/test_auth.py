@@ -1,9 +1,11 @@
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 
 import pytest
 
+from papiq.adapters.outbound.memory import FakePasswordHasher
 from papiq.core.domain.errors import (
     AuthenticationError,
     ConflictError,
@@ -15,7 +17,7 @@ from papiq.core.domain.errors import (
 )
 from papiq.core.domain.identity import TokenScope, csrf_token, hash_token
 from papiq.core.domain.ids import ApiTokenId, new_id
-from papiq.core.domain.users import User
+from papiq.core.domain.users import Role, User
 from papiq.core.services.auth import AuthService
 from tests.builders import PASSWORD
 from tests.unit.services.conftest import World
@@ -386,6 +388,62 @@ async def test_changing_the_password_needs_the_current_one_and_the_policy(world:
     with pytest.raises(ValidationError):
         await world.auth.change_password(user.id, PASSWORD, "x" * 257)
     await world.auth.login("alice", PASSWORD)
+
+
+async def test_rejected_new_passwords_do_not_count_as_failures(world: World) -> None:
+    user = await world.account("alice")
+    for _ in range(10):
+        with pytest.raises(ValidationError):
+            await world.auth.change_password(user.id, PASSWORD, "short")
+    async with world.uow() as uow:
+        assert await uow.login_failures.find("account:alice") is None
+    await world.auth.login("alice", PASSWORD)
+
+
+class ChangingHasher:
+    """Runs `meanwhile` while a password is being verified."""
+
+    def __init__(self, inner: FakePasswordHasher) -> None:
+        self.inner = inner
+        self.meanwhile: Callable[[], Awaitable[None]] | None = None
+
+    async def hash(self, password: str) -> str:
+        return await self.inner.hash(password)
+
+    async def verify(self, hash: str, password: str) -> bool:
+        result = await self.inner.verify(hash, password)
+        if self.meanwhile is not None:
+            action, self.meanwhile = self.meanwhile, None
+            await action()
+        return result
+
+    def needs_rehash(self, hash: str) -> bool:
+        return self.inner.needs_rehash(hash)
+
+
+@pytest.mark.parametrize("change", ["reset", "deactivate"])
+async def test_a_sign_in_does_not_outlive_a_reset_or_deactivation(
+    world: World, change: str
+) -> None:
+    """A sign-in whose password check overlaps a reset or deactivation starts no session."""
+    admin, user = await world.account("root", Role.ADMIN), await world.account("alice")
+    world.hasher.round = 2  # the sign-in would also rehash the old password
+    hasher = ChangingHasher(world.hasher)
+    auth = AuthService(world.uow, world.clock, hasher=hasher, cipher=world.cipher, totp=world.totp)
+
+    async def meanwhile() -> None:
+        if change == "reset":
+            await world.users.reset_password(admin.id, user.id, NEW_PASSWORD)
+        else:
+            await world.users.set_active(admin.id, user.id, False)
+
+    hasher.meanwhile = meanwhile
+    with pytest.raises(AuthenticationError):
+        await auth.login("alice", PASSWORD)
+    async with world.uow() as uow:
+        assert await uow.sessions.remove_for_user(user.id) == 0
+    if change == "reset":
+        await world.auth.login("alice", NEW_PASSWORD)  # the reset was not undone
 
 
 # --- TOTP ---------------------------------------------------------------------------------------

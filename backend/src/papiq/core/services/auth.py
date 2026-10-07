@@ -183,6 +183,7 @@ class AuthService:
             user.id,
             reserved,
             now,
+            verified=stored,
             code=code,
             recovery_code=recovery_code,
             new_hash=new_hash,
@@ -196,6 +197,7 @@ class AuthService:
         reserved: Sequence[tuple[str, ThrottleRule]],
         now: datetime,
         *,
+        verified: str,
         code: str | None,
         recovery_code: str | None,
         new_hash: str | None,
@@ -205,6 +207,9 @@ class AuthService:
         async with self._uow() as uow:
             user = await uow.users.get(user_id)
             credential = await uow.credentials.get(user_id)
+            if credential.password_hash != verified or not user.active:
+                # Reset, changed or deactivated while the password was checked.
+                raise AuthenticationError("invalid username or password")
             valid = not credential.totp_enabled or self._second_factor(
                 credential, code, recovery_code, now
             )
@@ -298,17 +303,20 @@ class AuthService:
         async with self._uow() as uow:
             user = await load_actor(uow, actor)
             credential = await uow.credentials.find(actor)
+        new_password = check_new_password(new, user.username)  # before anything is counted
         reserved, _ = await self._reserve(_throttles(user.username, None), now)
         stored = None if credential is None else credential.password_hash
         if stored is None or not await self._hasher.verify(stored, normalize_password(current)):
             _log_failure(actor, None)
             raise PermissionDeniedError("the current password is wrong")
-        new_hash = await self._hasher.hash(check_new_password(new, user.username))
+        new_hash = await self._hasher.hash(new_password)
 
         async with self._uow() as uow:
             user = await load_actor(uow, actor)
             credential = await uow.credentials.get(actor)
             if credential.password_hash != stored:
+                await _release(uow, reserved)  # the current password was right
+                await uow.commit()
                 raise ConcurrencyError("the password was changed meanwhile")
             credential.password_hash = new_hash
             credential.password_changed_at = now
