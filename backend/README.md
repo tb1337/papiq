@@ -182,10 +182,36 @@ Receive → OCR → parse run as jobs (`pipeline.step`); the steps after parsing
 `adapters/inbound/rest` with Uvicorn on `PAPIQ_API_HOST`:`PAPIQ_API_PORT`. All routes are below
 `/api/v1`; the OpenAPI document is `/api/v1/openapi.json`, the interactive docs `/api/v1/docs`.
 
+Authentication: a session cookie from `POST /auth/login` or the OIDC callback, or a personal
+API token as `Authorization: Bearer papiq_…` (a Bearer header wins over a cookie). Every route
+depends on it except the five public ones (sign-in, OIDC start, info and callback, health); a
+test calls every registered route without credentials and expects `401`. Requests that change
+something need, with a session, the header `X-CSRF-Token` (from the sign-in answer or
+`GET /auth/me`) and, with a token, the scope `read_write`; otherwise `403`. Managing the own
+sign-in (password, TOTP, tokens, sessions, links) needs a session. Event streams check every 30
+seconds that their session or token still holds and end otherwise.
+
+The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax`, `Path=/`, for
+`PAPIQ_SESSION_MAX_AGE`; with `PAPIQ_COOKIE_SECURE=false` it is `papiq_session` without
+`Secure`. Sign-in accepts JSON only, so a form on another site cannot sign anyone in.
+
 | Endpoint | Purpose |
 | --- | --- |
+| `POST /auth/login` | Username, password, optional `code` or `recovery_code`; sets the cookie, returns the CSRF token |
+| `POST /auth/logout`, `GET /auth/me` | Sign out; who is calling and how |
+| `POST /auth/password` | Change the own password: other sessions end, `revoke_tokens` optional |
+| `DELETE /auth/sessions` | End all other sessions |
+| `POST /auth/totp`, `/totp/confirm`, `/totp/disable`, `/totp/recovery-codes` | TOTP |
+| `GET/POST /auth/tokens`, `DELETE /auth/tokens/{id}` | Own API tokens |
+| `GET /auth/oidc`, `/auth/oidc/login`, `/auth/oidc/callback`; `POST/DELETE /auth/oidc/link` | OpenID Connect |
+| `GET/POST /users`, `GET/PATCH/DELETE /users/{id}`, `POST /users/{id}/password`, `DELETE /users/{id}/totp`, `DELETE /users/{id}/oidc` | Accounts (admins; others list active users' names) |
+| `/contacts`, `/document-types`, `/tags`, `/attributes` (`GET`, `POST`, `GET/PATCH/DELETE /{id}`) | Master data: read by all, changed by admins, deleted only when unused |
+| `GET/POST /drawers`, `GET/PATCH/DELETE /drawers/{id}`, `PUT/DELETE /drawers/{id}/shares/{user_id}` | Drawers and shares (owner) |
+| `GET /documents` | Readable documents, newest first; filters `contact_id`, `document_type_id`, `tag_id`, `drawer_id`, `lane`; `limit`, `cursor` |
 | `POST /documents` | Upload (multipart: `file`, optional `drawer_id`); `202` with `id`, `status_url` |
-| `GET /documents/{id}` | Status: lane, processing state, current step, run, outcomes |
+| `GET/PATCH/DELETE /documents/{id}` | Metadata and state with the caller's access; change (write access); delete (owner) |
+| `POST /documents/{id}/move` | Into another drawer (owner, or an admin without read access) |
+| `GET /documents/{id}/original`, `/archive`, `/preview` | Files (read access) |
 | `GET /documents/{id}/log` | Processing log (owner) |
 | `POST /documents/{id}/retry` | Repeat the failed step (owner) |
 | `POST /documents/{id}/reprocess` | `{"from_step": "ocr"}`: process again from a step (owner) |
@@ -197,9 +223,15 @@ Receive → OCR → parse run as jobs (`pipeline.step`); the steps after parsing
   content (PDF, JPEG, PNG, TIFF; otherwise `415`). A file the owner already has: `409` with
   `existing_document_id`.
 - Errors are problem details (RFC 9457, `application/problem+json`) and documented per endpoint.
-- Authentication comes with M4. Until then the dependency `current_user` answers every request
-  that needs a user with `401`; nothing in the running service can name a user. Tests replace
-  the dependency.
+- Documents and drawers the caller may not see are `404` with the same answer as missing ones;
+  lists, filters and pages only ever contain readable documents (the repository query follows
+  the permission rule, and the service checks every result again). Yellow, red and unfinished
+  documents are the owner's only.
+- Downloads go through a temporary file and carry `X-Content-Type-Options: nosniff`,
+  `Content-Security-Policy: sandbox` and `Cache-Control: private, no-store`.
+- `401` (with `WWW-Authenticate: Bearer`), `429` (with `Retry-After`) and `502` (identity
+  provider) are problems like all errors. The access log shows the OIDC callback without its
+  query (code and state).
 - Event streams: the API subscribes to the event bus as `api.sse` and polls the outbox every
   `PAPIQ_EVENTS_POLL_INTERVAL`. Each event goes to the streams of the users who may read the
   document at that moment (other users once it is green). No replay: after reconnecting,
