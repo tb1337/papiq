@@ -20,6 +20,7 @@ import structlog
 
 from papiq.composition.api import run_api
 from papiq.composition.database import migrate_database
+from papiq.composition.endpoints import external_endpoints
 from papiq.composition.errors import ConfigurationError
 from papiq.composition.logging_setup import configure_logging
 from papiq.composition.settings import find_unknown_variables, load_settings
@@ -47,6 +48,12 @@ def main(argv: Sequence[str] = ()) -> int:
     for variable in find_unknown_variables():
         log.warning("unknown configuration variable", variable=variable)
     log.info("configuration valid", **settings.describe())
+    for variable, host in external_endpoints(settings).items():
+        log.warning(
+            f"document content is sent to {host}, outside the local network",
+            variable=variable,
+            host=host,
+        )
 
     if command in SERVICES and settings.role not in SERVICES[command]:
         log.error(
