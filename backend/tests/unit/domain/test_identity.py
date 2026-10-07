@@ -17,6 +17,7 @@ from papiq.core.domain.identity import (
     hash_token,
     new_recovery_codes,
     normalize_recovery_code,
+    source_key,
 )
 from papiq.core.domain.ids import UserId, new_id
 from tests.builders import NOW
@@ -130,3 +131,13 @@ def test_source_throttle_blocks_after_thirty_failures() -> None:
     failures.reserve(SOURCE_THROTTLE, NOW)
     assert failures.retry_after(NOW) == timedelta(minutes=15)
     assert failures.retry_after(NOW + timedelta(minutes=15)) is None
+
+
+def test_sources_are_ipv4_addresses_and_ipv6_networks() -> None:
+    """M4-09: one subscriber usually has a whole IPv6 /64."""
+    assert source_key("192.0.2.7") == "source:192.0.2.7"
+    assert source_key("2001:db8:1:2:aaaa::1") == "source:2001:db8:1:2::/64"
+    assert source_key("2001:db8:1:2:ffff::9") == source_key("2001:db8:1:2:aaaa::1")
+    assert source_key("2001:db8:1:3::1") != source_key("2001:db8:1:2::1")
+    assert source_key("::ffff:192.0.2.7") == "source:192.0.2.7"
+    assert source_key("not an address") == "source:not an address"
