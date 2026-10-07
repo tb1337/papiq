@@ -25,8 +25,9 @@ from papiq.core.domain.errors import (
 from papiq.core.domain.ids import DocumentId, DrawerId, JobId, TagId, UserId
 from papiq.core.domain.jobs import Job, JobStatus
 from papiq.core.domain.json_value import JsonObject
-from papiq.core.domain.permissions import can_file_into, is_document_owner
+from papiq.core.domain.permissions import can_file_into, can_move_document, is_document_owner
 from papiq.core.domain.pipeline import PIPELINE, Outcome, Step, StepResult, StepRun
+from papiq.core.domain.rule_engine import DRAWER, changed_fields
 from papiq.core.domain.users import User
 from papiq.core.ports import Clock, ObjectStore, UnitOfWork, UnitOfWorkFactory
 from papiq.core.services._access import (
@@ -37,6 +38,7 @@ from papiq.core.services._access import (
 )
 from papiq.core.services.inbox import confirmation, decide, open_steps
 from papiq.core.services.objects import original_key
+from papiq.core.services.rules.running import person_record
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +47,13 @@ _RECORD_ATTEMPTS = 3
 
 STEP_JOB = "pipeline.step"
 """Job kind of a pipeline step; payload: document id, step, processing run."""
+
+
+class DeferredResult(Protocol):
+    """A step result that is completed in the transaction that stores it, on the state that is
+    stored (applying metadata, running rules)."""
+
+    async def apply(self, uow: UnitOfWork, document: Document, now: datetime) -> StepResult: ...
 
 
 @dataclass(frozen=True)
@@ -58,16 +67,29 @@ class MetadataResult:
     changes: DocumentChanges
     add_tags: frozenset[TagId] = frozenset()
 
+    async def apply(self, uow: UnitOfWork, document: Document, now: datetime) -> StepResult:
+        changes = self.changes
+        if not self.add_tags <= document.tag_ids:
+            changes = replace(changes, tag_ids=frozenset(document.tag_ids | self.add_tags))
+        try:
+            await check_references(uow, changes)
+            definitions = {item.id: item for item in await uow.attributes.list_all()}
+            document.apply_changes(changes, definitions, now)
+        except (NotFoundError, ValidationError) as error:
+            reason = f"the master data changed during the step; nothing was applied ({error})"
+            return replace(self.result, outcome=Outcome.UNCERTAIN, reason=reason)
+        return self.result
+
 
 class StepExecutor(Protocol):
     """Does the work of one pipeline step (OCR, parsing, classification, ...).
 
-    Runs outside any transaction and may take long. Returns what the step decided; raising an
-    exception counts as a failed attempt and is retried, except UnprocessableDocumentError,
-    which fails the step at once.
+    Runs outside any transaction and may take long. Returns what the step decided, or a result
+    to complete when it is stored; raising an exception counts as a failed attempt and is
+    retried, except UnprocessableDocumentError, which fails the step at once.
     """
 
-    async def run(self, document: Document) -> StepResult | MetadataResult: ...
+    async def run(self, document: Document) -> StepResult | DeferredResult: ...
 
 
 class PlaceholderStep:
@@ -268,12 +290,16 @@ class PipelineService:
         *,
         accept_suggestions: bool = False,
         resume_at: Step = Step.APPLY_RULES,
+        drawer: DrawerId | None = None,
     ) -> Document:
         """Owner only, for a document in the inbox: decide its open fields, apply `changes`
-        (as a metadata change) and let processing continue from `resume_at`, up to filing.
+        (as a metadata change), move it into `drawer` (one the owner may write to) and let
+        processing continue from `resume_at`, up to filing.
 
-        Each uncertain field of the steps before `resume_at` needs a decision (see
-        `inbox.decide`). The steps whose results the owner overruled get a log entry."""
+        Each uncertain field of the steps before `resume_at`, and of the rules when processing
+        resumes with them, needs a decision (see `inbox.decide`). The steps whose results the
+        owner overruled get a log entry; so do the rules, with what the owner decided and
+        changed: the rules that run next leave it as it is."""
         async with self._uow() as uow:
             user = await load_actor(uow, actor)
             document = await _owned_document(uow, user, id)
@@ -283,8 +309,13 @@ class PipelineService:
                 item
                 for item in open_steps(document, log)
                 if item.step.position < resume_at.position
+                or (item.step is Step.APPLY_RULES and resume_at is Step.APPLY_RULES)
             ]
+            target = None if drawer is None else await visible_drawer(uow, user, drawer)
+            if target is not None and not can_move_document(user, document, target):
+                raise PermissionDeniedError(f"no write access to drawer '{target.name}'")
             now = self._clock.now()
+            tags_before = frozenset(document.tag_ids)
             overruled = document.confirm(resume_at, now)
             definitions = {item.id: item for item in await uow.attributes.list_all()}
             decision = decide(
@@ -293,12 +324,26 @@ class PipelineService:
                 changes,
                 accept_suggestions=accept_suggestions,
                 definitions=definitions,
+                given=() if target is None else (DRAWER,),
             )
             await check_references(uow, decision.changes)
             document.apply_changes(decision.changes, definitions, now)
+            if target is not None:
+                document.move_to(target.id, now)
+            run = document.processing.run
             for step in overruled:
                 result = confirmation(step, outcomes.get(step), decision, user.id)
-                await self._log(uow, id, step, document.processing.run, result, now, now)
+                await self._log(uow, id, step, run, result, now, now)
+            result = confirmation(
+                Step.APPLY_RULES, outcomes.get(Step.APPLY_RULES), decision, user.id
+            )
+            person = person_record(
+                changed=changed_fields(decision.changes) | ({DRAWER} if target else set()),
+                tags_before=tags_before,
+                tags_after=document.tag_ids,
+            )
+            result = replace(result, output={**result.output, **person})
+            await self._log(uow, id, Step.APPLY_RULES, run, result, now, now)
             await self._restart(uow, document)
         return document
 
@@ -356,9 +401,8 @@ class PipelineService:
             )
             await self._record(job, document_id, step, run, _failed(reason), started)
             return
-        metadata: MetadataResult | None = None
         try:
-            outcome = await self._executors[step].run(document)
+            outcome: StepResult | DeferredResult = await self._executors[step].run(document)
         except UnprocessableDocumentError as error:
             outcome = _failed(str(error))
         except Exception as error:
@@ -380,11 +424,7 @@ class PipelineService:
                 log.warning("lost the claim of a step job", extra={"job_id": str(job.id)})
             return
 
-        if isinstance(outcome, MetadataResult):
-            result, metadata = outcome.result, outcome
-        else:
-            result = outcome
-        await self._record(job, document_id, step, run, result, started, metadata)
+        await self._record(job, document_id, step, run, outcome, started)
 
     async def _record(
         self,
@@ -392,16 +432,15 @@ class PipelineService:
         document_id: DocumentId,
         step: Step,
         run: int,
-        result: StepResult,
+        result: StepResult | DeferredResult,
         started: datetime,
-        metadata: MetadataResult | None = None,
     ) -> None:
-        """Store a step result (and its metadata change). A concurrent change of the document
-        (e.g. a metadata edit) is retried; if the job's claim was lost, another worker owns
-        the step and nothing is stored."""
+        """Store a step result (completing a deferred one on the stored state). A concurrent
+        change of the document (e.g. a metadata edit) is retried; if the job's claim was lost,
+        another worker owns the step and nothing is stored."""
         for attempt in range(1, _RECORD_ATTEMPTS + 1):
             try:
-                await self._record_once(job, document_id, step, run, result, started, metadata)
+                await self._record_once(job, document_id, step, run, result, started)
                 return
             except ConcurrencyError:
                 if not await self._still_claimed(job):
@@ -416,9 +455,8 @@ class PipelineService:
         document_id: DocumentId,
         step: Step,
         run: int,
-        result: StepResult,
+        outcome: StepResult | DeferredResult,
         started: datetime,
-        metadata: MetadataResult | None,
     ) -> None:
         now = self._clock.now()
         async with self._uow() as uow:
@@ -427,8 +465,10 @@ class PipelineService:
                 await uow.jobs.complete(job)
                 await uow.commit()
                 return
-            if metadata is not None:
-                result = await _apply(uow, document, metadata, result, now)
+            if isinstance(outcome, StepResult):
+                result = outcome
+            else:
+                result = await outcome.apply(uow, document, now)
             next_step = document.record_result(step, run, result, now)
             await uow.documents.update(document)
             await self._log(uow, document.id, step, run, result, started, now)
@@ -514,24 +554,6 @@ async def _enqueue_step(uow: UnitOfWork, document: Document, now: datetime) -> J
     return await uow.jobs.enqueue(
         STEP_JOB, payload, run_at=now, dedup_key=f"{document.id}:{run}:{step.value}"
     )
-
-
-async def _apply(
-    uow: UnitOfWork, document: Document, metadata: MetadataResult, result: StepResult, now: datetime
-) -> StepResult:
-    """Apply a step's metadata change; if it no longer fits, change nothing and make the
-    step uncertain."""
-    changes = metadata.changes
-    if not metadata.add_tags <= document.tag_ids:
-        changes = replace(changes, tag_ids=frozenset(document.tag_ids | metadata.add_tags))
-    try:
-        await check_references(uow, changes)
-        definitions = {item.id: item for item in await uow.attributes.list_all()}
-        document.apply_changes(changes, definitions, now)
-    except (NotFoundError, ValidationError) as error:
-        reason = f"the master data changed during the step; nothing was applied ({error})"
-        return replace(result, outcome=Outcome.UNCERTAIN, reason=reason)
-    return result
 
 
 def _failed(reason: str) -> StepResult:

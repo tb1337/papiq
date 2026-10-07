@@ -171,6 +171,7 @@ async def test_a_confirmed_document_is_filed(world: World) -> None:
     assert [(entry.step, entry.run) for entry in confirmations] == [
         (Step.CLASSIFY, 2),
         (Step.EXTRACT_ATTRIBUTES, 2),
+        (Step.APPLY_RULES, 2),
     ]
     assert confirmations[0].result.output == {
         "confirmed_by": str(s.owner.id),
@@ -179,6 +180,10 @@ async def test_a_confirmed_document_is_filed(world: World) -> None:
         "entered": ["document_date"],
         "kept": [],
     }
+    # What the owner changed, for the rules that run next.
+    assert confirmations[2].result.output["changed"] == sorted(
+        ["contact", "document_date", f"attribute:{s.amount.id}"]
+    )
     # The model's proposals stay readable, for the rules.
     assert field_checks(log)["contact"].proposed == "Stadtwerk"
 
@@ -222,7 +227,10 @@ async def test_after_a_type_correction_attributes_are_extracted_again(world: Wor
     document = await world.documents.get(s.owner.id, s.document.id)
     assert document.processing.status is ProcessingStatus.REVIEW  # extraction is uncertain again
     log = await world.documents.processing_log(s.owner.id, s.document.id)
-    assert [entry.step for entry in log if entry.result.model_version == PERSON] == [Step.CLASSIFY]
+    assert [entry.step for entry in log if entry.result.model_version == PERSON] == [
+        Step.CLASSIFY,
+        Step.APPLY_RULES,
+    ]
 
 
 async def test_a_red_document_can_be_taken_over(world: World) -> None:
@@ -243,7 +251,11 @@ async def test_a_red_document_can_be_taken_over(world: World) -> None:
     assert stored.lane is Lane.GREEN
     log = await world.documents.processing_log(owner.id, document.id)
     taken = [entry for entry in log if entry.result.model_version == PERSON]
-    assert [entry.step for entry in taken] == [Step.CLASSIFY, Step.EXTRACT_ATTRIBUTES]
+    assert [entry.step for entry in taken] == [
+        Step.CLASSIFY,
+        Step.EXTRACT_ATTRIBUTES,
+        Step.APPLY_RULES,
+    ]
     assert taken[0].result.output["outcome_before"] == "failed"
     assert taken[1].result.output["outcome_before"] is None
 
