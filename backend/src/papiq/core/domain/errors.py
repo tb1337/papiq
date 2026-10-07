@@ -90,3 +90,16 @@ class LanguageModelError(DomainError):
 
 class EmbeddingsError(DomainError):
     """The embedding model could not be reached or answered with an error."""
+
+
+class SearchError(DomainError):
+    """The search index failed."""
+
+
+class SearchUnavailableError(SearchError):
+    """The search index is not configured, cannot be reached or does not answer in time. Usually
+    temporary, so index jobs are repeated."""
+
+
+class SearchIndexError(SearchError):
+    """The search index refused a request or a task failed (e.g. vectors of the wrong length)."""
