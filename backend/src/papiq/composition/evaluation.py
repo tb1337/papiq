@@ -31,6 +31,7 @@ class Evaluation:
     report: Path
     results: list[CaseResult]
     false_green: int
+    green_but_wrong: int
     violations: int
 
 
@@ -96,7 +97,13 @@ async def run_evaluation(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render(results, info), encoding="utf-8")
     summary = summarise(results, fake=fake)
-    return Evaluation(path, results, len(summary.false_green), len(summary.violations))
+    return Evaluation(
+        path,
+        results,
+        len(summary.false_green),
+        len(summary.green_but_wrong),
+        len(summary.violations),
+    )
 
 
 def _slug(name: str) -> str:

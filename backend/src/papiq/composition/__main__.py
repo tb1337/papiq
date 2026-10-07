@@ -9,7 +9,7 @@
 - `evaluate [--fake] [--cases DIR] [--output FILE]`: run the evaluation set (default
   `evaluation`) against the configured language model, or with `--fake` against the set's fixed
   answers, and write a Markdown report. Exits with status 1 if a document came out green that
-  should not have, or a field changed without a passed check.
+  should not have or with a wrong value, or a field changed without a passed check.
 
 Exits with status 1 and a readable message when the configuration is invalid, the command does
 not fit `PAPIQ_ROLE`, or the migration or the service fails.
@@ -47,12 +47,12 @@ def main(argv: Sequence[str] = ()) -> int:
     )
     parser.add_argument("--fake", action="store_true", help="evaluate: use the fixed answers")
     parser.add_argument(
-        "--cases", type=Path, default=Path("evaluation"), help="evaluate: the evaluation set"
+        "--cases", type=Path, help="evaluate: the evaluation set (default: evaluation)"
     )
     parser.add_argument("--output", type=Path, help="evaluate: where to write the report")
     arguments = parser.parse_args(argv)
     command = arguments.command
-    if command != "evaluate" and (arguments.fake or arguments.output):
+    if command != "evaluate" and (arguments.fake or arguments.cases or arguments.output):
         parser.error("--fake, --cases and --output only go with evaluate")
 
     try:
@@ -109,7 +109,7 @@ def _evaluate(settings: Settings, arguments: argparse.Namespace) -> int:
         result = asyncio.run(
             run_evaluation(
                 settings,
-                cases=arguments.cases,
+                cases=arguments.cases or Path("evaluation"),
                 fake=arguments.fake,
                 output=arguments.output,
                 progress=True,
@@ -123,9 +123,10 @@ def _evaluate(settings: Settings, arguments: argparse.Namespace) -> int:
         report=str(result.report),
         cases=len(result.results),
         false_green=result.false_green,
+        green_but_wrong=result.green_but_wrong,
         violations=result.violations,
     )
-    return 1 if result.false_green or result.violations else 0
+    return 1 if result.false_green or result.green_but_wrong or result.violations else 0
 
 
 if __name__ == "__main__":
