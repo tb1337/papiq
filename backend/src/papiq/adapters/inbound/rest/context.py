@@ -33,6 +33,8 @@ class ApiContext:
     health_checks: Mapping[str, HealthCheck]
     max_upload_size: int
     max_request_size: int = 1024 * 1024  # every other request body
+    # Checks of parts the API works without (the search): a failure is `degraded`, not `503`.
+    optional_checks: frozenset[str] = frozenset()
     oidc: OidcService | None = None
     # Both with a search index; without, the search endpoints answer 503.
     search: SearchService | None = None
