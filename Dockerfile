@@ -53,7 +53,10 @@ ENV UV_PYTHON_DOWNLOADS=never \
     UV_LINK_MODE=copy
 WORKDIR /build
 COPY backend/pyproject.toml backend/uv.lock ./
-RUN uv sync --frozen --no-install-project --no-dev \
+# Optional build secret `hf_token` (a Hugging Face token) avoids Hugging Face's rate limit; it
+# does not end up in the image.
+RUN --mount=type=secret,id=hf_token,env=HF_TOKEN \
+    uv sync --frozen --no-install-project --no-dev \
     && .venv/bin/docling-tools models download layout tableformer -o /opt/docling-models \
     && rm -rf /build /root/.cache
 
