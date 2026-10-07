@@ -11,6 +11,7 @@ from papiq.adapters.outbound.memory.language_model import FakeEmbeddings, FakeLa
 from papiq.adapters.outbound.memory.object_store import MemoryObjectStore
 from papiq.adapters.outbound.memory.oidc import FakeOidcProvider
 from papiq.adapters.outbound.memory.processing import FakeOcr, FakeParser, FakePreviewRenderer
+from papiq.adapters.outbound.memory.search_index import MemorySearchIndex
 from papiq.adapters.outbound.memory.unit_of_work import MemoryUnitOfWork, MemoryUnitOfWorkFactory
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     "MemoryDatabase",
     "MemoryEventBus",
     "MemoryObjectStore",
+    "MemorySearchIndex",
     "MemoryUnitOfWork",
     "MemoryUnitOfWorkFactory",
 ]
