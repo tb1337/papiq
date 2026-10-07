@@ -1,7 +1,7 @@
 """Outbound ports: interfaces the core needs, implemented by outbound adapters."""
 
 from papiq.core.ports.clock import Clock
-from papiq.core.ports.embeddings import Embeddings
+from papiq.core.ports.embeddings import EmbeddingResult, Embeddings
 from papiq.core.ports.event_bus import DeliveryRetry, EventBus, EventHandler, Outbox
 from papiq.core.ports.identity import (
     ApiTokenRepository,
@@ -16,7 +16,7 @@ from papiq.core.ports.identity import (
     Totp,
 )
 from papiq.core.ports.job_queue import JobQueue
-from papiq.core.ports.llm import LanguageModel
+from papiq.core.ports.llm import LanguageModel, StructuredAnswer, StructuredRequest
 from papiq.core.ports.object_store import ObjectStore
 from papiq.core.ports.ocr import Ocr, OcrResult
 from papiq.core.ports.parser import DocumentParser, ParseResult
@@ -50,6 +50,7 @@ __all__ = [
     "DocumentRepository",
     "DocumentTypeRepository",
     "DrawerRepository",
+    "EmbeddingResult",
     "Embeddings",
     "EventBus",
     "EventHandler",
@@ -71,6 +72,8 @@ __all__ = [
     "SearchIndex",
     "SecretCipher",
     "SessionRepository",
+    "StructuredAnswer",
+    "StructuredRequest",
     "TagRepository",
     "Totp",
     "UnitOfWork",

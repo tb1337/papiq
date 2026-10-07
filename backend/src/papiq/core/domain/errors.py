@@ -73,3 +73,12 @@ class TooManyAttemptsError(DomainError):
 
 class IdentityProviderError(DomainError):
     """The identity provider could not be reached or answered with something unusable."""
+
+
+class LanguageModelError(DomainError):
+    """The language model could not be reached or answered with an error (HTTP status, time
+    out, unusable response). Usually temporary, so the step is retried."""
+
+
+class EmbeddingsError(DomainError):
+    """The embedding model could not be reached or answered with an error."""
