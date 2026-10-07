@@ -1,5 +1,5 @@
 """Documents: list, metadata, moving, deleting, files; upload, processing log, retry and
-reprocessing.
+reprocessing; the inbox, review and confirmation.
 
 Documents the caller may not read are "not found", the same as documents that do not exist:
 the list leaves them out, filters and pages only ever see readable ones.
@@ -25,13 +25,17 @@ from papiq.adapters.inbound.rest.auth import PROTECTED, CurrentUser
 from papiq.adapters.inbound.rest.context import Context
 from papiq.adapters.inbound.rest.problems import problem_responses
 from papiq.adapters.inbound.rest.schemas import (
+    ConfirmRequest,
     DocumentAccepted,
     DocumentDetails,
     DocumentPage,
     DocumentPatch,
+    InboxItemOut,
+    InboxPage,
     LogEntry,
     MoveRequest,
     ReprocessRequest,
+    ReviewOut,
 )
 from papiq.adapters.inbound.rest.upload import FILE_FIELD, read_upload
 from papiq.core.domain.attributes import AttributeDefinition, AttributeType, Money, Url
@@ -52,6 +56,7 @@ from papiq.core.ports import DocumentFilter
 from papiq.core.services.documents import MAX_PAGE, DocumentFile
 
 router = APIRouter(prefix="/documents", tags=["documents"], dependencies=PROTECTED)
+inbox = APIRouter(prefix="/inbox", tags=["inbox"], dependencies=PROTECTED)
 
 
 class LaneFilter(StrEnum):
@@ -210,27 +215,7 @@ async def get_document(id: UUID, user: CurrentUser, context: Context) -> Documen
 async def update_document(
     id: UUID, body: DocumentPatch, user: CurrentUser, context: Context
 ) -> DocumentDetails:
-    given = body.model_fields_set
-    attributes: dict[AttributeId, object] = {}
-    if body.attributes:
-        definitions = {a.id: a for a in await context.master_data.list_attributes(user)}
-        for attribute_id, value in body.attributes.items():
-            definition = definitions.get(AttributeId(attribute_id))
-            attributes[AttributeId(attribute_id)] = (
-                value if definition is None else _attribute_value(definition, value)
-            )
-    if "title" in given and body.title is None:
-        raise ValidationError("title: must not be null")
-    changes = DocumentChanges(
-        title=body.title if body.title is not None else UNSET,
-        contact_id=_given(given, "contact_id", body.contact_id, ContactId),
-        document_type_id=_given(given, "document_type_id", body.document_type_id, DocumentTypeId),
-        tag_ids=(
-            frozenset(TagId(tag) for tag in body.tag_ids or ()) if "tag_ids" in given else UNSET
-        ),
-        document_date=body.document_date if "document_date" in given else UNSET,
-        attributes=attributes,
-    )
+    changes = await _changes(body, user, context)
     document = await context.documents.update_metadata(user, DocumentId(id), changes)
     view = await context.documents.view(user, document.id)
     return DocumentDetails.of(view.document, view.access)
@@ -354,9 +339,97 @@ async def reprocess(
     return _details(await context.pipeline.reprocess_from(user, DocumentId(id), step))
 
 
+@router.get(
+    "/{id}/review",
+    summary="What the model proposed for a document",
+    description=(
+        "Owner only. The open steps and fields, and the latest classification and attribute "
+        "extraction by the model: each field as proposed, checked and applied."
+    ),
+    response_model=ReviewOut,
+    responses=problem_responses(401, 403, 404, 422),
+)
+async def review(id: UUID, user: CurrentUser, context: Context) -> ReviewOut:
+    return ReviewOut.of(await context.documents.review(user, DocumentId(id)))
+
+
+@router.post(
+    "/{id}/confirm",
+    status_code=202,
+    summary="Confirm a document from the inbox",
+    description=(
+        "Owner only, for yellow and red documents that are not being processed. Every open "
+        "field of the steps before `resume_at` needs a decision: a value or null in `changes`, "
+        "or its suggestion with `accept_suggestions`. Otherwise 422 lists the open fields in "
+        "`open_fields`. The results before `resume_at` count as confirmed; processing continues "
+        "from there up to filing."
+    ),
+    response_model=DocumentDetails,
+    responses=problem_responses(401, 403, 404, 409, 422),
+)
+async def confirm(
+    id: UUID, body: ConfirmRequest, user: CurrentUser, context: Context
+) -> DocumentDetails:
+    changes = await _changes(body.changes, user, context)
+    document = await context.pipeline.confirm(
+        user,
+        DocumentId(id),
+        changes,
+        accept_suggestions=body.accept_suggestions,
+        resume_at=Step(body.resume_at.value),
+    )
+    return _details(document)
+
+
+@inbox.get(
+    "",
+    summary="The caller's inbox",
+    description=(
+        "The caller's yellow and red documents, newest first, each with its open steps and "
+        "fields. Confirm them with `POST /documents/{id}/confirm`, or repeat a failed step with "
+        "`retry`."
+    ),
+    response_model=InboxPage,
+    responses=problem_responses(401, 422),
+)
+async def list_inbox(
+    user: CurrentUser,
+    context: Context,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE)] = 50,
+    cursor: Annotated[str | None, Query(max_length=64, description="`next_cursor`.")] = None,
+) -> InboxPage:
+    items = await context.documents.inbox(user, before=_decode_cursor(cursor), limit=limit)
+    next_cursor = _encode_cursor(items[-1].document.id) if len(items) == limit else None
+    return InboxPage(items=[InboxItemOut.of(item) for item in items], next_cursor=next_cursor)
+
+
 def _details(document: Any) -> DocumentDetails:
     """Retry and reprocessing are the owner's: full access."""
     return DocumentDetails.of(document, ShareLevel.READ_WRITE)
+
+
+async def _changes(body: DocumentPatch, user: UserId, context: Context) -> DocumentChanges:
+    given = body.model_fields_set
+    attributes: dict[AttributeId, object] = {}
+    if body.attributes:
+        definitions = {a.id: a for a in await context.master_data.list_attributes(user)}
+        for attribute_id, value in body.attributes.items():
+            definition = definitions.get(AttributeId(attribute_id))
+            attributes[AttributeId(attribute_id)] = (
+                value if definition is None else _attribute_value(definition, value)
+            )
+    if "title" in given and body.title is None:
+        raise ValidationError("title: must not be null")
+    return DocumentChanges(
+        title=body.title if body.title is not None else UNSET,
+        contact_id=_given(given, "contact_id", body.contact_id, ContactId),
+        document_type_id=_given(given, "document_type_id", body.document_type_id, DocumentTypeId),
+        tag_ids=(
+            frozenset(TagId(tag) for tag in body.tag_ids or ()) if "tag_ids" in given else UNSET
+        ),
+        document_date=body.document_date if "document_date" in given else UNSET,
+        attributes=attributes,
+    )
 
 
 def _given[T](given: set[str], name: str, value: UUID | None, kind: type[T]) -> Any:

@@ -108,6 +108,7 @@ def create_app(context: ApiContext) -> FastAPI:
         *master_data.ROUTERS,
         drawers.router,
         documents.router,
+        documents.inbox,
         streams.router,
         health.router,
     ):
