@@ -1,0 +1,347 @@
+{
+  "description": "Search queries on the synthetic documents of the evaluation set. `expected`: the cases that answer the query; the first one found in the results counts. `kind`: exact (words of the document), number (identifiers and amounts), compound (compound words), typo, paraphrase (other words for the same thing), english (query in English, document in German), late (only in the back part of the long statement 26).",
+  "queries": [
+    {
+      "query": "Probezeit sechs Monate",
+      "kind": "exact",
+      "expected": [
+        "07-arbeitsvertrag"
+      ]
+    },
+    {
+      "query": "Heckenschnitt",
+      "kind": "exact",
+      "expected": [
+        "20-unbekannter-kontakt"
+      ]
+    },
+    {
+      "query": "Sicherungskasten",
+      "kind": "exact",
+      "expected": [
+        "03-handwerkerrechnung"
+      ]
+    },
+    {
+      "query": "Diagnose Bronchitis",
+      "kind": "exact",
+      "expected": [
+        "04-arztrechnung"
+      ]
+    },
+    {
+      "query": "Wanderschuhe Rücksendung",
+      "kind": "exact",
+      "expected": [
+        "18-gutschrift"
+      ]
+    },
+    {
+      "query": "Mahngebühr",
+      "kind": "exact",
+      "expected": [
+        "17-mahnung"
+      ]
+    },
+    {
+      "query": "Solidaritätszuschlag",
+      "kind": "exact",
+      "expected": [
+        "08-einkommensteuerbescheid"
+      ]
+    },
+    {
+      "query": "Steuerklasse",
+      "kind": "exact",
+      "expected": [
+        "15-lohnabrechnung"
+      ]
+    },
+    {
+      "query": "Wallbox",
+      "kind": "exact",
+      "expected": [
+        "22-netto-brutto"
+      ]
+    },
+    {
+      "query": "Regenjacke",
+      "kind": "exact",
+      "expected": [
+        "27-anweisungen-zusatzfelder",
+        "28-anweisungen-werte"
+      ]
+    },
+    {
+      "query": "R-2026-004711",
+      "kind": "number",
+      "expected": [
+        "01-stromrechnung"
+      ]
+    },
+    {
+      "query": "HR-2026-55501",
+      "kind": "number",
+      "expected": [
+        "13-hausratversicherung"
+      ]
+    },
+    {
+      "query": "MU-XY 123",
+      "kind": "number",
+      "expected": [
+        "09-kfz-steuerbescheid"
+      ]
+    },
+    {
+      "query": "KD-55 12 34",
+      "kind": "number",
+      "expected": [
+        "02-telefonrechnung",
+        "16-kuendigungsbestaetigung"
+      ]
+    },
+    {
+      "query": "Kundennummer 88 77 66",
+      "kind": "number",
+      "expected": [
+        "17-mahnung",
+        "18-gutschrift",
+        "23-ohne-datum",
+        "27-anweisungen-zusatzfelder",
+        "28-anweisungen-werte"
+      ]
+    },
+    {
+      "query": "Stromrechnung",
+      "kind": "compound",
+      "expected": [
+        "01-stromrechnung"
+      ]
+    },
+    {
+      "query": "Mietwohnung",
+      "kind": "compound",
+      "expected": [
+        "06-mietvertrag"
+      ]
+    },
+    {
+      "query": "Hausratsversicherung",
+      "kind": "compound",
+      "expected": [
+        "13-hausratversicherung"
+      ]
+    },
+    {
+      "query": "Einkommensteuerbescheid",
+      "kind": "compound",
+      "expected": [
+        "08-einkommensteuerbescheid"
+      ]
+    },
+    {
+      "query": "Krankenversicherungsbeitrag",
+      "kind": "compound",
+      "expected": [
+        "14-beitragsanpassung-krankenversicherung"
+      ]
+    },
+    {
+      "query": "Telefonflatrate",
+      "kind": "compound",
+      "expected": [
+        "02-telefonrechnung"
+      ]
+    },
+    {
+      "query": "Mietvertrg Wohnung",
+      "kind": "typo",
+      "expected": [
+        "06-mietvertrag"
+      ]
+    },
+    {
+      "query": "Stadtwerke Abschlagsplan Gaz",
+      "kind": "typo",
+      "expected": [
+        "21-kontakt-tippfehler"
+      ]
+    },
+    {
+      "query": "Wie hoch ist die monatliche Miete?",
+      "kind": "paraphrase",
+      "expected": [
+        "06-mietvertrag"
+      ]
+    },
+    {
+      "query": "Geld zurück vom Finanzamt",
+      "kind": "paraphrase",
+      "expected": [
+        "08-einkommensteuerbescheid"
+      ]
+    },
+    {
+      "query": "Zahnreinigung beim Zahnarzt",
+      "kind": "paraphrase",
+      "expected": [
+        "05-zahnarztrechnung"
+      ]
+    },
+    {
+      "query": "Gehaltsabrechnung",
+      "kind": "paraphrase",
+      "expected": [
+        "15-lohnabrechnung"
+      ]
+    },
+    {
+      "query": "Zahlungserinnerung offene Forderung",
+      "kind": "paraphrase",
+      "expected": [
+        "17-mahnung"
+      ]
+    },
+    {
+      "query": "Erstattung für zurückgeschickte Ware",
+      "kind": "paraphrase",
+      "expected": [
+        "18-gutschrift"
+      ]
+    },
+    {
+      "query": "Einkauf im Supermarkt",
+      "kind": "paraphrase",
+      "expected": [
+        "19-kassenbon"
+      ]
+    },
+    {
+      "query": "Rentenanspruch im Alter",
+      "kind": "paraphrase",
+      "expected": [
+        "10-renteninformation"
+      ]
+    },
+    {
+      "query": "Krankenkasse wird teurer",
+      "kind": "paraphrase",
+      "expected": [
+        "14-beitragsanpassung-krankenversicherung"
+      ]
+    },
+    {
+      "query": "Autosteuer",
+      "kind": "paraphrase",
+      "expected": [
+        "09-kfz-steuerbescheid"
+      ]
+    },
+    {
+      "query": "Versicherung für Möbel und Hausrat",
+      "kind": "paraphrase",
+      "expected": [
+        "13-hausratversicherung"
+      ]
+    },
+    {
+      "query": "Anstellung als Softwareentwicklerin",
+      "kind": "paraphrase",
+      "expected": [
+        "07-arbeitsvertrag"
+      ]
+    },
+    {
+      "query": "Ladestation für das Elektroauto",
+      "kind": "paraphrase",
+      "expected": [
+        "22-netto-brutto"
+      ]
+    },
+    {
+      "query": "Gartenpflege",
+      "kind": "paraphrase",
+      "expected": [
+        "20-unbekannter-kontakt"
+      ]
+    },
+    {
+      "query": "Werkstatt Angebot Frühjahr",
+      "kind": "paraphrase",
+      "expected": [
+        "24-werbebrief"
+      ]
+    },
+    {
+      "query": "Urlaub Hotel Bahnfahrt",
+      "kind": "paraphrase",
+      "expected": [
+        "12-kreditkartenabrechnung"
+      ]
+    },
+    {
+      "query": "Vertrag beendet Internetanschluss",
+      "kind": "paraphrase",
+      "expected": [
+        "16-kuendigungsbestaetigung"
+      ]
+    },
+    {
+      "query": "electricity bill",
+      "kind": "english",
+      "expected": [
+        "01-stromrechnung"
+      ]
+    },
+    {
+      "query": "rental agreement apartment",
+      "kind": "english",
+      "expected": [
+        "06-mietvertrag"
+      ]
+    },
+    {
+      "query": "salary slip",
+      "kind": "english",
+      "expected": [
+        "15-lohnabrechnung"
+      ]
+    },
+    {
+      "query": "tax refund",
+      "kind": "english",
+      "expected": [
+        "08-einkommensteuerbescheid"
+      ]
+    },
+    {
+      "query": "dentist invoice",
+      "kind": "english",
+      "expected": [
+        "05-zahnarztrechnung"
+      ]
+    },
+    {
+      "query": "server hosting invoice",
+      "kind": "english",
+      "expected": [
+        "25-englische-rechnung"
+      ]
+    },
+    {
+      "query": "Einwendungen innerhalb von sechs Wochen",
+      "kind": "late",
+      "expected": [
+        "26-langer-kontoauszug"
+      ]
+    },
+    {
+      "query": "Neuer Kontostand 5.432,10 EUR",
+      "kind": "late",
+      "expected": [
+        "26-langer-kontoauszug"
+      ]
+    }
+  ]
+}
