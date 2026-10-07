@@ -25,6 +25,14 @@ class ValidationError(DomainError):
     """A value or a change breaks a rule of the domain model."""
 
 
+class OpenFieldsError(ValidationError):
+    """Confirming a document needs a decision on each of its open fields."""
+
+    def __init__(self, fields: tuple[str, ...]) -> None:
+        super().__init__(f"decide the open fields first: {', '.join(fields)}")
+        self.fields = fields
+
+
 class InvalidTransitionError(DomainError):
     """The processing state does not allow the requested step or action."""
 

@@ -35,6 +35,7 @@ from papiq.core.services._access import (
     readable_document,
     visible_drawer,
 )
+from papiq.core.services.inbox import confirmation, decide, open_steps
 from papiq.core.services.objects import original_key
 
 log = logging.getLogger(__name__)
@@ -250,6 +251,44 @@ class PipelineService:
         async with self._uow() as uow:
             document = await _owned_document(uow, await load_actor(uow, actor), id)
             document.reprocess_from(step, self._clock.now())
+            await self._restart(uow, document)
+        return document
+
+    async def confirm(
+        self,
+        actor: UserId,
+        id: DocumentId,
+        changes: DocumentChanges,
+        *,
+        accept_suggestions: bool = False,
+        resume_at: Step = Step.APPLY_RULES,
+    ) -> Document:
+        """Owner only, for a document in the inbox: decide its open fields, apply `changes`
+        (as a metadata change) and let processing continue from `resume_at`, up to filing.
+
+        Each uncertain field of the steps before `resume_at` needs a decision (see
+        `inbox.decide`). The steps whose results the owner overruled get a log entry."""
+        async with self._uow() as uow:
+            user = await load_actor(uow, actor)
+            document = await _owned_document(uow, user, id)
+            log = await uow.processing_log.list_for(id)
+            outcomes = dict(document.processing.outcomes)
+            open = [
+                item
+                for item in open_steps(document, log)
+                if item.step.position < resume_at.position
+            ]
+            now = self._clock.now()
+            overruled = document.confirm(resume_at, now)
+            definitions = {item.id: item for item in await uow.attributes.list_all()}
+            decision = decide(
+                open, changes, accept_suggestions=accept_suggestions, definitions=definitions
+            )
+            await check_references(uow, decision.changes)
+            document.apply_changes(decision.changes, definitions, now)
+            for step in overruled:
+                result = confirmation(step, outcomes.get(step), decision, user.id)
+                await self._log(uow, id, step, document.processing.run, result, now, now)
             await self._restart(uow, document)
         return document
 
