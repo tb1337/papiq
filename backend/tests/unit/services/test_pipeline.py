@@ -1,10 +1,11 @@
 import asyncio
 from datetime import timedelta
+from uuid import UUID
 
 import pytest
 
 from papiq.adapters.outbound.memory import MemoryObjectStore
-from papiq.core.domain.documents import Document, Sha256
+from papiq.core.domain.documents import Document, DocumentChanges, Sha256
 from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import (
     DuplicateDocumentError,
@@ -20,7 +21,9 @@ from papiq.core.domain.events import (
     LaneChanged,
     StepCompleted,
 )
+from papiq.core.domain.ids import ContactId, TagId
 from papiq.core.domain.jobs import JobStatus
+from papiq.core.domain.master_data import Tag
 from papiq.core.domain.pipeline import (
     PIPELINE,
     Lane,
@@ -33,6 +36,7 @@ from papiq.core.domain.users import User
 from papiq.core.services.objects import original_key
 from papiq.core.services.pipeline import (
     STEP_JOB,
+    MetadataResult,
     PipelineService,
     PlaceholderStep,
     RetryPolicy,
@@ -169,9 +173,10 @@ async def test_reprocess_from_a_step(world: World) -> None:
     world.database.outbox.clear()
     pipeline = world.pipeline({Step.EXTRACT_ATTRIBUTES: Returns(UNCERTAIN)})
     await pipeline.reprocess_from(owner.id, document.id, Step.CLASSIFY)
-    assert await world.drain(pipeline) == 4
+    assert await world.drain(pipeline) == 3  # waits before filing
     stored = await world.documents.get(owner.id, document.id)
     assert stored.lane is Lane.YELLOW
+    assert stored.processing.status is ProcessingStatus.REVIEW
     assert stored.processing.run == 2
     lanes = [(e.old, e.new) for e in world.events() if isinstance(e, LaneChanged)]
     assert lanes == [(Lane.GREEN, None), (None, Lane.YELLOW)]
@@ -422,3 +427,43 @@ async def test_an_upload_stores_the_original_again_if_it_vanished(world: World) 
     owner = await world.user()
     document = await world.pipeline().receive(owner.id, incoming(b"%PDF-1.7 x"), filename="x.pdf")
     assert await world.object_store.get(original_key(document.sha256)) == b"%PDF-1.7 x"
+
+
+class Changes:
+    """Classifies with a metadata change."""
+
+    def __init__(self, changes: DocumentChanges) -> None:
+        self.changes = changes
+
+    async def run(self, document: Document) -> MetadataResult:
+        return MetadataResult(StepResult(outcome=Outcome.OK), self.changes)
+
+
+async def test_a_step_changes_metadata_with_its_result(world: World) -> None:
+    tag = Tag.create(name="Strom", now=NOW)
+    async with world.uow() as uow:
+        await uow.tags.add(tag)
+        await uow.commit()
+    changes = DocumentChanges(tag_ids=frozenset({tag.id}))
+    pipeline = world.pipeline({Step.CLASSIFY: Changes(changes)})
+    owner, document = await receive(world, pipeline)
+    await world.drain(pipeline)
+    stored = await world.documents.get(owner.id, document.id)
+    assert stored.tag_ids == frozenset({tag.id})
+    assert stored.lane is Lane.GREEN
+
+
+async def test_changes_that_no_longer_fit_make_the_step_uncertain(world: World) -> None:
+    changes = DocumentChanges(
+        contact_id=ContactId(UUID(int=1)), tag_ids=frozenset({TagId(UUID(int=2))})
+    )
+    pipeline = world.pipeline({Step.CLASSIFY: Changes(changes)})
+    owner, document = await receive(world, pipeline)
+    await world.drain(pipeline)
+    stored = await world.documents.get(owner.id, document.id)
+    assert stored.lane is Lane.YELLOW
+    assert stored.contact_id is None
+    log = await world.documents.processing_log(owner.id, document.id)
+    classified = next(entry for entry in log if entry.step is Step.CLASSIFY)
+    assert classified.result.outcome is Outcome.UNCERTAIN
+    assert (classified.result.reason or "").startswith("the master data changed during the step")

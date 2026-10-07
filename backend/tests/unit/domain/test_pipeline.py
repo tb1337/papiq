@@ -112,13 +112,110 @@ def test_steps_run_in_order_and_end_green() -> None:
     assert document.lane is Lane.GREEN
 
 
-def test_uncertain_step_continues_and_ends_yellow() -> None:
+def test_uncertain_step_continues_and_waits_yellow_before_filing() -> None:
     document = builders.run_pipeline(
         builders.document(builders.user(), builders.drawer(builders.user())),
         {Step.CLASSIFY: UNCERTAIN},
     )
+    assert document.processing.status is ProcessingStatus.REVIEW
+    assert document.processing.current_step is Step.FILE
+    assert Step.APPLY_RULES in document.processing.outcomes
+    assert Step.FILE not in document.processing.outcomes
+    assert document.lane is Lane.YELLOW
+    assert not document.is_awaiting(Step.FILE, document.processing.run)
+
+
+def test_an_uncertain_filing_step_completes_yellow() -> None:
+    document = builders.run_pipeline(
+        builders.document(builders.user(), builders.drawer(builders.user())),
+        {Step.FILE: UNCERTAIN},
+    )
     assert document.processing.status is ProcessingStatus.COMPLETED
     assert document.lane is Lane.YELLOW
+
+
+@pytest.mark.parametrize("resume_at", [Step.EXTRACT_ATTRIBUTES, Step.APPLY_RULES])
+def test_confirming_a_yellow_document_resumes_and_files_it_green(resume_at: Step) -> None:
+    document = builders.run_pipeline(
+        builders.document(builders.user(), builders.drawer(builders.user())),
+        {Step.OCR: UNCERTAIN, Step.CLASSIFY: UNCERTAIN},
+    )
+    run = document.processing.run
+    document.pull_events()
+
+    overruled = document.confirm(resume_at, NOW)
+
+    assert overruled == (Step.OCR, Step.CLASSIFY)
+    assert document.processing.run == run + 1
+    assert document.processing.status is ProcessingStatus.PROCESSING
+    assert document.processing.current_step is resume_at
+    assert set(document.processing.outcomes) == set(PIPELINE[: resume_at.position])
+    assert set(document.processing.outcomes.values()) == {Outcome.OK}
+    assert document.lane is None
+    (event,) = document.pull_events()
+    assert isinstance(event, LaneChanged)
+    assert (event.old, event.new) == (Lane.YELLOW, None)
+
+    builders.run_pipeline(document)
+    finished = document.processing
+    assert finished.status is ProcessingStatus.COMPLETED
+    assert document.lane is Lane.GREEN
+    assert any(isinstance(event, DocumentFiled) for event in document.pull_events())
+
+
+def test_confirming_a_red_document_takes_over_the_failed_steps() -> None:
+    document = builders.run_pipeline(
+        builders.document(builders.user(), builders.drawer(builders.user())),
+        {Step.OCR: FAILED},
+    )
+    assert document.confirm(Step.APPLY_RULES, NOW) == (
+        Step.OCR,
+        Step.PARSE,
+        Step.CLASSIFY,
+        Step.EXTRACT_ATTRIBUTES,
+    )
+    builders.run_pipeline(document)
+    assert document.lane is Lane.GREEN
+
+
+def test_attributes_are_only_extracted_again_from_a_parsed_text() -> None:
+    document = builders.run_pipeline(
+        builders.document(builders.user(), builders.drawer(builders.user())),
+        {Step.PARSE: FAILED},
+    )
+    with pytest.raises(InvalidTransitionError, match="no text"):
+        document.confirm(Step.EXTRACT_ATTRIBUTES, NOW)
+
+
+@pytest.mark.parametrize("resume_at", [Step.OCR, Step.CLASSIFY, Step.FILE])
+def test_confirmation_resumes_only_after_classification(resume_at: Step) -> None:
+    document = builders.run_pipeline(
+        builders.document(builders.user(), builders.drawer(builders.user())),
+        {Step.CLASSIFY: UNCERTAIN},
+    )
+    with pytest.raises(InvalidTransitionError, match="resumes with"):
+        document.confirm(resume_at, NOW)
+
+
+def test_only_documents_in_the_inbox_are_confirmed() -> None:
+    owner = builders.user()
+    processing = builders.document(owner, builders.drawer(owner))
+    green = builders.run_pipeline(builders.document(owner, builders.drawer(owner)))
+    for document in (processing, green):
+        with pytest.raises(InvalidTransitionError, match="not waiting for confirmation"):
+            document.confirm(Step.APPLY_RULES, NOW)
+
+
+def test_uncertain_results_are_not_filed_by_reprocessing() -> None:
+    document = builders.run_pipeline(
+        builders.document(builders.user(), builders.drawer(builders.user())),
+        {Step.CLASSIFY: UNCERTAIN},
+    )
+    with pytest.raises(InvalidTransitionError, match="confirm them before filing"):
+        document.reprocess_from(Step.FILE, NOW)
+    document.reprocess_from(Step.APPLY_RULES, NOW)
+    builders.run_pipeline(document)
+    assert document.processing.status is ProcessingStatus.REVIEW
 
 
 def test_failed_step_stops_processing_red() -> None:
@@ -210,9 +307,10 @@ def test_events_follow_the_state_changes() -> None:
     builders.run_pipeline(document, {Step.CLASSIFY: UNCERTAIN})
     events = document.pull_events()
     completed = [event for event in events if isinstance(event, StepCompleted)]
-    assert [event.step for event in completed] == list(PIPELINE[1:])
+    assert [event.step for event in completed] == list(PIPELINE[1:-1])
     assert completed[2].outcome is Outcome.UNCERTAIN
-    assert [type(event) for event in events[-3:]] == [StepCompleted, DocumentFiled, LaneChanged]
+    assert not any(isinstance(event, DocumentFiled) for event in events)
+    assert [type(event) for event in events[-2:]] == [StepCompleted, LaneChanged]
     lane_changed = events[-1]
     assert isinstance(lane_changed, LaneChanged)
     assert (lane_changed.old, lane_changed.new) == (None, Lane.YELLOW)

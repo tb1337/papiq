@@ -197,6 +197,12 @@ class Document:
                 DocumentFiled(document_id=self.id, occurred_at=now, drawer_id=self.drawer_id)
             )
         following = step.next
+        if following is Step.FILE and self._uncertain_before(Step.FILE):
+            # Filed only once the owner has confirmed what is uncertain.
+            processing.status = ProcessingStatus.REVIEW
+            processing.current_step = following
+            self._set_lane(Lane.YELLOW, now)
+            return None
         if following is None:
             processing.status = ProcessingStatus.COMPLETED
             processing.current_step = None
@@ -222,7 +228,11 @@ class Document:
             raise InvalidTransitionError("the receive step cannot be repeated")
         failed_at = processing.current_step
         if failed_at is not None and step.position > failed_at.position:
-            raise InvalidTransitionError(f"processing failed at {failed_at}; cannot skip it")
+            raise InvalidTransitionError(f"processing stopped at {failed_at}; cannot skip it")
+        if step is Step.FILE and self._uncertain_before(Step.FILE):
+            raise InvalidTransitionError(
+                f"document {self.id} has uncertain results; confirm them before filing"
+            )
         for later in PIPELINE[step.position :]:
             processing.outcomes.pop(later, None)
         processing.run += 1
@@ -231,6 +241,52 @@ class Document:
         self._set_lane(None, now)
         self._touch(now)
         return step
+
+    def confirm(self, resume_at: Step, now: datetime) -> tuple[Step, ...]:
+        """The owner has decided what was uncertain or failed (the inbox): the results before
+        `resume_at` count as OK from now on, processing runs again from `resume_at` (applying
+        rules, or extracting attributes after a type correction) up to filing. Returns the
+        steps whose results the owner overruled.
+
+        Only for documents in the inbox (yellow or red, not being processed). Extracting
+        attributes needs a parsed text."""
+        processing = self.processing
+        if self.lane not in (Lane.YELLOW, Lane.RED) or processing.status not in (
+            ProcessingStatus.REVIEW,
+            ProcessingStatus.FAILED,
+            ProcessingStatus.COMPLETED,
+        ):
+            raise InvalidTransitionError(f"document {self.id} is not waiting for confirmation")
+        if resume_at not in (Step.EXTRACT_ATTRIBUTES, Step.APPLY_RULES):
+            raise InvalidTransitionError(
+                f"processing resumes with {Step.EXTRACT_ATTRIBUTES} or {Step.APPLY_RULES}, "
+                f"not {resume_at}"
+            )
+        if resume_at is Step.EXTRACT_ATTRIBUTES and processing.outcomes.get(Step.PARSE) not in (
+            Outcome.OK,
+            Outcome.UNCERTAIN,
+        ):
+            raise InvalidTransitionError(f"document {self.id} has no text to extract from")
+        earlier = PIPELINE[: resume_at.position]
+        overruled = tuple(
+            step for step in earlier if processing.outcomes.get(step) is not Outcome.OK
+        )
+        for step in earlier:
+            processing.outcomes[step] = Outcome.OK
+        for later in PIPELINE[resume_at.position :]:
+            processing.outcomes.pop(later, None)
+        processing.run += 1
+        processing.status = ProcessingStatus.PROCESSING
+        processing.current_step = resume_at
+        self._set_lane(None, now)
+        self._touch(now)
+        return overruled
+
+    def _uncertain_before(self, step: Step) -> bool:
+        return any(
+            outcome is Outcome.UNCERTAIN and earlier.position < step.position
+            for earlier, outcome in self.processing.outcomes.items()
+        )
 
     # --- metadata -------------------------------------------------------------------------------
 
