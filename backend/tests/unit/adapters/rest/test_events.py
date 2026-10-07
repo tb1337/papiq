@@ -3,7 +3,7 @@ documents they may read."""
 
 import asyncio
 
-import httpx
+import httpx2
 
 from papiq.adapters.inbound.rest import PREFIX, close_event_streams
 from papiq.core.domain.drawers import ShareLevel
@@ -19,7 +19,7 @@ async def test_events_reach_only_users_who_may_read_the_document(api: Api) -> No
     shared = await api.services.drawers.create(owner.id, "Shared")
     await api.services.drawers.share(owner.id, shared.id, reader.id, ShareLevel.READ)
 
-    async with serving(api.app) as url, httpx.AsyncClient(base_url=url, timeout=10) as client:
+    async with serving(api.app) as url, httpx2.AsyncClient(base_url=url, timeout=10) as client:
         streams = {user.id: Stream() for user in (owner, reader, stranger)}
         tasks = [
             asyncio.create_task(listen(client, user, streams[user.id]))
@@ -60,7 +60,7 @@ async def test_events_reach_only_users_who_may_read_the_document(api: Api) -> No
 
 async def test_a_stream_for_one_document(api: Api) -> None:
     owner, stranger = await api.user(), await api.user()
-    async with serving(api.app) as url, httpx.AsyncClient(base_url=url, timeout=10) as client:
+    async with serving(api.app) as url, httpx2.AsyncClient(base_url=url, timeout=10) as client:
         files = {"file": ("scan.pdf", (SAMPLES / "scan.pdf").read_bytes(), "x/y")}
         first = (await client.post(f"{PREFIX}/documents", files=files, headers=auth(owner))).json()
         other = {"file": ("photo.jpg", (SAMPLES / "photo.jpg").read_bytes(), "x/y")}

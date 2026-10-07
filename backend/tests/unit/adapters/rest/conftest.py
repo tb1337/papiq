@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import timedelta
 
-import httpx
+import httpx2
 import pytest
 from fastapi import FastAPI
 
@@ -52,7 +52,7 @@ class Api:
     container: Container
     services: Services
     app: FastAPI
-    client: httpx.AsyncClient
+    client: httpx2.AsyncClient
 
     async def user(self, name: str | None = None) -> User:
         user = builders.user(name)
@@ -72,6 +72,6 @@ async def api() -> AsyncIterator[Api]:
     container = build_memory_container(ManualClock(builders.NOW))
     services = build_services(container)
     app = make_app(container, services)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://papiq") as client:
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://papiq") as client:
         yield Api(container, services, app, client)
