@@ -1,19 +1,18 @@
 """Previews of the first page with PDFium. Rendering one page takes milliseconds, so it runs in
-a thread; PDFium is not thread-safe, so one page is rendered at a time."""
+a thread, under the process-wide PDFium lock."""
 
 import asyncio
-import threading
 import uuid
 from pathlib import Path
 
 import pypdfium2
 from PIL import Image
 
+from papiq.adapters.outbound.pdfium.library import LOCK
 from papiq.core.domain.errors import UnprocessableDocumentError
 
 DEFAULT_WIDTH = 400
 _QUALITY = 80
-_PDFIUM = threading.Lock()  # one PDFium library per process
 
 
 class PdfiumPreviewRenderer:
@@ -26,7 +25,7 @@ class PdfiumPreviewRenderer:
     def _render(self, source: Path, target: Path) -> None:
         temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
         try:
-            with _PDFIUM:
+            with LOCK:
                 image = _first_page(source, self._width)
             image.save(temporary, "WEBP", quality=_QUALITY)
             temporary.replace(target)

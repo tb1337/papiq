@@ -3,6 +3,9 @@
 - scan.pdf        a scanned page: one image, no text layer
 - text.pdf        a page with a text layer (born-digital)
 - photo.jpg       a photo of a page, without DPI information
+- lowres.jpg      a photo stating 72 dpi (OCRmyPDF refuses 96 dpi or less on its own)
+- screenshot.png  text on a transparent background (RGBA)
+- pages.tiff      two scanned pages in one TIFF
 - blank.pdf       a scanned empty page: OCR finds no text
 - damaged.pdf     a PDF header followed by garbage
 - unsupported.docx  an Office file (a ZIP archive), not supported
@@ -63,6 +66,25 @@ def main() -> None:
     page(LINES).save(HERE / "scan.pdf", resolution=150)
     (HERE / "text.pdf").write_bytes(text_pdf(LINES))
     page(LINES, (1000, 1300)).convert("RGB").save(HERE / "photo.jpg", quality=80)
+    page(LINES, (900, 1200)).convert("RGB").save(HERE / "lowres.jpg", quality=80, dpi=(72, 72))
+    transparent = Image.new("RGBA", (1000, 600), (255, 255, 255, 0))
+    ImageDraw.Draw(transparent).multiline_text(
+        (60, 100),
+        "\n".join(LINES),
+        fill=(0, 0, 0, 255),
+        font=ImageFont.load_default(size=56),
+        spacing=40,
+    )
+    transparent.save(HERE / "screenshot.png", dpi=(150, 150))
+    first = page(LINES).convert("1")
+    second = page(["Seite zwei", "Papiq Testdokument"]).convert("1")
+    first.save(
+        HERE / "pages.tiff",
+        save_all=True,
+        append_images=[second],
+        dpi=(150, 150),
+        compression="group4",
+    )
     page([]).save(HERE / "blank.pdf", resolution=150)
     (HERE / "damaged.pdf").write_bytes(b"%PDF-1.7\n" + random.Random(4711).randbytes(2000))
     archive = io.BytesIO()
