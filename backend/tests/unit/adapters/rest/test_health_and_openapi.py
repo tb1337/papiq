@@ -2,6 +2,7 @@
 
 import json
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx2
@@ -53,6 +54,45 @@ async def test_a_failing_check_makes_the_api_unavailable() -> None:
         "status": "unavailable",
         "checks": {"database": "failed", "object_store": "ok"},
     }
+
+
+async def test_a_failing_search_only_degrades_the_api() -> None:
+    async def ok() -> None:
+        pass
+
+    async def broken() -> None:
+        raise OSError("connection refused")
+
+    async def health(checks: dict[str, Callable[[], Awaitable[None]]]) -> httpx2.Response:
+        container = build_memory_container()
+        services = build_services(container)
+        app = create_app(
+            ApiContext(
+                auth=services.auth,
+                users=services.users,
+                drawers=services.drawers,
+                master_data=services.master_data,
+                pipeline=services.pipeline,
+                documents=services.documents,
+                event_bus=container.event_bus,
+                health_checks=checks,
+                max_upload_size=1,
+                optional_checks=frozenset({"search"}),
+            )
+        )
+        async with httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app), base_url="http://papiq"
+        ) as client:
+            return await client.get(f"{PREFIX}/health")
+
+    degraded = await health({"database": ok, "search": broken})
+    assert degraded.status_code == 200
+    assert degraded.json() == {
+        "status": "degraded",
+        "checks": {"database": "ok", "search": "failed"},
+    }
+    down = await health({"database": broken, "search": broken})
+    assert (down.status_code, down.json()["status"]) == (503, "unavailable")
 
 
 async def openapi(api: Api) -> dict[str, Any]:

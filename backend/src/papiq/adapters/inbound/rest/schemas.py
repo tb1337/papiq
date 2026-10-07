@@ -472,7 +472,9 @@ class ConfirmRequest(BaseModel):
 
 
 class Health(BaseModel):
-    status: Literal["ok", "unavailable"]
+    status: Literal["ok", "degraded", "unavailable"] = Field(
+        description="`degraded`: only an optional check failed, the API still works (`200`)."
+    )
     checks: dict[str, Literal["ok", "failed"]] = Field(
         examples=[{"database": "ok", "object_store": "ok"}]
     )

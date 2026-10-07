@@ -285,7 +285,8 @@ meaning took part.
   a hybrid search always returns hits; there is no threshold yet. A rebuild occupies one worker
   loop for its time. On a CPU the embedding of the sections dominates the indexing cost;
   `evaluate-search` measures it for a model.
-- **Health.** `GET /health` includes `search` when it is configured.
+- **Health.** `GET /health` includes `search` when it is configured. If only the search is
+  down, the status is `degraded` and the answer stays `200`: the API works without it.
 
 **Evaluation of the embedding model.** `python -m papiq.composition evaluate-search [--fake]
 [--models a,b] [--ratios 0,0.5,1]` indexes the documents of the evaluation set with each model in
@@ -341,7 +342,7 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
 | `GET /documents/{id}/review` | What the model proposed and how each field was checked (owner) |
 | `POST /documents/{id}/confirm` | Decide the open fields (`changes` as with `PATCH`, `accept_suggestions`), then continue from `resume_at` (`apply_rules`, or `extract_attributes` after a type change) up to filing (owner); undecided fields: `422` with `open_fields` |
 | `GET /events` | Server-sent events of the documents the caller may read; `?document_id=` |
-| `GET /health` | Database, bucket or storage directory and, if configured, the search index reachable; `200` or `503`, no authentication |
+| `GET /health` | Database, bucket or storage directory and, if configured, the search index reachable; `200` (`ok`, or `degraded` if only the search is down) or `503`, no authentication |
 
 - Uploads are streamed into a temporary file and hashed on the way; the limit
   `PAPIQ_UPLOAD_MAX_SIZE` applies while receiving (`413`). The type is recognised from the
