@@ -22,6 +22,8 @@ from papiq.core.domain.pipeline import Step
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
+DRAWER_FIELD = "drawer_id"
+
 _UPLOAD_BODY: dict[str, Any] = {
     "requestBody": {
         "required": True,
@@ -36,7 +38,7 @@ _UPLOAD_BODY: dict[str, Any] = {
                             "format": "binary",
                             "description": "PDF, JPEG, PNG or TIFF; recognised by content.",
                         },
-                        "drawer_id": {
+                        DRAWER_FIELD: {
                             "type": "string",
                             "format": "uuid",
                             "description": "Target drawer; default: the owner's default drawer.",
@@ -65,9 +67,9 @@ _UPLOAD_BODY: dict[str, Any] = {
 async def upload(
     request: Request, response: Response, user: CurrentUser, context: Context
 ) -> DocumentAccepted:
-    received = await read_upload(request, max_size=context.max_upload_size)
+    received = await read_upload(request, max_size=context.max_upload_size, fields=[DRAWER_FIELD])
     try:
-        drawer = _drawer(received.fields.get("drawer_id"))
+        drawer = _drawer(received.fields.get(DRAWER_FIELD))
         document = await context.pipeline.receive(
             user, received.file, filename=received.filename, drawer=drawer
         )

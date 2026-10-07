@@ -21,7 +21,7 @@ from papiq.adapters.outbound.sql import Database, migrate
 from papiq.adapters.outbound.sql import tables as t
 from papiq.core.domain.attributes import AttributeDefinition, AttributeType, Money
 from papiq.core.domain.documents import Document, DocumentChanges
-from papiq.core.domain.errors import ConflictError
+from papiq.core.domain.errors import ConflictError, DuplicateDocumentError
 from papiq.core.domain.events import DomainEvent
 from papiq.core.domain.ids import new_id
 from papiq.core.domain.jobs import Job
@@ -166,7 +166,7 @@ class SqlAdapterSuite:
 
         results = await asyncio.gather(*(upload() for _ in range(3)), return_exceptions=True)
         assert len([r for r in results if isinstance(r, Document)]) == 1, results
-        assert all(isinstance(r, Document | ConflictError) for r in results), results
+        assert all(isinstance(r, Document | DuplicateDocumentError) for r in results), results
         async with uow_factory() as uow:
             assert len(await uow.documents.list_visible_to(owner.id)) == 1
 
