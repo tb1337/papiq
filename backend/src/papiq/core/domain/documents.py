@@ -203,7 +203,7 @@ class Document:
             processing.status = ProcessingStatus.FAILED
             self._set_lane(Lane.RED, now)
             return None
-        if step is Step.FILE:
+        if step is Step.FILE and result.outcome is Outcome.OK:
             self._record(
                 DocumentFiled(document_id=self.id, occurred_at=now, drawer_id=self.drawer_id)
             )

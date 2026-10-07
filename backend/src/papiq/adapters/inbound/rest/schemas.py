@@ -484,6 +484,13 @@ class ConfirmRequest(BaseModel):
             "new type are extracted."
         ),
     )
+    drawer_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Move the document into this drawer (one the owner may write to); decides the "
+            "rules' open field `drawer`. Default: it stays where it is."
+        ),
+    )
 
 
 class Health(BaseModel):

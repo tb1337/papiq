@@ -80,6 +80,7 @@ from papiq.core.services.master_data import MasterDataService
 from papiq.core.services.oidc import OidcService
 from papiq.core.services.pipeline import PipelineService, PlaceholderStep, RetryPolicy, StepExecutor
 from papiq.core.services.rules import RuleService
+from papiq.core.services.rules.steps import ApplyRulesStep, FileStep
 from papiq.core.services.search import SearchPolicy, SearchService
 from papiq.core.services.steps import OcrStep, ParseStep
 from papiq.core.services.users import UserService
@@ -423,8 +424,7 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
     """The use cases; tuning (retries, time limits, cleanup) from `settings`, or the defaults.
 
     OCR, parsing, classification and attribute extraction run on the container's adapters
-    (without a language model, classification is uncertain). Rules and filing are
-    placeholders until M7.
+    (without a language model, classification is uncertain), then the rules and filing.
     """
     settings = settings or Settings.model_construct()
     uow, clock, store = container.unit_of_work, container.clock, container.object_store
@@ -436,6 +436,10 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
     model = container.language_model
     executors[Step.CLASSIFY] = ClassifyStep(uow, store, model, clock, policy)
     executors[Step.EXTRACT_ATTRIBUTES] = ExtractAttributesStep(uow, store, model, clock, policy)
+    executors[Step.APPLY_RULES] = ApplyRulesStep(
+        uow, store, container.patterns, max_text=settings.rules_max_text
+    )
+    executors[Step.FILE] = FileStep()
     auth = AuthService(
         uow,
         clock,

@@ -6,7 +6,7 @@ the classify and extract steps). These functions read it from there; the rules (
 `field_checks` for the proposals of the latest model run.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any
@@ -31,6 +31,18 @@ from papiq.core.domain.pipeline import PIPELINE, Outcome, Step, StepResult, Step
 
 PERSON = "person"
 """`model_version` of a log entry in which the owner confirmed a step's results."""
+RULES = "rules"
+"""`model_version` of the log entry of the pipeline step `apply_rules`."""
+RULES_CHANGE = "rules:change"
+"""`model_version` of the `apply_rules` log entry of a metadata change by a person (with the
+rules it set off)."""
+RULES_APPLY = "rules:apply"
+"""`model_version` of the `apply_rules` log entry of a rule applied to an existing document on
+request."""
+OUTSIDE_PIPELINE = frozenset({RULES_CHANGE, RULES_APPLY})
+"""Log entries written outside processing; they say nothing about a step's state."""
+ALWAYS_SET = frozenset({"drawer", "title", "review"})
+"""Open fields of the rules that always have a value: confirming keeps it."""
 
 MODEL_STEPS = (Step.CLASSIFY, Step.EXTRACT_ATTRIBUTES)
 
@@ -85,9 +97,12 @@ class Decision:
 
 
 def latest_entries(log: Sequence[StepRun], *, by_model: bool = False) -> dict[Step, StepRun]:
-    """The latest log entry of each step; with `by_model`, leaving out confirmations."""
+    """The latest log entry of each step written by processing; with `by_model`, leaving out
+    confirmations too."""
     latest: dict[Step, StepRun] = {}
     for entry in log:
+        if entry.result.model_version in OUTSIDE_PIPELINE:
+            continue
         if by_model and entry.result.model_version == PERSON:
             continue
         latest[entry.step] = entry
@@ -150,11 +165,14 @@ def decide(
     *,
     accept_suggestions: bool,
     definitions: Mapping[AttributeId, AttributeDefinition],
+    given: Collection[str] = (),
 ) -> Decision:
-    """Every open field needs a decision: a value (or None) in `changes`, a value the document
-    has (its owner set it meanwhile; it is kept), or, with `accept_suggestions`, a suggestion
-    that can be taken as it is. Suggestions never replace a value. OpenFieldsError lists the
-    fields without a decision. Fields of attributes that no longer exist need none."""
+    """Every open field needs a decision: a value (or None) in `changes` (or named in `given`,
+    such as the drawer), a value the document has (its owner set it meanwhile; it is kept), or,
+    with `accept_suggestions`, a suggestion that can be taken as it is. Suggestions never
+    replace a value. OpenFieldsError lists the fields without a decision. Fields of attributes
+    that no longer exist need none. The rules' drawer, title and review always have a value:
+    confirming keeps them."""
     accepted: dict[Step, list[str]] = {}
     entered: dict[Step, list[str]] = {}
     kept: dict[Step, list[str]] = {}
@@ -166,7 +184,7 @@ def decide(
             attribute = _attribute_id(check.field)
             if attribute is not None and attribute not in definitions:
                 continue
-            if _given(changes, check.field, attribute):
+            if check.field in given or _given(changes, check.field, attribute):
                 entered.setdefault(item.step, []).append(check.field)
             elif _has_value(document, check.field, attribute):
                 kept.setdefault(item.step, []).append(check.field)
@@ -213,6 +231,7 @@ _CHANGE_FIELDS = {
     DOCUMENT_TYPE: "document_type_id",
     TAGS: "tag_ids",
     DOCUMENT_DATE: "document_date",
+    "title": "title",
 }
 
 
@@ -241,6 +260,8 @@ def _given(changes: DocumentChanges, field: str, attribute: AttributeId | None) 
 
 
 def _has_value(document: Document, field: str, attribute: AttributeId | None) -> bool:
+    if field in ALWAYS_SET:
+        return True
     if attribute is not None:
         return attribute in document.attributes
     name = _CHANGE_FIELDS.get(field)

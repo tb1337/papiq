@@ -384,12 +384,14 @@ async def review(id: UUID, user: CurrentUser, context: Context) -> ReviewOut:
     summary="Confirm a document from the inbox",
     description=(
         "Owner only, for yellow and red documents that are not being processed. Every open "
-        "field of the steps before `resume_at` needs a decision: a value or null in `changes`, "
-        "a value the document already has (it is kept), or its suggestion with "
-        "`accept_suggestions`. Otherwise 422 lists the open fields in `open_fields`. The "
-        "results before `resume_at` count as confirmed; processing continues from there up to "
-        "filing. From `extract_attributes` on, the extracted attributes replace the ones the "
-        "document has."
+        "field of the steps before `resume_at` (and of `apply_rules` when processing resumes "
+        "with it) needs a decision: a value or null in `changes`, a value the document already "
+        "has (it is kept), or its suggestion with `accept_suggestions`. Otherwise 422 lists the "
+        "open fields in `open_fields`. The rules' fields `drawer`, `title` and `review` always "
+        "have a value: confirming keeps it, `drawer_id` moves the document. The results before "
+        "`resume_at` count as confirmed; processing continues from there up to filing, and the "
+        "rules leave what the owner decided or changed as it is. From `extract_attributes` on, "
+        "the extracted attributes replace the ones the document has."
     ),
     response_model=DocumentDetails,
     responses=problem_responses(401, 403, 404, 409, 422),
@@ -404,6 +406,7 @@ async def confirm(
         changes,
         accept_suggestions=body.accept_suggestions,
         resume_at=Step(body.resume_at.value),
+        drawer=None if body.drawer_id is None else DrawerId(body.drawer_id),
     )
     return _details(document)
 

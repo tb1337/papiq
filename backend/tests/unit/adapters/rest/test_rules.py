@@ -2,6 +2,7 @@
 
 from papiq.adapters.inbound.rest import PREFIX
 from tests.api import auth
+from tests.contracts.processing import SAMPLES
 from tests.unit.adapters.rest.conftest import Api
 from tests.unit.adapters.rest.test_resources import post
 
@@ -78,3 +79,74 @@ async def test_deleting_a_contact_disables_the_rules_that_use_it(api: Api) -> No
         f"{PREFIX}/rules/{rule['id']}", json={"enabled": True}, headers=auth(owner)
     )
     assert response.status_code == 404
+
+
+async def upload(api: Api, headers: dict[str, str]) -> str:
+    files = {"file": ("Bill 2026.pdf", (SAMPLES / "scan.pdf").read_bytes(), "x/y")}
+    response = await api.client.post(f"{PREFIX}/documents", files=files, headers=headers)
+    assert response.status_code == 202, response.text
+    await api.drain()
+    return str(response.json()["id"])
+
+
+async def test_rules_act_on_arrival_and_conflicts_wait_in_the_inbox(api: Api) -> None:
+    admin, owner = await api.admin(), await api.user()
+    a, o = auth(admin), auth(owner)
+    tax = await post(api, "/tags", {"name": "tax"}, a)
+    drawer = await post(api, "/drawers", {"name": "Household"}, o)
+    other = await post(api, "/drawers", {"name": "Office"}, o)
+    api_channel = {"all": [{"field": "channel", "op": "is", "value": "api"}]}
+    await post(
+        api,
+        "/rules",
+        {
+            "name": "Tag",
+            "conditions": api_channel,
+            "actions": [
+                {"type": "add_tags", "tag_ids": [tax["id"]]},
+                {"type": "set_title", "template": "Scan {filename}"},
+                {"type": "set_drawer", "drawer_id": drawer["id"]},
+            ],
+        },
+        o,
+    )
+    id = await upload(api, o)
+    document = (await api.client.get(f"{PREFIX}/documents/{id}", headers=o)).json()
+    assert document["lane"] == "green", document
+    assert document["tag_ids"] == [tax["id"]]
+    assert document["title"] == "Scan Bill 2026"
+    assert document["drawer_id"] == drawer["id"]
+    assert document["channel"] == "api"
+
+    await post(
+        api,
+        "/rules",
+        {
+            "name": "Office",
+            "conditions": api_channel,
+            "actions": [{"type": "set_drawer", "drawer_id": other["id"]}],
+        },
+        o,
+    )
+    id = await upload_other(api, o)
+    document = (await api.client.get(f"{PREFIX}/documents/{id}", headers=o)).json()
+    assert document["lane"] == "yellow", document
+    review = (await api.client.get(f"{PREFIX}/documents/{id}/review", headers=o)).json()
+    fields = [field["field"] for step in review["open"] for field in step["fields"]]
+    assert fields == ["drawer"]
+    response = await api.client.post(
+        f"{PREFIX}/documents/{id}/confirm", json={"drawer_id": other["id"]}, headers=o
+    )
+    assert response.status_code == 202, response.text
+    await api.drain()
+    document = (await api.client.get(f"{PREFIX}/documents/{id}", headers=o)).json()
+    assert document["lane"] == "green", document
+    assert document["drawer_id"] == other["id"]
+
+
+async def upload_other(api: Api, headers: dict[str, str]) -> str:
+    files = {"file": ("Other.png", (SAMPLES / "screenshot.png").read_bytes(), "x/y")}
+    response = await api.client.post(f"{PREFIX}/documents", files=files, headers=headers)
+    assert response.status_code == 202, response.text
+    await api.drain()
+    return str(response.json()["id"])
