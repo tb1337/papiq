@@ -34,11 +34,11 @@ adapter must pass.
   `EventBus` delivers committed events at least once. The identity repositories (credentials,
   sessions, API tokens, external identities, failed sign-ins) are part of the unit of work too.
   Further ports: `ObjectStore`, `Clock`, `Ocr`, `DocumentParser`, `PreviewRenderer`,
-  `PasswordHasher`, `SecretCipher`, `Totp`, `OidcProvider`; LLM, embeddings and search are designed in their
-  milestones.
-- `core/services`: use cases (users, drawers, master data, documents, pipeline, maintenance).
-  Each runs in one unit of work and checks the caller's rights. Classification, attributes,
-  rules and filing are placeholders until M5 and M7.
+  `PasswordHasher`, `SecretCipher`, `Totp`, `OidcProvider`, `LanguageModel`, `Embeddings`;
+  search is designed in its milestone.
+- `core/services`: use cases (users, drawers, master data, documents, pipeline, inbox,
+  classification, maintenance). Each runs in one unit of work and checks the caller's rights.
+  Rules and filing are placeholders until M7.
 
 `papiq.composition.container.build_memory_container()` wires all designed ports to their
 in-memory adapters (fakes for OCR, parser and previews); `build_services()` creates the use
@@ -149,12 +149,15 @@ small objects; files of any size go through `upload`/`download`, which work on l
 
 ## Processing
 
-Receive → OCR → parse run as jobs (`pipeline.step`); the steps after parsing are placeholders.
+Receive → OCR → parse → classify → extract attributes → apply rules → file run as jobs
+(`pipeline.step`); applying rules and filing are placeholders until M7.
 
 | Step | Input | Derivatives (object store) | Outcome |
 | --- | --- | --- | --- |
 | OCR (`OcrStep`) | `originals/<sha256>` | `documents/<id>/archive.pdf` (PDF/A with text layer), `documents/<id>/preview.webp` (first page, 400 px wide) | uncertain if the archive is not PDF/A |
 | Parse (`ParseStep`) | the archive PDF | `documents/<id>/content.md`, `documents/<id>/content.json` (Docling) | failed if no text was recognised |
+| Classify (`ClassifyStep`) | `content.md`, master data | contact, document type, tags, document date (applied if checked) | see below |
+| Extract attributes (`ExtractAttributesStep`) | `content.md`, the attributes of the type | attribute values (applied if checked) | see below |
 
 - A step that raises is retried (`PAPIQ_STEP_MAX_ATTEMPTS`, delay `PAPIQ_STEP_RETRY_DELAY`,
   doubling); after the last attempt the document goes red. A damaged or encrypted file
@@ -185,9 +188,58 @@ Receive → OCR → parse run as jobs (`pipeline.step`); the steps after parsing
   upload of the same file lock the original's key (`UnitOfWork.lock`: a Postgres advisory lock,
   on SQLite the write lock); under that lock the upload stores the original again if it is
   gone, so no document is left without its original.
+- A document with an uncertain step stops before filing with status `review` (yellow) and waits
+  in its owner's inbox; `document.filed` comes only when it is green. Confirming it (see the
+  inbox below) lets processing continue up to filing.
 - Known gap: an original is stored before its document is created; if creating fails (e.g.
   the drawer's rights changed meanwhile), the object stays without a document. Removing such
   objects is left to a later cleanup of the object store.
+
+## Classification
+
+Two requests per document to an OpenAI-compatible chat completions endpoint
+(`adapters/outbound/openai_compat`, `PAPIQ_LLM_*`): one for contact, document type, tags and
+document date, one for the attributes of the document type. The answer must follow a JSON schema
+(`response_format` `json_schema`, or `json_object` for providers without schema support); an
+answer that does not fit is asked for once more, then the step fails (red). Without a
+configured model both steps end uncertain (yellow): the owner fills in the fields.
+
+The model only chooses and proposes; the core checks every field against facts, and only what
+passes is applied (the same way as a change by the owner):
+
+| Field | Check | Not passed |
+| --- | --- | --- |
+| Contact | Contacts are not sent; the proposed name is matched against all contacts (legal forms and punctuation ignored). Accepted if similar enough (`PAPIQ_CONFIDENCE_THRESHOLD`), named in the text and not ambiguous | an existing contact is suggested from `PAPIQ_CONTACT_SUGGEST_THRESHOLD` on, otherwise a new contact (only an admin can create it) |
+| Document type | One of the existing types | new type suggested |
+| Tags | Only existing tags are applied; proposed new tags are only logged | - |
+| Document date, date attributes | A valid date that appears in the text (`31.03.2026`, `31.3.26`, `2026-03-31`, `31. März 2026`, `March 31, 2026`, ...) | |
+| Amounts, numbers | The number appears in the text (German or English notation); the currency is shown as code, sign or word | |
+| Text, link, choice, yes/no | The value, or the quoted passage, appears in the text | |
+| Attributes of the type | A missing value makes the document yellow (global attributes may be missing) | |
+
+The quoted passage must appear in the text as well. Every check and the raw answer are in the
+processing log (`fields`, `answer`), so the proposal stays traceable after a correction; the
+rules (M7) read them with `core.services.inbox.field_checks`.
+
+The document text is sent between markers derived from its hash, and the model is told to treat
+it as data. It can only answer with the fixed schema: there is no field for drawers, owners,
+shares or actions, and additional fields make the answer unfit. Long documents are shortened to
+`PAPIQ_LLM_INPUT_BUDGET` characters (beginning and end kept, the middle left out); with many
+tags, at most `PAPIQ_LLM_MAX_TAGS` are listed, those named in the text first.
+
+**Privacy.** The shortened document text and the names of document types, tags and attributes
+go to the endpoint in `PAPIQ_LLM_BASE_URL`; the file, contacts and users do not. Every log entry
+of the two steps names the endpoint host and the model. At start, a warning names every
+configured model endpoint outside the local network (not loopback, private, link-local or a
+local name), because document content leaves the system there.
+
+**Ollama.** `PAPIQ_LLM_BASE_URL=http://<host>:11434/v1` (with `/v1`). Ollama does not take a
+context size over this API and cuts longer prompts silently (often at 4,096 tokens); start it
+with `OLLAMA_CONTEXT_LENGTH=8192` or more. Local models on a CPU are slow:
+`PAPIQ_LLM_TIMEOUT` is per request, and the job lease allows twice that (one repeated request).
+
+**Evaluation.** `python -m papiq.composition evaluate [--fake]` runs the synthetic documents in
+`evaluation/` through both steps and writes a report; see [evaluation/README.md](evaluation/README.md).
 
 ## REST API
 
@@ -232,6 +284,9 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
 | `GET /documents/{id}/log` | Processing log (owner) |
 | `POST /documents/{id}/retry` | Repeat the failed step (owner) |
 | `POST /documents/{id}/reprocess` | `{"from_step": "ocr"}`: process again from a step (owner) |
+| `GET /inbox` | The caller's yellow and red documents, newest first, with their open steps and fields; `limit`, `cursor` |
+| `GET /documents/{id}/review` | What the model proposed and how each field was checked (owner) |
+| `POST /documents/{id}/confirm` | Decide the open fields (`changes` as with `PATCH`, `accept_suggestions`), then continue from `resume_at` (`apply_rules`, or `extract_attributes` after a type change) up to filing (owner); undecided fields: `422` with `open_fields` |
 | `GET /events` | Server-sent events of the documents the caller may read; `?document_id=` |
 | `GET /health` | Database reachable, bucket or storage directory usable; `200` or `503`, no authentication |
 
@@ -351,8 +406,17 @@ Durations are seconds (`30`, `1.5`) or ISO 8601 (`PT1H`, `P7D`) and must be posi
 | `PAPIQ_MEILISEARCH_API_KEY` | unset | *secret* |
 | `PAPIQ_LLM_BASE_URL`, `_MODEL` | unset | OpenAI-compatible endpoint; set both or neither |
 | `PAPIQ_LLM_API_KEY` | unset | *secret* |
+| `PAPIQ_LLM_TEMPERATURE` | `0` | 0 to 2; 0 for repeatable answers |
+| `PAPIQ_LLM_SEED` | unset | Passed to the endpoint, if set |
+| `PAPIQ_LLM_TIMEOUT` | `300` | Seconds per request |
+| `PAPIQ_LLM_RESPONSE_FORMAT` | `json_schema` | `json_object` for providers without JSON schema support |
+| `PAPIQ_LLM_INPUT_BUDGET` | `12000` | Characters of document text per request |
+| `PAPIQ_LLM_MAX_TAGS` | `200` | Tags listed per request |
+| `PAPIQ_CONFIDENCE_THRESHOLD` | `0.9` | A field passes from this confidence on |
+| `PAPIQ_CONTACT_SUGGEST_THRESHOLD` | `0.75` | An existing contact is suggested from this similarity on; not above the confidence threshold |
 | `PAPIQ_EMBEDDING_BASE_URL`, `_MODEL` | unset | OpenAI-compatible endpoint; set both or neither |
 | `PAPIQ_EMBEDDING_API_KEY` | unset | *secret* |
+| `PAPIQ_EMBEDDING_TIMEOUT` | `60` | Seconds per request |
 
 ## Tests
 
