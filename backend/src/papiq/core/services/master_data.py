@@ -8,9 +8,11 @@ from papiq.core.domain.errors import ConflictError, PermissionDeniedError
 from papiq.core.domain.ids import AttributeId, ContactId, DocumentTypeId, TagId, UserId
 from papiq.core.domain.master_data import Contact, DocumentType, MasterData, Tag
 from papiq.core.domain.permissions import can_manage_master_data
+from papiq.core.domain.rules import References
 from papiq.core.ports import Clock, NamedRepository, UnitOfWork, UnitOfWorkFactory
 from papiq.core.services._access import load_actor
 from papiq.core.services.indexing import REFRESH_JOB
+from papiq.core.services.rules.references import disable_rules, misfits, refers_to
 
 type Repo[E] = Callable[[UnitOfWork], NamedRepository[Any, E]]
 
@@ -123,6 +125,15 @@ class MasterDataService:
                 ):
                     raise ConflictError("documents outside the new scope have values")
             await uow.attributes.update(definition)
+            if choices is not None:
+                attributes = {item.id: item for item in await uow.attributes.list_all()}
+                attributes[definition.id] = definition
+                await disable_rules(
+                    uow,
+                    self._now(),
+                    f"attribute '{definition.name}' no longer allows a value the rule uses",
+                    misfits(definition.id, attributes),
+                )
             await uow.commit()
         return definition
 
@@ -160,7 +171,13 @@ class MasterDataService:
     # --- deleting (admins; only what no document uses) -------------------------------------------
 
     async def delete_contact(self, actor: UserId, id: ContactId) -> None:
-        await self._delete(actor, _contacts, id, lambda uow: uow.documents.exists(contact=id))
+        await self._delete(
+            actor,
+            _contacts,
+            id,
+            lambda uow: uow.documents.exists(contact=id),
+            ("contact", lambda refs: refs.contacts),
+        )
 
     async def delete_document_type(self, actor: UserId, id: DocumentTypeId) -> None:
         async def used(uow: UnitOfWork) -> bool:
@@ -171,13 +188,27 @@ class MasterDataService:
                 for attribute in await uow.attributes.list_all()
             )
 
-        await self._delete(actor, _document_types, id, used)
+        await self._delete(
+            actor, _document_types, id, used, ("document type", lambda refs: refs.document_types)
+        )
 
     async def delete_tag(self, actor: UserId, id: TagId) -> None:
-        await self._delete(actor, _tags, id, lambda uow: uow.documents.exists(tag=id))
+        await self._delete(
+            actor,
+            _tags,
+            id,
+            lambda uow: uow.documents.exists(tag=id),
+            ("tag", lambda refs: refs.tags),
+        )
 
     async def delete_attribute(self, actor: UserId, id: AttributeId) -> None:
-        await self._delete(actor, _attributes, id, lambda uow: uow.documents.exists(attribute=id))
+        await self._delete(
+            actor,
+            _attributes,
+            id,
+            lambda uow: uow.documents.exists(attribute=id),
+            ("attribute", lambda refs: refs.attributes),
+        )
 
     async def _list[E: MasterData](self, actor: UserId, repository: Repo[E]) -> list[E]:
         async with self._uow() as uow:
@@ -196,13 +227,19 @@ class MasterDataService:
         repository: Repo[E],
         id: Any,
         used: Callable[[UnitOfWork], Awaitable[bool]],
+        referenced: tuple[str, Callable[[References], frozenset[Any]]],
     ) -> None:
+        """Only what no document uses; rules that refer to it are disabled."""
+        kind, select = referenced
         async with self._uow() as uow:
             await _require_admin(uow, actor)
             item = await repository(uow).get(id)
             if await used(uow):
                 raise ConflictError(f"'{item.name}' is in use")
             await repository(uow).remove(id)
+            await disable_rules(
+                uow, self._now(), f"{kind} '{item.name}' was deleted", refers_to(select, id)
+            )
             await uow.commit()
 
     def _now(self) -> datetime:

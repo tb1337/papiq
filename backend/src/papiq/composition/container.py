@@ -39,6 +39,7 @@ from papiq.adapters.outbound.ocrmypdf import OcrmypdfEngine
 from papiq.adapters.outbound.oidc import AuthlibOidcProvider
 from papiq.adapters.outbound.openai_compat import OpenAiCompatEmbeddings, OpenAiCompatLanguageModel
 from papiq.adapters.outbound.pdfium import PdfiumPreviewRenderer
+from papiq.adapters.outbound.regex import RegexPatternMatcher
 from papiq.adapters.outbound.s3 import S3ObjectStore
 from papiq.adapters.outbound.sql import SqlEventBus, SqlUnitOfWorkFactory
 from papiq.adapters.outbound.system import SystemClock
@@ -58,6 +59,7 @@ from papiq.core.ports import (
     Ocr,
     OidcProvider,
     PasswordHasher,
+    PatternMatcher,
     PreviewRenderer,
     SearchIndex,
     SecretCipher,
@@ -77,6 +79,7 @@ from papiq.core.services.maintenance import MaintenanceService
 from papiq.core.services.master_data import MasterDataService
 from papiq.core.services.oidc import OidcService
 from papiq.core.services.pipeline import PipelineService, PlaceholderStep, RetryPolicy, StepExecutor
+from papiq.core.services.rules import RuleService
 from papiq.core.services.search import SearchPolicy, SearchService
 from papiq.core.services.steps import OcrStep, ParseStep
 from papiq.core.services.users import UserService
@@ -268,6 +271,7 @@ class Container:
     password_hasher: PasswordHasher
     cipher: SecretCipher
     totp: Totp
+    patterns: PatternMatcher
     oidc: OidcProvider | None
     search_index: SearchIndex | None
     language_model: LanguageModel | None
@@ -311,6 +315,7 @@ def build_container(settings: Settings) -> Container:
         password_hasher=Argon2PasswordHasher(),
         cipher=secret_cipher(settings),
         totp=PyotpTotp(),
+        patterns=RegexPatternMatcher(settings.rules_pattern_timeout.total_seconds()),
         oidc=(
             _select("oidc", "authlib", OIDC_PROVIDERS, settings) if settings.oidc_enabled else None
         ),
@@ -329,6 +334,10 @@ def build_container(settings: Settings) -> Container:
     )
 
 
+# Seconds; as `PAPIQ_RULES_PATTERN_TIMEOUT` by default.
+DEFAULT_PATTERN_TIMEOUT = 0.2
+
+
 def build_memory_container(clock: Clock | None = None) -> Container:
     """All ports on in-memory adapters, for tests and local experiments. Nothing persists."""
     database = MemoryDatabase()
@@ -343,6 +352,7 @@ def build_memory_container(clock: Clock | None = None) -> Container:
         password_hasher=FakePasswordHasher(),
         cipher=FakeCipher(),
         totp=FakeTotp(),
+        patterns=RegexPatternMatcher(DEFAULT_PATTERN_TIMEOUT),
         oidc=None,
         search_index=MemorySearchIndex(),
         language_model=None,
@@ -359,6 +369,7 @@ class Services:
     users: UserService
     drawers: DrawerService
     master_data: MasterDataService
+    rules: RuleService
     documents: DocumentService
     pipeline: PipelineService
     maintenance: MaintenanceService
@@ -453,6 +464,7 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
         users=UserService(uow, clock, container.password_hasher),
         drawers=DrawerService(uow, clock),
         master_data=MasterDataService(uow, clock, index_renames=index is not None),
+        rules=RuleService(uow, clock),
         documents=DocumentService(uow, clock, store),
         pipeline=PipelineService(
             uow,
