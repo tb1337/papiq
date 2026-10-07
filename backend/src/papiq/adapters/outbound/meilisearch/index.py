@@ -169,6 +169,12 @@ class MeilisearchIndex:
         await self._prepare(self._build_index)
         return _MeilisearchBuild(self)
 
+    async def drop(self) -> None:
+        """Delete the index and the remains of a rebuild; for throwaway indexes."""
+        await self._delete_index(self._index)
+        await self._delete_index(self._build_index)
+        self._ready_until = 0.0
+
     async def check(self) -> None:
         response = await self._send("GET", "/health")
         if response.status_code != 200 or _json(response).get("status") != "available":
