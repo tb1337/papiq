@@ -144,9 +144,16 @@ class Settings(BaseSettings):
     parse_timeout: Seconds = timedelta(minutes=10)
     docling_models_path: Path = Path("/opt/docling-models")
 
-    # Search (required from M6 on).
+    # Search: Meilisearch holds the index of full text and vectors.
     meilisearch_url: AnyHttpUrl | None = None
     meilisearch_api_key: SecretStr | None = None
+    # The active index; a rebuild fills `<name>-rebuild` and swaps it in.
+    meilisearch_index: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,100}$")] = "papiq-documents"
+    meilisearch_timeout: Seconds = timedelta(seconds=30)
+    # How long a write waits for its task (indexing a batch of documents).
+    meilisearch_task_timeout: Seconds = timedelta(minutes=2)
+    # Languages of the documents (ISO 639-3 codes joined by `+`), for tokenising.
+    search_locales: Annotated[str, Field(pattern=r"^[a-z]{3}(\+[a-z]{3})*$")] = "deu+eng"
 
     # Language model and embeddings: OpenAI-compatible endpoints (Ollama, cloud).
     # The base URL includes the version path, e.g. `http://ollama:11434/v1`.
@@ -166,6 +173,8 @@ class Settings(BaseSettings):
     embedding_model: str | None = None
     embedding_api_key: SecretStr | None = None
     embedding_timeout: Seconds = timedelta(minutes=1)
+    # Length of the vectors (`bge-m3`: 1024); the search index needs it to be set up.
+    embedding_dimensions: Annotated[int, Field(ge=1, le=65535)] | None = None
 
     # Classification: a field is accepted (ok) from this confidence on; an existing contact is
     # suggested from the second.
@@ -239,6 +248,16 @@ class Settings(BaseSettings):
             url, model = f"{prefix}_base_url", f"{prefix}_model"
             if (getattr(self, url) is None) != (getattr(self, model) is None):
                 problems.append(f"{_env(url)} and {_env(model)} must be set together")
+        if (
+            self.meilisearch_url is not None
+            and self.embedding_base_url is not None
+            and self.embedding_dimensions is None
+        ):
+            problems.append(
+                f"{_env('embedding_dimensions')} is required with {_env('meilisearch_url')} and "
+                f"{_env('embedding_base_url')}: the search index is set up for vectors of that "
+                "length (`bge-m3`: 1024)"
+            )
         if self.contact_suggest_threshold > self.confidence_threshold:
             problems.append(
                 f"{_env('contact_suggest_threshold')} must not be above "
