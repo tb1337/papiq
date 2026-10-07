@@ -6,6 +6,7 @@ import signal
 from papiq.adapters.inbound.worker import Worker
 from papiq.composition.container import build_container, build_services
 from papiq.composition.settings import Settings
+from papiq.core.services.indexing import SUBSCRIBER
 
 
 async def run_worker(settings: Settings) -> None:
@@ -14,6 +15,8 @@ async def run_worker(settings: Settings) -> None:
     container = build_container(settings)
     try:
         services = build_services(container, settings)
+        if services.indexing is not None:
+            container.event_bus.subscribe(SUBSCRIBER, services.indexing.on_event)
         worker = Worker(
             pipeline=services.pipeline,
             maintenance=services.maintenance,
@@ -22,6 +25,7 @@ async def run_worker(settings: Settings) -> None:
             poll_interval=settings.worker_poll_interval,
             dispatch_interval=settings.events_poll_interval,
             shutdown_timeout=settings.worker_shutdown_timeout,
+            indexing=services.indexing,
         )
         loop = asyncio.get_running_loop()
         for signum in (signal.SIGTERM, signal.SIGINT):

@@ -22,15 +22,20 @@ router = APIRouter(tags=["health"])
     "/health",
     summary="Health of the API",
     response_model=Health,
-    responses={503: {"model": Health, "description": "A store is not reachable"}},
+    responses={
+        503: {"model": Health, "description": "The database or the object store is not reachable"}
+    },
 )
 async def health(context: Context) -> JSONResponse:
     names = list(context.health_checks)
     results = await asyncio.gather(*(_run(name, context.health_checks[name]) for name in names))
     checks = dict(zip(names, results, strict=True))
-    healthy = all(result == "ok" for result in results)
-    body = Health(status="ok" if healthy else "unavailable", checks=checks)
-    return JSONResponse(body.model_dump(), status_code=200 if healthy else 503)
+    failed = {name for name, result in checks.items() if result == "failed"}
+    status: Literal["ok", "degraded", "unavailable"] = "ok"
+    if failed:
+        status = "degraded" if failed <= context.optional_checks else "unavailable"
+    body = Health(status=status, checks=checks)
+    return JSONResponse(body.model_dump(), status_code=503 if status == "unavailable" else 200)
 
 
 async def _run(name: str, check: HealthCheck) -> Literal["ok", "failed"]:

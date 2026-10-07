@@ -4,7 +4,6 @@ and worker, in two set-ups: SQLite with the filesystem, Postgres with S3 (Garage
 Marker `docling` (slow)."""
 
 import asyncio
-import secrets
 import shutil
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
@@ -18,10 +17,9 @@ import pytest
 from papiq.adapters.inbound.rest import PREFIX
 from papiq.adapters.inbound.worker import Worker
 from papiq.adapters.outbound.docling import DoclingParser
-from papiq.adapters.outbound.filesystem import FilesystemObjectStore
 from papiq.adapters.outbound.ocrmypdf import OcrmypdfEngine
 from papiq.adapters.outbound.pdfium import PdfiumPreviewRenderer
-from papiq.adapters.outbound.sql import Database, SqlEventBus, SqlUnitOfWorkFactory, migrate
+from papiq.adapters.outbound.sql import Database, SqlEventBus, SqlUnitOfWorkFactory
 from papiq.composition.api import build_app
 from papiq.composition.container import (
     Container,
@@ -34,11 +32,9 @@ from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.users import User
 from papiq.core.ports import ObjectStore, OcrResult
 from papiq.core.services.objects import archive_key, markdown_key, preview_key, structure_key
-from tests import builders, probes
+from tests import builders
 from tests.api import Stream, auth, issue_token, listen, serving, until
 from tests.contracts.processing import SAMPLES
-from tests.integration.adapters.sql.conftest import create_database, drop_database, postgres
-from tests.integration.conftest import s3_test_store
 
 pytestmark = pytest.mark.docling
 
@@ -94,40 +90,6 @@ class System:
             while (status := await self.status(user, id))["lane"] is None:
                 await asyncio.sleep(0.2)
         return status
-
-
-@pytest.fixture(params=["sqlite+filesystem", "postgres+s3"])
-async def stores(
-    request: pytest.FixtureRequest, tmp_path: Path
-) -> AsyncIterator[tuple[Database, ObjectStore]]:
-    if request.param == "sqlite+filesystem":
-        database = Database.sqlite(tmp_path / "papiq.db")
-        await migrate(database)
-        yield database, FilesystemObjectStore(tmp_path / "objects")
-        await database.dispose()
-        return
-    settings: Settings = request.getfixturevalue("settings")
-    if settings.db_type != "postgres" or settings.db_host is None:
-        pytest.skip("PAPIQ_DB_TYPE is not postgres")
-    if not probes.postgres_answers(settings.db_host, settings.db_port):
-        pytest.skip(f"Postgres not reachable at {settings.db_host}:{settings.db_port}")
-    s3: Settings = request.getfixturevalue("s3_settings")
-    assert settings.db_name
-    name = f"{settings.db_name}_test_{secrets.token_hex(4)}"
-    await create_database(settings, name)
-    database = postgres(settings, name)
-    try:
-        await migrate(database)
-        async with s3_test_store(s3) as store:
-            yield database, store
-    finally:
-        await database.dispose()
-        await drop_database(settings, name)
-
-
-@pytest.fixture
-def object_store(stores: tuple[Database, ObjectStore]) -> ObjectStore:
-    return stores[1]
 
 
 @pytest.fixture

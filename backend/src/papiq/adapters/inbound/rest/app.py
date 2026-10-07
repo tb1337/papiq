@@ -17,6 +17,7 @@ from papiq.adapters.inbound.rest import (
     health,
     master_data,
     problems,
+    search,
     streams,
     users,
 )
@@ -107,6 +108,7 @@ def create_app(context: ApiContext) -> FastAPI:
         users.router,
         *master_data.ROUTERS,
         drawers.router,
+        search.router,  # before documents: `/documents/search` is no document id
         documents.router,
         documents.inbox,
         streams.router,

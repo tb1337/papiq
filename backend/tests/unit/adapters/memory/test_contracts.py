@@ -1,10 +1,12 @@
 """The in-memory adapters pass every contract suite."""
 
+import math
 from collections.abc import Sequence
 
 import pytest
 
 from papiq.adapters.outbound.memory import (
+    BagOfWordsEmbeddings,
     FakeCipher,
     FakeEmbeddings,
     FakeLanguageModel,
@@ -18,6 +20,7 @@ from papiq.adapters.outbound.memory import (
     MemoryDatabase,
     MemoryEventBus,
     MemoryObjectStore,
+    MemorySearchIndex,
     MemoryUnitOfWorkFactory,
 )
 from papiq.core.domain.errors import EmbeddingsError, LanguageModelError
@@ -45,6 +48,7 @@ from tests.contracts.job_queue import JobQueueContract
 from tests.contracts.language_model import EmbeddingsContract, LanguageModelContract
 from tests.contracts.object_store import ObjectStoreContract
 from tests.contracts.processing import OcrContract, ParserContract, PreviewRendererContract
+from tests.contracts.search_index import DIMENSIONS, SearchIndexContract
 from tests.contracts.unit_of_work import UnitOfWorkContract
 
 
@@ -210,4 +214,37 @@ def failing_embeddings() -> FakeEmbeddings:
 
 
 class TestFakeEmbeddings(EmbeddingsContract):
+    pass
+
+
+def dot(left: Sequence[float], right: Sequence[float]) -> float:
+    return sum(a * b for a, b in zip(left, right, strict=True))
+
+
+class TestBagOfWordsEmbeddings(EmbeddingsContract):
+    @pytest.fixture
+    def embeddings(self) -> BagOfWordsEmbeddings:
+        return BagOfWordsEmbeddings()
+
+    async def test_texts_with_words_in_common_are_closer(self) -> None:
+        model = BagOfWordsEmbeddings()
+        result = await model.embed(
+            ["Rechnung für Strom", "Stromrechnung März", "Mietvertrag Wohnung"]
+        )
+        bill, compound, lease = result.vectors
+        assert math.isclose(sum(value * value for value in bill), 1.0)
+        assert dot(bill, compound) > dot(bill, lease)
+        assert dot(compound, bill) > 0.2  # the letters "rech", "chn", ... are shared
+
+    async def test_a_text_without_words_still_has_a_vector(self) -> None:
+        (vector,) = (await BagOfWordsEmbeddings().embed(["--"])).vectors
+        assert math.isclose(sum(value * value for value in vector), 1.0)
+
+
+@pytest.fixture
+def search_index() -> MemorySearchIndex:
+    return MemorySearchIndex(dimensions=DIMENSIONS)
+
+
+class TestMemorySearchIndex(SearchIndexContract):
     pass

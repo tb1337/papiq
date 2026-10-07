@@ -34,7 +34,13 @@ from papiq.core.ports.repository import (
     TagRepository,
     UserRepository,
 )
-from papiq.core.ports.search_index import SearchIndex
+from papiq.core.ports.search_index import (
+    IndexBuild,
+    SearchHit,
+    SearchIndex,
+    SearchQuery,
+    SearchResult,
+)
 from papiq.core.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
 
 __all__ = [
@@ -55,6 +61,7 @@ __all__ = [
     "EventBus",
     "EventHandler",
     "ExternalIdentityRepository",
+    "IndexBuild",
     "JobQueue",
     "LanguageModel",
     "LoginFailureRepository",
@@ -69,7 +76,10 @@ __all__ = [
     "PreviewRenderer",
     "ProcessingLog",
     "Repository",
+    "SearchHit",
     "SearchIndex",
+    "SearchQuery",
+    "SearchResult",
     "SecretCipher",
     "SessionRepository",
     "StructuredAnswer",

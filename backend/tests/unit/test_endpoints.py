@@ -46,3 +46,12 @@ def test_external_endpoints() -> None:
     settings = Settings(**values)
     assert external_endpoints(settings) == {"PAPIQ_EMBEDDING_BASE_URL": "api.example.com"}
     assert external_endpoints(Settings()) == {}
+
+
+def test_search_index_content_leaves_the_network() -> None:
+    external: dict[str, Any] = {"meilisearch_url": "https://search.example.com"}
+    assert external_endpoints(Settings(**external)) == {
+        "PAPIQ_MEILISEARCH_URL": "search.example.com"
+    }
+    local: dict[str, Any] = {"meilisearch_url": "http://meilisearch:7700"}
+    assert external_endpoints(Settings(**local)) == {}

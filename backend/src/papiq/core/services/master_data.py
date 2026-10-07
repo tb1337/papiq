@@ -10,6 +10,7 @@ from papiq.core.domain.master_data import Contact, DocumentType, MasterData, Tag
 from papiq.core.domain.permissions import can_manage_master_data
 from papiq.core.ports import Clock, NamedRepository, UnitOfWork, UnitOfWorkFactory
 from papiq.core.services._access import load_actor
+from papiq.core.services.indexing import REFRESH_JOB
 
 type Repo[E] = Callable[[UnitOfWork], NamedRepository[Any, E]]
 
@@ -33,15 +34,20 @@ def _attributes(uow: UnitOfWork) -> NamedRepository[AttributeId, AttributeDefini
 class MasterDataService:
     """Contacts, document types, tags and attribute definitions. Changes are admin-only."""
 
-    def __init__(self, uow: UnitOfWorkFactory, clock: Clock) -> None:
+    def __init__(
+        self, uow: UnitOfWorkFactory, clock: Clock, *, index_renames: bool = False
+    ) -> None:
+        """`index_renames`: renaming a contact, type or tag queues a job that brings the search
+        index of the documents that carry it up to date (set when there is a search index)."""
         self._uow = uow
         self._clock = clock
+        self._index_renames = index_renames
 
     async def create_contact(self, actor: UserId, name: str) -> Contact:
         return await self._create(actor, _contacts, Contact.create(name=name, now=self._now()))
 
     async def rename_contact(self, actor: UserId, id: ContactId, name: str) -> Contact:
-        return await self._rename(actor, _contacts, id, name)
+        return await self._rename(actor, _contacts, id, name, index_as="contact")
 
     async def create_document_type(self, actor: UserId, name: str) -> DocumentType:
         item = DocumentType.create(name=name, now=self._now())
@@ -50,13 +56,13 @@ class MasterDataService:
     async def rename_document_type(
         self, actor: UserId, id: DocumentTypeId, name: str
     ) -> DocumentType:
-        return await self._rename(actor, _document_types, id, name)
+        return await self._rename(actor, _document_types, id, name, index_as="document_type")
 
     async def create_tag(self, actor: UserId, name: str) -> Tag:
         return await self._create(actor, _tags, Tag.create(name=name, now=self._now()))
 
     async def rename_tag(self, actor: UserId, id: TagId, name: str) -> Tag:
-        return await self._rename(actor, _tags, id, name)
+        return await self._rename(actor, _tags, id, name, index_as="tag")
 
     async def create_attribute(
         self,
@@ -219,7 +225,13 @@ class MasterDataService:
         return item
 
     async def _rename[E: MasterData](
-        self, actor: UserId, repository: Repo[E], id: Any, name: str
+        self,
+        actor: UserId,
+        repository: Repo[E],
+        id: Any,
+        name: str,
+        *,
+        index_as: str | None = None,
     ) -> E:
         async with self._uow() as uow:
             await _require_admin(uow, actor)
@@ -227,6 +239,10 @@ class MasterDataService:
             item.rename(name)
             await _check_name_free(repository(uow), item)
             await repository(uow).update(item)
+            if index_as is not None and self._index_renames:
+                await uow.jobs.enqueue(
+                    REFRESH_JOB, {"kind": index_as, "id": str(id)}, run_at=self._clock.now()
+                )
             await uow.commit()
         return item
 

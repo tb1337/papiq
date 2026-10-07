@@ -8,6 +8,7 @@ import pytest
 from papiq.adapters.outbound.crypto import Argon2PasswordHasher, PyotpTotp
 from papiq.adapters.outbound.docling import DoclingParser
 from papiq.adapters.outbound.filesystem import FilesystemObjectStore
+from papiq.adapters.outbound.meilisearch import MeilisearchIndex
 from papiq.adapters.outbound.memory import ManualClock
 from papiq.adapters.outbound.ocrmypdf import OcrmypdfEngine
 from papiq.adapters.outbound.oidc import AuthlibOidcProvider
@@ -177,6 +178,9 @@ def test_optional_ports_are_only_selected_when_configured(
     assert isinstance(built.totp, PyotpTotp)
     assert built.oidc is None
 
+    monkeypatch.setitem(container.SEARCH_INDEXES, "meilisearch", lambda _: object())
+    assert build_container(settings(meilisearch_url="http://meilisearch:7700")).search_index
+    monkeypatch.delitem(container.SEARCH_INDEXES, "meilisearch")
     with pytest.raises(AdapterNotAvailableError, match="search_index: adapter 'meilisearch'"):
         build_container(settings(meilisearch_url="http://meilisearch:7700"))
 
@@ -211,6 +215,98 @@ def test_language_model_and_embeddings_from_settings(monkeypatch: pytest.MonkeyP
     assert isinstance(embeddings, OpenAiCompatEmbeddings)
     assert embeddings.model == "bge-m3"
     assert (embeddings._headers, embeddings._timeout) == ({}, 20)
+
+
+async def test_search_index_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(container.PERSISTENCE, "sqlite", fake_persistence)
+    for table, name in ((container.OCR_ENGINES, "ocrmypdf"), (container.PARSERS, "docling")):
+        monkeypatch.setitem(table, name, lambda _: object())
+
+    built = build_container(
+        settings(
+            meilisearch_url="http://meilisearch:7700",
+            meilisearch_api_key="key",
+            meilisearch_index="papiq-test",
+            meilisearch_timeout=timedelta(seconds=7),
+            meilisearch_task_timeout=timedelta(seconds=9),
+            search_locales="deu",
+            embedding_base_url="http://ollama:11434/v1",
+            embedding_model="bge-m3",
+            embedding_dimensions=1024,
+        )
+    )
+    index = built.search_index
+    assert isinstance(index, MeilisearchIndex)
+    assert (index._index, index._dimensions, index._locales) == ("papiq-test", 1024, ["deu"])
+    assert index._task_timeout == 9
+    assert index._client.headers["Authorization"] == "Bearer key"
+    assert index._client.timeout.read == 7
+    assert index.aclose in built.closers
+
+    # Without a model there are no vectors, whatever the length says.
+    plain = build_container(
+        settings(meilisearch_url="http://meilisearch:7700", embedding_dimensions=1024)
+    )
+    assert isinstance(plain.search_index, MeilisearchIndex)
+    assert plain.search_index._dimensions is None
+    await built.aclose()
+    await plain.aclose()
+
+
+async def test_search_services_follow_the_search_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(container.PERSISTENCE, "sqlite", fake_persistence)
+    for table, name in ((container.OCR_ENGINES, "ocrmypdf"), (container.PARSERS, "docling")):
+        monkeypatch.setitem(table, name, lambda _: object())
+
+    without = build_container(settings())
+    assert without.search_index is None
+    services = build_services(without)
+    assert (services.indexing, services.search) == (None, None)
+    assert services.master_data._index_renames is False
+
+    with_index = build_container(
+        settings(
+            meilisearch_url="http://meilisearch:7700",
+            embedding_base_url="http://ollama:11434/v1",
+            embedding_model="bge-m3",
+            embedding_dimensions=1024,
+            search_semantic_ratio=0.7,
+            search_embed_timeout=timedelta(seconds=3),
+            search_max_text=5000,
+            search_chunk_size=500,
+            search_max_chunks=4,
+            search_reconcile_interval=timedelta(hours=2),
+            search_rebuild_timeout=timedelta(hours=9),
+            embedding_query_prefix="query:",
+            embedding_document_prefix="passage:",
+        )
+    )
+    services = build_services(with_index, settings(search_semantic_ratio=0.7))
+    assert services.indexing is not None and services.search is not None
+    assert services.master_data._index_renames is True
+    await without.aclose()
+    await with_index.aclose()
+
+
+def test_the_services_are_tuned_by_the_settings() -> None:
+    values = settings(
+        search_max_text=5000,
+        search_chunk_size=500,
+        search_max_chunks=4,
+        search_reconcile_interval=timedelta(hours=2),
+        search_rebuild_timeout=timedelta(hours=9),
+        embedding_document_prefix="passage:",
+        embedding_timeout=timedelta(minutes=1),
+        meilisearch_task_timeout=timedelta(minutes=2),
+    )
+    policy = container.indexing_policy_of(values)
+    assert (policy.max_text, policy.chunk_size, policy.max_chunks) == (5000, 500, 4)
+    assert policy.document_prefix == "passage: "
+    assert policy.reconcile_interval == timedelta(hours=2)
+    assert policy.rebuild_lease == timedelta(hours=9)
+    # Three rounds of embedding and writing, and a margin.
+    assert policy.job_lease == 3 * timedelta(minutes=3) + container.LEASE_MARGIN
+    assert container.indexing_policy_of(settings()).document_prefix == ""
 
 
 async def test_memory_container_runs_the_core() -> None:

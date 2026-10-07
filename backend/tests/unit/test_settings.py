@@ -512,3 +512,128 @@ def test_the_development_key_is_refused_with_secure_cookies(
     assert "development key" in error_message(monkeypatch, {"PAPIQ_SECRET_KEY": urlsafe})
     set_env(monkeypatch, {"PAPIQ_COOKIE_SECURE": "false"})
     assert load_settings().secret_key is not None  # fine for development
+
+
+def test_search_defaults() -> None:
+    settings = load_settings()
+    assert settings.meilisearch_index == "papiq-documents"
+    assert settings.meilisearch_timeout == timedelta(seconds=30)
+    assert settings.meilisearch_task_timeout == timedelta(minutes=2)
+    assert settings.search_locales == "deu+eng"
+    assert settings.embedding_dimensions is None
+    assert settings.search_semantic_ratio == 0.5
+    assert settings.search_embed_timeout == timedelta(seconds=5)
+    assert (settings.search_max_text, settings.search_chunk_size, settings.search_max_chunks) == (
+        200_000,
+        1500,
+        8,
+    )
+    assert settings.search_reconcile_interval == timedelta(hours=6)
+    assert settings.search_rebuild_timeout == timedelta(hours=6)
+    assert settings.embedding_query_prefix is None
+    assert settings.embedding_document_prefix is None
+
+
+def test_indexing_and_query_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_env(
+        monkeypatch,
+        {
+            "PAPIQ_SEARCH_SEMANTIC_RATIO": "0.8",
+            "PAPIQ_SEARCH_EMBED_TIMEOUT": "2",
+            "PAPIQ_SEARCH_MAX_TEXT": "50000",
+            "PAPIQ_SEARCH_CHUNK_SIZE": "800",
+            "PAPIQ_SEARCH_MAX_CHUNKS": "4",
+            "PAPIQ_SEARCH_RECONCILE_INTERVAL": "PT1H",
+            "PAPIQ_SEARCH_REBUILD_TIMEOUT": "PT12H",
+            "PAPIQ_EMBEDDING_QUERY_PREFIX": "query:",
+            "PAPIQ_EMBEDDING_DOCUMENT_PREFIX": "passage:",
+        },
+    )
+    settings = load_settings()
+    assert settings.search_semantic_ratio == 0.8
+    assert settings.search_embed_timeout == timedelta(seconds=2)
+    assert (settings.search_max_text, settings.search_chunk_size, settings.search_max_chunks) == (
+        50_000,
+        800,
+        4,
+    )
+    assert settings.search_reconcile_interval == timedelta(hours=1)
+    assert settings.search_rebuild_timeout == timedelta(hours=12)
+    assert (settings.embedding_query_prefix, settings.embedding_document_prefix) == (
+        "query:",
+        "passage:",
+    )
+
+
+def test_search_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_env(
+        monkeypatch,
+        {
+            "PAPIQ_MEILISEARCH_URL": "http://meilisearch:7700",
+            "PAPIQ_MEILISEARCH_INDEX": "papiq-test",
+            "PAPIQ_MEILISEARCH_TIMEOUT": "5",
+            "PAPIQ_MEILISEARCH_TASK_TIMEOUT": "PT10M",
+            "PAPIQ_SEARCH_LOCALES": "deu",
+            "PAPIQ_EMBEDDING_BASE_URL": "http://ollama:11434/v1",
+            "PAPIQ_EMBEDDING_MODEL": "bge-m3",
+            "PAPIQ_EMBEDDING_DIMENSIONS": "1024",
+        },
+    )
+    settings = load_settings()
+    assert settings.meilisearch_index == "papiq-test"
+    assert settings.meilisearch_timeout == timedelta(seconds=5)
+    assert settings.meilisearch_task_timeout == timedelta(minutes=10)
+    assert settings.search_locales == "deu"
+    assert settings.embedding_dimensions == 1024
+
+
+def test_the_search_index_needs_the_vector_length_with_embeddings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    embeddings = {
+        "PAPIQ_EMBEDDING_BASE_URL": "http://ollama:11434/v1",
+        "PAPIQ_EMBEDDING_MODEL": "bge-m3",
+    }
+    message = error_message(
+        monkeypatch, {**embeddings, "PAPIQ_MEILISEARCH_URL": "http://meilisearch:7700"}
+    )
+    assert "PAPIQ_EMBEDDING_DIMENSIONS is required with PAPIQ_MEILISEARCH_URL" in message
+
+
+def test_either_embeddings_or_search_alone_needs_no_vector_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_env(
+        monkeypatch,
+        {"PAPIQ_EMBEDDING_BASE_URL": "http://ollama:11434/v1", "PAPIQ_EMBEDDING_MODEL": "bge-m3"},
+    )
+    assert load_settings().embedding_dimensions is None
+    monkeypatch.delenv("PAPIQ_EMBEDDING_BASE_URL")
+    monkeypatch.delenv("PAPIQ_EMBEDDING_MODEL")
+    set_env(monkeypatch, {"PAPIQ_MEILISEARCH_URL": "http://meilisearch:7700"})
+    assert load_settings().embedding_dimensions is None
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("PAPIQ_MEILISEARCH_INDEX", "with space"),
+        ("PAPIQ_MEILISEARCH_INDEX", ""),
+        ("PAPIQ_SEARCH_LOCALES", "de"),
+        ("PAPIQ_SEARCH_LOCALES", "deu+"),
+        ("PAPIQ_EMBEDDING_DIMENSIONS", "0"),
+        ("PAPIQ_SEARCH_SEMANTIC_RATIO", "1.5"),
+        ("PAPIQ_SEARCH_SEMANTIC_RATIO", "-0.1"),
+        ("PAPIQ_SEARCH_CHUNK_SIZE", "10"),
+        ("PAPIQ_SEARCH_MAX_CHUNKS", "0"),
+        ("PAPIQ_SEARCH_MAX_TEXT", "10"),
+        ("PAPIQ_SEARCH_EMBED_TIMEOUT", "0"),
+    ],
+)
+def test_invalid_search_settings(monkeypatch: pytest.MonkeyPatch, name: str, value: str) -> None:
+    set_env(monkeypatch, {name: value})
+    if value == "":
+        assert load_settings().meilisearch_index == "papiq-documents"  # blank means unset
+        return
+    with pytest.raises(ConfigurationError, match=name):
+        load_settings()
