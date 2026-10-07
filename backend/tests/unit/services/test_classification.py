@@ -233,24 +233,36 @@ async def test_a_contact_absent_from_the_text_is_only_suggested(world: World) ->
     )
     contact = checks(result.result)["contact"]
     assert contact.outcome is Outcome.UNCERTAIN
-    assert contact.reason == "'AOK Bayern' does not appear in the text"
+    assert contact.reason == "the contact 'AOK Bayern' does not appear in the text"
     assert contact.suggestion == str(seeded.contacts["AOK Bayern"].id)
     assert contact.confidence == 0.5
 
 
 async def test_a_similar_contact_is_suggested(world: World) -> None:
     seeded = await seed(world)
-    text = INVOICE.replace("Stadtwerke Musterstadt GmbH", "Stadtwerk Musterstadt Netz")
     result = await classify(
-        world,
-        classification(contact={"value": "Stadtwerk Musterstadt Netz", "evidence": None}),
-        text,
+        world, classification(contact={"value": "Stadtwerk Musterstadt Netz", "evidence": None})
     )
     contact = checks(result.result)["contact"]
     assert contact.outcome is Outcome.UNCERTAIN
     assert contact.suggestion == str(seeded.contacts["Stadtwerke Musterstadt GmbH"].id)
     assert "is similar to the contact 'Stadtwerke Musterstadt GmbH'" in (contact.reason or "")
     assert 0.75 <= contact.confidence < 0.9
+
+
+async def test_the_contact_itself_must_be_named(world: World) -> None:
+    """A typo in the text matches the contact closely, but the contact is not named."""
+    seeded = await seed(world)
+    text = INVOICE.replace("Stadtwerke Musterstadt GmbH", "Stadtwerke Musterstad GmbH")
+    result = await classify(
+        world,
+        classification(contact={"value": "Stadtwerke Musterstad GmbH", "evidence": None}),
+        text,
+    )
+    contact = checks(result.result)["contact"]
+    assert contact.outcome is Outcome.UNCERTAIN
+    assert contact.suggestion == str(seeded.contacts["Stadtwerke Musterstadt GmbH"].id)
+    assert contact.confidence == 0.5
 
 
 async def test_ambiguous_contacts_are_uncertain(world: World) -> None:
