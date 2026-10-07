@@ -9,14 +9,15 @@ Finishing a job checks the claim in the same statement (`status = 'running'` and
 count of the claim): only the current claim can complete, reschedule or fail it.
 
 Deduplication uses a unique index on `dedup_key` over queued and running jobs only;
-`INSERT ... ON CONFLICT DO NOTHING` adds nothing while such a job exists.
+`INSERT ... ON CONFLICT DO NOTHING` adds nothing while such a job exists. The index predicate
+in ON CONFLICT is literal SQL (see `_ACTIVE`).
 """
 
 from collections.abc import Collection, Mapping
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Row, and_, delete, insert, or_, select, update
+from sqlalchemy import Row, and_, delete, insert, or_, select, text, update
 from sqlalchemy.dialects import postgresql, sqlite
 
 from papiq.adapters.outbound.sql import tables as t
@@ -28,6 +29,11 @@ from papiq.core.domain.json_value import JsonValue
 from papiq.core.domain.validation import require_utc
 
 _jobs = t.jobs
+
+# The predicate of the partial dedup index, as literal SQL: Postgres matches the index of
+# ON CONFLICT against it, which fails for bind parameters once a prepared statement is
+# planned generically (from its sixth run on).
+_ACTIVE = text("status IN (" + ", ".join(f"'{status}'" for status in t.ACTIVE_JOB_STATUSES) + ")")
 
 
 class SqlJobQueue:
@@ -61,7 +67,7 @@ class SqlJobQueue:
             .values(values)
             .on_conflict_do_nothing(
                 index_elements=[_jobs.c.dedup_key],
-                index_where=_jobs.c.status.in_(t.ACTIVE_JOB_STATUSES),
+                index_where=_ACTIVE,
             )
             .returning(_jobs.c.id)
         )
