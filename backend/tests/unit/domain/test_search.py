@@ -66,3 +66,9 @@ def test_vectors_need_a_stamp_and_one_length() -> None:
         builders.index_document(vectors=((1.0,), (1.0, 2.0)), embedding=stamp)
     with pytest.raises(ValueError, match="one length"):
         builders.index_document(vectors=((),), embedding=stamp)
+
+
+def test_kept_vectors_keep_their_stamp() -> None:
+    assert builders.index_document(vectors=None).vectors is None
+    with pytest.raises(ValueError, match="keep their stamp"):
+        builders.index_document(vectors=None, embedding=EmbeddingStamp("m", "d"))

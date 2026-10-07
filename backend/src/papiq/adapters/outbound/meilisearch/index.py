@@ -1,6 +1,7 @@
 """The search index on Meilisearch, over its REST API with httpx2 (no SDK).
 
-- Documents are written with `POST /documents` (replacing the whole document). Meilisearch
+- Documents are written with `PUT /documents` (an update that sets every field it names; the
+  vectors are only named when the document brings new ones). Meilisearch
   processes writes as tasks; every write here waits for its task, so a change is searchable when
   the call returns and a failed task raises `SearchIndexError` instead of getting lost.
 - Settings (searchable, filterable and sortable attributes, languages, the embedder) are applied
@@ -177,14 +178,15 @@ class MeilisearchIndex:
     async def _write(self, index: str, documents: Sequence[IndexDocument]) -> None:
         if self._dimensions is not None:
             for document in documents:
-                for vector in document.vectors:
+                for vector in document.vectors or ():
                     if len(vector) != self._dimensions:
                         raise SearchIndexError(
                             f"document {document.id}: vector of length {len(vector)}, "
                             f"the index needs {self._dimensions}"
                         )
         body = [self._payload(document) for document in documents]
-        task = await self._request("POST", f"/indexes/{index}/documents", json=body)
+        # An update: fields that are left out stay as they are (the vectors of `vectors=None`).
+        task = await self._request("PUT", f"/indexes/{index}/documents", json=body)
         await self._wait(task)
 
     async def _swap_in_build(self) -> None:
@@ -272,12 +274,13 @@ class MeilisearchIndex:
             if document.document_date is None
             else int(datetime.combine(document.document_date, time(), UTC).timestamp()),
             "created_at": int(document.created_at.timestamp()),
-            "embedding_model": None if document.embedding is None else document.embedding.model,
-            "embedding_digest": None if document.embedding is None else document.embedding.digest,
         }
-        if self._dimensions is not None:
-            vectors = [list(vector) for vector in document.vectors]
-            payload["_vectors"] = {EMBEDDER: vectors or None}
+        if document.vectors is not None:
+            payload["embedding_model"] = _stamp(document, "model")
+            payload["embedding_digest"] = _stamp(document, "digest")
+            if self._dimensions is not None:
+                vectors = [list(vector) for vector in document.vectors]
+                payload["_vectors"] = {EMBEDDER: vectors or None}
         return payload
 
     # --- HTTP -----------------------------------------------------------------------------------
@@ -380,6 +383,10 @@ def _normalised(key: str, setting: Any) -> Any:
 
 def _quote(value: object) -> str:
     return json.dumps(str(value))
+
+
+def _stamp(document: IndexDocument, part: str) -> str | None:
+    return None if document.embedding is None else str(getattr(document.embedding, part))
 
 
 def _text(value: object) -> str | None:

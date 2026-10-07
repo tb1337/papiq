@@ -69,6 +69,39 @@ class SearchIndexContract:
         assert state is not None
         assert state.version == 2
 
+    async def test_vectors_can_be_kept_when_the_document_changes(
+        self, search_index: SearchIndex
+    ) -> None:
+        owner = UserId(new_id())
+        document = index_document(
+            owner_id=owner, title="Eins", vectors=((0.0, 1.0, 0.0),), embedding=STAMP, version=1
+        )
+        await search_index.upsert([document])
+        await search_index.upsert(
+            [index_document(id=document.id, owner_id=owner, title="Zwei", vectors=None, version=2)]
+        )
+        state = await search_index.state(document.id)
+        assert state is not None
+        assert (state.version, state.embedding) == (2, STAMP)
+        assert await found(search_index, "Zwei", visibility(owner)) == {document.id}
+        by_meaning = await search_index.search(
+            query("zzz", visibility(owner), vector=(0.0, 1.0, 0.0), semantic_ratio=1.0)
+        )
+        assert by_meaning.hits[0].id == document.id
+
+    async def test_vectors_can_be_dropped(self, search_index: SearchIndex) -> None:
+        owner = UserId(new_id())
+        document = index_document(
+            owner_id=owner, title="Eins", vectors=((0.0, 1.0, 0.0),), embedding=STAMP
+        )
+        await search_index.upsert([document])
+        await search_index.upsert(
+            [index_document(id=document.id, owner_id=owner, title="Eins", vectors=())]
+        )
+        state = await search_index.state(document.id)
+        assert state is not None
+        assert state.embedding is None
+
     async def test_upsert_without_documents_does_nothing(self, search_index: SearchIndex) -> None:
         await search_index.upsert([])
         assert [state async for state in search_index.states()] == []
