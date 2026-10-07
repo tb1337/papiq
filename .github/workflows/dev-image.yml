@@ -44,3 +44,4 @@ jobs:
           push: false
           cache-from: type=gha,scope=dev-image
           cache-to: type=gha,scope=dev-image,mode=max
+          secrets: hf_token=${{ secrets.HF_TOKEN }}
