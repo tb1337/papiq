@@ -379,12 +379,24 @@ class LoginFailures:
             return None
         return self.blocked_until - now
 
-    def record(self, rule: ThrottleRule, now: datetime) -> None:
+    def reserve(self, rule: ThrottleRule, now: datetime) -> timedelta | None:
+        """Count an attempt before it is checked, and block as if it fails: so attempts that
+        arrive together cannot all pass. If blocked, count nothing and return how long."""
+        wait = self.retry_after(now)
+        if wait is not None:
+            return wait
         if now - self.first_failure_at >= rule.window:
             self.failures, self.first_failure_at = 0, now
         self.failures += 1
         block = rule.block(self.failures)
         self.blocked_until = None if block is None else now + block
+        return None
+
+    def release(self, rule: ThrottleRule) -> None:
+        """Take back a reserved attempt that did not fail."""
+        self.failures = max(0, self.failures - 1)
+        if rule.block(self.failures) is None:
+            self.blocked_until = None
 
 
 def failure_id(key: str) -> uuid.UUID:

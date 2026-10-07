@@ -8,7 +8,7 @@ forward and does not count as a change: it neither checks nor increments the ver
 concurrent requests never conflict on it. `remove` of something missing is a no-op.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from papiq.core.domain.identity import (
@@ -18,6 +18,7 @@ from papiq.core.domain.identity import (
     LoginFailures,
     OidcIdentity,
     Session,
+    ThrottleRule,
 )
 from papiq.core.domain.ids import ApiTokenId, ExternalIdentityId, SessionId, UserId
 
@@ -86,11 +87,22 @@ class ExternalIdentityRepository(Protocol):
 
 
 class LoginFailureRepository(Protocol):
+    """Counts of failed sign-ins. Attempts are counted atomically before they are checked
+    (`reserve`) and taken back if they did not fail (`release`), so attempts that arrive at
+    the same time cannot pass a throttle together."""
+
     async def find(self, key: str) -> LoginFailures | None: ...
 
-    async def add(self, failures: LoginFailures) -> None: ...
+    async def reserve(self, key: str, rule: ThrottleRule, now: datetime) -> timedelta | None:
+        """Atomically: if `key` is blocked at `now`, count nothing and return how long it
+        stays blocked. Otherwise count one attempt (a new window if the last one has passed),
+        set the block `rule` gives for the new count as if the attempt fails, return None."""
+        ...
 
-    async def update(self, failures: LoginFailures) -> None: ...
+    async def release(self, key: str, rule: ThrottleRule) -> None:
+        """Take back one attempt counted by `reserve` (it did not fail); lift the block if
+        `rule` gives none for the remaining count."""
+        ...
 
     async def remove(self, key: str) -> None: ...
 
