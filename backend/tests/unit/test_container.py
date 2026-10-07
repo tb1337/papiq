@@ -28,7 +28,7 @@ from papiq.core.domain.users import Role
 from papiq.core.services.pipeline import RetryPolicy
 from papiq.core.services.steps import OcrStep, ParseStep
 from tests import builders
-from tests.builders import NOW
+from tests.builders import NOW, incoming
 from tests.contracts.processing import SAMPLES
 
 
@@ -194,7 +194,7 @@ async def test_memory_container_runs_the_core() -> None:
 
     built.event_bus.subscribe("test", record)
     document = await services.pipeline.receive(
-        user.id, (SAMPLES / "scan.pdf").read_bytes(), filename="a.pdf", media_type="application/pdf"
+        user.id, incoming((SAMPLES / "scan.pdf").read_bytes()), filename="a.pdf"
     )
     while await services.pipeline.run_next_job():
         pass

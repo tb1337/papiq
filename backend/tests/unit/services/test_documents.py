@@ -11,10 +11,10 @@ from papiq.core.domain.errors import (
     ValidationError,
 )
 from papiq.core.domain.events import DocumentDeleted, DocumentFiled, DocumentUpdated
-from papiq.core.domain.ids import ContactId, DocumentId, DrawerId, TagId, new_id
+from papiq.core.domain.ids import ContactId, DocumentId, DrawerId, TagId, UserId, new_id
 from papiq.core.domain.pipeline import Lane, Step
 from papiq.core.domain.users import Role, User
-from tests.builders import UNCERTAIN
+from tests.builders import UNCERTAIN, incoming
 from tests.unit.services.conftest import Returns, World
 
 
@@ -41,9 +41,8 @@ async def scene(world: World) -> Scene:
     )
     received = await world.pipeline().receive(
         scene.owner.id,
-        b"%PDF electricity",
+        incoming(b"%PDF-1.7 electricity"),
         filename="electricity.pdf",
-        media_type="application/pdf",
         drawer=scene.shared.id,
     )
     await world.drain()
@@ -193,3 +192,15 @@ async def test_processing_log_is_readable_with_the_document(world: World, scene:
     assert [entry.step for entry in entries] == list(Step)
     with pytest.raises(NotFoundError):
         await world.documents.processing_log(scene.stranger.id, scene.document.id)
+
+
+async def test_filter_readers_follows_the_visibility(world: World, scene: Scene) -> None:
+    everyone = {user.id for user in (scene.owner, scene.reader, scene.writer, scene.stranger)}
+    unknown = UserId(new_id())
+    readers = await world.documents.filter_readers(scene.document.id, {*everyone, unknown})
+    assert readers == {scene.owner.id, scene.reader.id, scene.writer.id}
+
+    await world.pipeline().reprocess_from(scene.owner.id, scene.document.id, Step.CLASSIFY)
+    assert await world.documents.filter_readers(scene.document.id, everyone) == {scene.owner.id}
+    assert await world.documents.filter_readers(DocumentId(new_id()), everyone) == set()
+    assert await world.documents.filter_readers(scene.document.id, set()) == set()

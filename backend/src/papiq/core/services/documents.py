@@ -1,7 +1,13 @@
+from collections.abc import Collection
+
 from papiq.core.domain.documents import Document, DocumentChanges, Unset
 from papiq.core.domain.errors import NotFoundError, PermissionDeniedError
 from papiq.core.domain.ids import DocumentId, DrawerId, UserId
-from papiq.core.domain.permissions import can_move_document, is_document_owner
+from papiq.core.domain.permissions import (
+    can_move_document,
+    can_read_document,
+    is_document_owner,
+)
 from papiq.core.domain.pipeline import StepRun
 from papiq.core.ports import Clock, UnitOfWork, UnitOfWorkFactory
 from papiq.core.services._access import (
@@ -28,6 +34,23 @@ class DocumentService:
         async with self._uow() as uow:
             await load_actor(uow, actor)
             return await uow.documents.list_visible_to(actor)
+
+    async def filter_readers(self, id: DocumentId, candidates: Collection[UserId]) -> set[UserId]:
+        """Those of `candidates` who may read the document now; none if it does not exist.
+        For pushing events to users (SSE), so it reads the current state."""
+        if not candidates:
+            return set()
+        async with self._uow() as uow:
+            document = await uow.documents.find(id)
+            if document is None:
+                return set()
+            drawer = await uow.drawers.get(document.drawer_id)
+            readers: set[UserId] = set()
+            for candidate in set(candidates):
+                user = await uow.users.find(candidate)
+                if user is not None and can_read_document(user, document, drawer):
+                    readers.add(candidate)
+            return readers
 
     async def processing_log(self, actor: UserId, id: DocumentId) -> list[StepRun]:
         async with self._uow() as uow:

@@ -11,6 +11,7 @@ from papiq.core.domain.errors import (
     NotFoundError,
     PermissionDeniedError,
     UnprocessableDocumentError,
+    UnsupportedMediaTypeError,
 )
 from papiq.core.domain.events import (
     DocumentFiled,
@@ -35,7 +36,8 @@ from papiq.core.services.pipeline import (
     PlaceholderStep,
     RetryPolicy,
 )
-from tests.builders import FAILED, NOW, UNCERTAIN
+from tests.builders import FAILED, NOW, UNCERTAIN, incoming
+from tests.contracts.processing import SAMPLES
 from tests.unit.services.conftest import Raises, Returns, World
 
 PDF = b"%PDF-1.7 invoice"
@@ -44,16 +46,14 @@ PDF = b"%PDF-1.7 invoice"
 async def receive(world: World, pipeline: PipelineService | None = None) -> tuple[User, Document]:
     owner = await world.user()
     document = await (pipeline or world.pipeline()).receive(
-        owner.id, PDF, filename="invoice.pdf", media_type="application/pdf"
+        owner.id, incoming(PDF), filename="invoice.pdf"
     )
     return owner, document
 
 
 async def test_receive_stores_original_document_events_and_job(world: World) -> None:
     owner = await world.user()
-    document = await world.pipeline().receive(
-        owner.id, PDF, filename="invoice.pdf", media_type="application/pdf"
-    )
+    document = await world.pipeline().receive(owner.id, incoming(PDF), filename="invoice.pdf")
     assert document.sha256 == Sha256.of(PDF)
     assert await world.object_store.get(original_key(document.sha256)) == PDF
     assert document.drawer_id == (await world.default_drawer(owner)).id
@@ -65,7 +65,11 @@ async def test_receive_stores_original_document_events_and_job(world: World) -> 
         assert await uow.documents.get(document.id) == document
         (entry,) = await uow.processing_log.list_for(document.id)
         assert (entry.step, entry.run, entry.result.outcome) == (Step.RECEIVE, 1, Outcome.OK)
-        assert entry.result.output == {"sha256": document.sha256.hex, "size": len(PDF)}
+        assert entry.result.output == {
+            "sha256": document.sha256.hex,
+            "size": len(PDF),
+            "media_type": "application/pdf",
+        }
         assert entry.pipeline_version == "test"
         job = await uow.jobs.claim(now=NOW, lease=timedelta(minutes=1))
     assert job is not None and job.kind == STEP_JOB
@@ -74,9 +78,7 @@ async def test_receive_stores_original_document_events_and_job(world: World) -> 
 
 async def test_pipeline_runs_to_green(world: World) -> None:
     owner = await world.user()
-    document = await world.pipeline().receive(
-        owner.id, PDF, filename="invoice.pdf", media_type="application/pdf"
-    )
+    document = await world.pipeline().receive(owner.id, incoming(PDF), filename="invoice.pdf")
     assert await world.drain() == len(PIPELINE) - 1
     stored = await world.documents.get(owner.id, document.id)
     assert stored.processing.status is ProcessingStatus.COMPLETED
@@ -180,7 +182,7 @@ async def test_retry_and_reprocess_are_for_the_owner(world: World) -> None:
     shared = await world.drawers.create(owner.id, "Shared")
     await world.drawers.share(owner.id, shared.id, writer.id, ShareLevel.READ_WRITE)
     document = await world.pipeline().receive(
-        owner.id, PDF, filename="a.pdf", media_type="application/pdf", drawer=shared.id
+        owner.id, incoming(PDF), filename="a.pdf", drawer=shared.id
     )
     await world.drain()
     with pytest.raises(PermissionDeniedError):
@@ -195,14 +197,10 @@ async def test_retry_and_reprocess_are_for_the_owner(world: World) -> None:
 async def test_duplicates_are_rejected_per_owner(world: World) -> None:
     owner, document = await receive(world)
     with pytest.raises(DuplicateDocumentError) as info:
-        await world.pipeline().receive(
-            owner.id, PDF, filename="again.pdf", media_type="application/pdf"
-        )
+        await world.pipeline().receive(owner.id, incoming(PDF), filename="again.pdf")
     assert info.value.existing == document.id
     other = await world.user()
-    copy = await world.pipeline().receive(
-        other.id, PDF, filename="mine.pdf", media_type="application/pdf"
-    )
+    copy = await world.pipeline().receive(other.id, incoming(PDF), filename="mine.pdf")
     assert copy.sha256 == document.sha256
     assert copy.owner_id == other.id
 
@@ -213,19 +211,18 @@ async def test_receive_into_a_drawer_needs_write_access(world: World) -> None:
     await world.drawers.share(owner.id, shared.id, writer.id, ShareLevel.READ_WRITE)
     await world.drawers.share(owner.id, shared.id, reader.id, ShareLevel.READ)
     document = await world.pipeline().receive(
-        writer.id, PDF, filename="a.pdf", media_type="application/pdf", drawer=shared.id
+        writer.id, incoming(PDF), filename="a.pdf", drawer=shared.id
     )
     assert (document.owner_id, document.drawer_id) == (writer.id, shared.id)
     with pytest.raises(PermissionDeniedError):
         await world.pipeline().receive(
-            reader.id, b"other", filename="b.pdf", media_type="application/pdf", drawer=shared.id
+            reader.id, incoming(b"%PDF-1.7 other"), filename="b.pdf", drawer=shared.id
         )
     with pytest.raises(NotFoundError):
         await world.pipeline().receive(
             reader.id,
-            b"other",
+            incoming(b"%PDF-1.7 other"),
             filename="b.pdf",
-            media_type="application/pdf",
             drawer=(await world.default_drawer(owner)).id,
         )
 
@@ -366,3 +363,36 @@ async def test_a_cancelled_step_releases_its_job_at_once(world: World) -> None:
     )
     await world.drain()  # another worker takes it over without waiting for the lease
     assert (await world.documents.get(owner.id, document.id)).lane is Lane.GREEN
+
+
+@pytest.mark.parametrize(
+    ("sample", "media_type"),
+    [("scan.pdf", "application/pdf"), ("photo.jpg", "image/jpeg")],
+)
+async def test_the_media_type_comes_from_the_content(
+    world: World, sample: str, media_type: str
+) -> None:
+    owner = await world.user()
+    document = await world.pipeline().receive(
+        owner.id, incoming((SAMPLES / sample).read_bytes()), filename="named-wrongly.txt"
+    )
+    assert document.media_type == media_type
+    assert world.object_store.content_type(original_key(document.sha256)) == media_type
+
+
+async def test_an_unsupported_file_is_rejected_and_not_stored(world: World) -> None:
+    owner = await world.user()
+    file = incoming((SAMPLES / "unsupported.docx").read_bytes())
+    with pytest.raises(UnsupportedMediaTypeError, match="unsupported file type"):
+        await world.pipeline().receive(owner.id, file, filename="letter.pdf")
+    assert not await world.object_store.exists(original_key(file.sha256))
+    assert world.events() == []
+
+
+async def test_a_stored_original_is_not_uploaded_again(world: World) -> None:
+    first, second = await world.user(), await world.user()
+    document = await world.pipeline().receive(first.id, incoming(PDF), filename="a.pdf")
+    key = original_key(document.sha256)
+    await world.object_store.put(key, b"%PDF-1.7 marker", content_type="application/pdf")
+    await world.pipeline().receive(second.id, incoming(PDF), filename="b.pdf")
+    assert await world.object_store.get(key) == b"%PDF-1.7 marker"

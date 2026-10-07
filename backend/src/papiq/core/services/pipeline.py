@@ -1,19 +1,23 @@
 """Ingest and processing: receive a document, run its steps as jobs, retry and reprocess."""
 
 import asyncio
+import hashlib
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Protocol
 from uuid import UUID
 
+from papiq.core.domain import media_types
 from papiq.core.domain.documents import Document, Sha256
 from papiq.core.domain.errors import (
     ConcurrencyError,
     DuplicateDocumentError,
     PermissionDeniedError,
     UnprocessableDocumentError,
+    UnsupportedMediaTypeError,
 )
 from papiq.core.domain.ids import DocumentId, DrawerId, JobId, UserId
 from papiq.core.domain.jobs import Job, JobStatus
@@ -69,6 +73,27 @@ class RetryPolicy:
 DEFAULT_RETRY = RetryPolicy()
 
 
+@dataclass(frozen=True)
+class IncomingFile:
+    """A received file in a local temporary location. The receiving adapter computes the
+    SHA-256 and size while it writes the file, so the content is read only once."""
+
+    path: Path
+    sha256: Sha256
+    size: int
+
+    @classmethod
+    def of(cls, path: Path) -> "IncomingFile":
+        """Hash an existing file (blocking; for tools and tests)."""
+        digest = hashlib.sha256()
+        size = 0
+        with path.open("rb") as file:
+            while chunk := file.read(1024 * 1024):
+                digest.update(chunk)
+                size += len(chunk)
+        return cls(path=path, sha256=Sha256(digest.hexdigest()), size=size)
+
+
 class PipelineService:
     def __init__(
         self,
@@ -97,25 +122,39 @@ class PipelineService:
     async def receive(
         self,
         actor: UserId,
-        data: bytes,
+        file: IncomingFile,
         *,
         filename: str,
-        media_type: str,
         drawer: DrawerId | None = None,
     ) -> Document:
         """Store the original, then create the document, its first events and the OCR job in
-        one transaction. Without `drawer` the document goes to the owner's default drawer;
-        otherwise the owner needs write access to it. A file the owner already has is rejected
-        with DuplicateDocumentError; if the same file arrives twice at the same moment, the
-        later commit fails with ConflictError instead."""
+        one transaction.
+
+        The media type is recognised from the content; an unsupported type raises
+        UnsupportedMediaTypeError and nothing is stored. Without `drawer` the document goes to
+        the owner's default drawer; otherwise the owner needs write access to it. A file the
+        owner already has is rejected with DuplicateDocumentError; if the same file arrives
+        twice at the same moment, the later commit fails with ConflictError instead. An
+        original that is stored already (another owner has the same file) is not stored again.
+        """
         started = self._clock.now()
-        sha256 = Sha256.of(data)
+        sha256 = file.sha256
+        media_type = media_types.detect(await asyncio.to_thread(_head, file.path))
+        if media_type is None:
+            raise UnsupportedMediaTypeError(
+                f"unsupported file type; supported: {', '.join(media_types.SUPPORTED)}"
+            )
         async with self._uow() as uow:
             target = await self._target_drawer(uow, actor, drawer, sha256)
-        await self._store.put(original_key(sha256), data, content_type=media_type)
+        key = original_key(sha256)
+        if not await self._store.exists(key):
+            await self._store.upload(key, file.path, content_type=media_type)
 
         now = self._clock.now()
-        result = StepResult(outcome=Outcome.OK, output={"sha256": sha256.hex, "size": len(data)})
+        result = StepResult(
+            outcome=Outcome.OK,
+            output={"sha256": sha256.hex, "size": file.size, "media_type": media_type},
+        )
         async with self._uow() as uow:
             # Check again: rights or a duplicate may have changed while the file was stored.
             await self._target_drawer(uow, actor, target, sha256)
@@ -359,6 +398,11 @@ async def _enqueue_step(uow: UnitOfWork, document: Document, now: datetime) -> J
 
 def _failed(reason: str) -> StepResult:
     return StepResult(outcome=Outcome.FAILED, reason=reason)
+
+
+def _head(path: Path) -> bytes:
+    with path.open("rb") as file:
+        return file.read(media_types.SNIFF_SIZE)
 
 
 def _parse_payload(payload: JsonObject) -> tuple[DocumentId, Step, int]:

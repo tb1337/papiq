@@ -29,7 +29,7 @@ from papiq.core.domain.users import User
 from papiq.core.ports import DeliveryRetry, EventBus, UnitOfWorkFactory
 from papiq.core.services.pipeline import PipelineService, PlaceholderStep
 from tests import builders
-from tests.builders import NOW
+from tests.builders import NOW, incoming
 from tests.contracts.event_bus import EventBusFactory, Recorder, publish, received
 from tests.contracts.unit_of_work import owner_with_drawer
 
@@ -161,12 +161,10 @@ class SqlAdapterSuite:
         )
 
         async def upload() -> Document:
-            return await pipeline.receive(
-                owner.id, b"%PDF same", filename="a.pdf", media_type="application/pdf"
-            )
+            return await pipeline.receive(owner.id, incoming(b"%PDF-1.7 same"), filename="a.pdf")
 
         results = await asyncio.gather(*(upload() for _ in range(3)), return_exceptions=True)
-        assert len([r for r in results if isinstance(r, Document)]) == 1
+        assert len([r for r in results if isinstance(r, Document)]) == 1, results
         assert all(isinstance(r, Document | ConflictError) for r in results), results
         async with uow_factory() as uow:
             assert len(await uow.documents.list_visible_to(owner.id)) == 1

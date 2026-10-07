@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from papiq.adapters.outbound.memory import MemoryEventBus
 from papiq.core.domain.jobs import JobStatus
 from papiq.core.services.maintenance import CLEANUP_JOB, MaintenanceService
+from tests.builders import incoming
 from tests.unit.services.conftest import World
 
 INTERVAL = timedelta(hours=1)
@@ -35,7 +36,7 @@ async def test_schedule_queues_one_cleanup(world: World) -> None:
 async def test_cleanup_runs_and_schedules_the_next_one(world: World) -> None:
     service = maintenance(world)
     owner = await world.user()
-    await world.pipeline().receive(owner.id, b"%PDF-1", filename="a.pdf", media_type="x/y")
+    await world.pipeline().receive(owner.id, incoming(b"%PDF-1"), filename="a.pdf")
     await world.drain()
     step_jobs = len(world.database.jobs)
 
@@ -61,7 +62,7 @@ async def test_delivered_events_are_purged(world: World) -> None:
 
     bus.subscribe("test", handler)
     owner = await world.user()
-    await world.pipeline().receive(owner.id, b"%PDF-1", filename="a.pdf", media_type="x/y")
+    await world.pipeline().receive(owner.id, incoming(b"%PDF-1"), filename="a.pdf")
     await bus.dispatch()
     service = maintenance(world, bus)
     await service.schedule()
