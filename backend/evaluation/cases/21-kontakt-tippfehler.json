@@ -1,0 +1,55 @@
+{
+  "description": "The letterhead has a typo in the contact's name (OCR error).",
+  "expected": {
+    "lane": "green",
+    "contact": "Stadtwerke Musterstadt GmbH",
+    "document_type": "Rechnung",
+    "tags": [
+      "Wohnung"
+    ],
+    "document_date": "2026-06-30",
+    "attributes": {
+      "Betrag": {
+        "amount": "96.00",
+        "currency": "EUR"
+      },
+      "Rechnungsnummer": "R-2026-005522",
+      "Kundennummer": "100 200 300"
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Stadtwerke Musterstad GmbH",
+        "evidence": "Stadtwerke Musterstad GmbH"
+      },
+      "document_type": "Rechnung",
+      "new_document_type": null,
+      "tags": [
+        "Wohnung"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-06-30",
+        "evidence": "Musterstadt, 30.06.2026"
+      }
+    },
+    "attributes": {
+      "Betrag": {
+        "value": {
+          "amount": "96.00",
+          "currency": "EUR"
+        },
+        "evidence": "Gesamtbetrag dieser Rechnung: 96,00 €"
+      },
+      "Rechnungsnummer": {
+        "value": "R-2026-005522",
+        "evidence": "Rechnungsnummer: R-2026-005522"
+      },
+      "Kundennummer": {
+        "value": "100 200 300",
+        "evidence": "Kundennummer: 100 200 300"
+      }
+    }
+  }
+}

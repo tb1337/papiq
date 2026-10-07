@@ -1,0 +1,62 @@
+{
+  "description": "Phone and internet bill.",
+  "expected": {
+    "lane": "green",
+    "contact": "FernNetz Telekommunikation GmbH",
+    "document_type": "Rechnung",
+    "tags": [
+      "Telefon",
+      "Internet"
+    ],
+    "document_date": "2026-04-05",
+    "attributes": {
+      "Betrag": {
+        "amount": "39.99",
+        "currency": "EUR"
+      },
+      "Rechnungsnummer": "7700123456",
+      "Kundennummer": "KD-55 12 34",
+      "Fällig am": "2026-04-12"
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "FernNetz Telekommunikation GmbH",
+        "evidence": "FernNetz Telekommunikation GmbH"
+      },
+      "document_type": "Rechnung",
+      "new_document_type": null,
+      "tags": [
+        "Telefon",
+        "Internet"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-04-05",
+        "evidence": "Rechnungsdatum | 05.04.2026"
+      }
+    },
+    "attributes": {
+      "Betrag": {
+        "value": {
+          "amount": "39.99",
+          "currency": "EUR"
+        },
+        "evidence": "Rechnungsbetrag** | **39,99 €"
+      },
+      "Rechnungsnummer": {
+        "value": "7700123456",
+        "evidence": "Rechnungsnummer | 7700123456"
+      },
+      "Kundennummer": {
+        "value": "KD-55 12 34",
+        "evidence": "Kundennummer | KD-55 12 34"
+      },
+      "Fällig am": {
+        "value": "2026-04-12",
+        "evidence": "frühestens am 12.04.2026"
+      }
+    }
+  }
+}

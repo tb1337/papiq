@@ -1,0 +1,52 @@
+{
+  "description": "Invoice with net, VAT and gross amounts; the gross amount is expected.",
+  "expected": {
+    "lane": "green",
+    "contact": "Elektro Krause GmbH",
+    "document_type": "Rechnung",
+    "tags": [
+      "Handwerker",
+      "Auto"
+    ],
+    "document_date": "2026-05-14",
+    "attributes": {
+      "Betrag": {
+        "amount": "1190.00",
+        "currency": "EUR"
+      },
+      "Rechnungsnummer": "2026-031"
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Elektro Krause GmbH",
+        "evidence": "Elektro Krause GmbH"
+      },
+      "document_type": "Rechnung",
+      "new_document_type": null,
+      "tags": [
+        "Handwerker",
+        "Auto"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-05-14",
+        "evidence": "Datum 14.05.2026"
+      }
+    },
+    "attributes": {
+      "Betrag": {
+        "value": {
+          "amount": "1190.00",
+          "currency": "EUR"
+        },
+        "evidence": "Rechnungsbetrag brutto | 1.190,00 €"
+      },
+      "Rechnungsnummer": {
+        "value": "2026-031",
+        "evidence": "Rechnung Nr. 2026-031"
+      }
+    }
+  }
+}

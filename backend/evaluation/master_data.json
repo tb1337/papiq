@@ -1,0 +1,137 @@
+{
+  "contacts": [
+    "Stadtwerke Musterstadt GmbH",
+    "Stadtwerke Beispielstadt GmbH",
+    "FernNetz Telekommunikation GmbH",
+    "Elektro Krause GmbH",
+    "Dr. med. Anna Beispiel",
+    "Zahnarztpraxis Dr. Lehmann",
+    "Wohnbau Musterstadt eG",
+    "Nordlicht Software AG",
+    "Finanzamt Musterstadt",
+    "Hauptzollamt Musterstadt",
+    "Rentenkasse Musterland",
+    "Sparkasse Musterstadt",
+    "Hanse Versicherung AG",
+    "Gesundkasse BKK",
+    "Autohaus Weber GmbH & Co. KG",
+    "Frischmarkt KG",
+    "Versandhaus Bergmann GmbH",
+    "Cloudberry Hosting Inc."
+  ],
+  "document_types": [
+    "Rechnung",
+    "Vertrag",
+    "Bescheid",
+    "Kontoauszug",
+    "Versicherung",
+    "Lohnabrechnung",
+    "Gutschrift",
+    "Mahnung",
+    "Kassenbon",
+    "Mitteilung"
+  ],
+  "tags": [
+    "Strom",
+    "Telefon",
+    "Internet",
+    "Gesundheit",
+    "Wohnung",
+    "Arbeit",
+    "Steuer",
+    "Auto",
+    "Rente",
+    "Bank",
+    "Versicherung",
+    "Einkauf",
+    "Handwerker",
+    "Krankenversicherung",
+    "Wichtig"
+  ],
+  "attributes": [
+    {
+      "name": "Betrag",
+      "data_type": "amount",
+      "document_types": [
+        "Rechnung",
+        "Bescheid",
+        "Gutschrift",
+        "Mahnung",
+        "Kassenbon"
+      ]
+    },
+    {
+      "name": "Rechnungsnummer",
+      "data_type": "text",
+      "document_types": [
+        "Rechnung",
+        "Mahnung"
+      ]
+    },
+    {
+      "name": "Vertragsbeginn",
+      "data_type": "date",
+      "document_types": [
+        "Vertrag"
+      ]
+    },
+    {
+      "name": "Aktenzeichen",
+      "data_type": "text",
+      "document_types": [
+        "Bescheid"
+      ]
+    },
+    {
+      "name": "Kontostand",
+      "data_type": "amount",
+      "document_types": [
+        "Kontoauszug"
+      ]
+    },
+    {
+      "name": "Versicherungsnummer",
+      "data_type": "text",
+      "document_types": [
+        "Versicherung"
+      ]
+    },
+    {
+      "name": "Beitrag",
+      "data_type": "amount",
+      "document_types": [
+        "Versicherung"
+      ]
+    },
+    {
+      "name": "Nettolohn",
+      "data_type": "amount",
+      "document_types": [
+        "Lohnabrechnung"
+      ]
+    },
+    {
+      "name": "Zahlungsart",
+      "data_type": "choice",
+      "document_types": [
+        "Kassenbon"
+      ],
+      "choices": [
+        "Lastschrift",
+        "Überweisung",
+        "Bar",
+        "Karte"
+      ]
+    },
+    {
+      "name": "Kundennummer",
+      "data_type": "text",
+      "document_types": null
+    },
+    {
+      "name": "Fällig am",
+      "data_type": "date",
+      "document_types": null
+    }
+  ]
+}

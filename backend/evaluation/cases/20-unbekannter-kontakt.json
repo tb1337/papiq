@@ -1,0 +1,50 @@
+{
+  "description": "Invoice from a contact that is not in the master data.",
+  "expected": {
+    "lane": "yellow",
+    "contact": null,
+    "document_type": "Rechnung",
+    "tags": [
+      "Wohnung"
+    ],
+    "document_date": "2026-04-28",
+    "attributes": {
+      "Betrag": {
+        "amount": "225.00",
+        "currency": "EUR"
+      },
+      "Rechnungsnummer": "GS-2026-088"
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Gartenbau Sonnenschein GmbH",
+        "evidence": "Gartenbau Sonnenschein GmbH"
+      },
+      "document_type": "Rechnung",
+      "new_document_type": null,
+      "tags": [
+        "Wohnung"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-04-28",
+        "evidence": "Musterstadt, 28.04.2026"
+      }
+    },
+    "attributes": {
+      "Betrag": {
+        "value": {
+          "amount": "225.00",
+          "currency": "EUR"
+        },
+        "evidence": "Summe brutto | 225,00 €"
+      },
+      "Rechnungsnummer": {
+        "value": "GS-2026-088",
+        "evidence": "Rechnung Nr. GS-2026-088"
+      }
+    }
+  }
+}

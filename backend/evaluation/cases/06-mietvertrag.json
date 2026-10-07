@@ -1,0 +1,39 @@
+{
+  "description": "Tenancy agreement; signing date and start date differ.",
+  "expected": {
+    "lane": "green",
+    "contact": "Wohnbau Musterstadt eG",
+    "document_type": "Vertrag",
+    "tags": [
+      "Wohnung"
+    ],
+    "document_date": "2026-03-15",
+    "attributes": {
+      "Vertragsbeginn": "2026-05-01"
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Wohnbau Musterstadt eG",
+        "evidence": "Wohnbau Musterstadt eG"
+      },
+      "document_type": "Vertrag",
+      "new_document_type": null,
+      "tags": [
+        "Wohnung"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-03-15",
+        "evidence": "Musterstadt, den 15.03.2026"
+      }
+    },
+    "attributes": {
+      "Vertragsbeginn": {
+        "value": "2026-05-01",
+        "evidence": "beginnt am 01.05.2026"
+      }
+    }
+  }
+}

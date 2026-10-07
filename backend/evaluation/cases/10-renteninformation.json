@@ -1,0 +1,32 @@
+{
+  "description": "Pension information, a notice without attributes of its own.",
+  "expected": {
+    "lane": "green",
+    "contact": "Rentenkasse Musterland",
+    "document_type": "Mitteilung",
+    "tags": [
+      "Rente"
+    ],
+    "document_date": "2026-07-14",
+    "attributes": {}
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Rentenkasse Musterland",
+        "evidence": "Rentenkasse Musterland"
+      },
+      "document_type": "Mitteilung",
+      "new_document_type": null,
+      "tags": [
+        "Rente"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-07-14",
+        "evidence": "Berlin, 14.07.2026"
+      }
+    },
+    "attributes": {}
+  }
+}

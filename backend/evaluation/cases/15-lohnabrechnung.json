@@ -1,0 +1,45 @@
+{
+  "description": "Payslip with gross and net pay.",
+  "expected": {
+    "lane": "green",
+    "contact": "Nordlicht Software AG",
+    "document_type": "Lohnabrechnung",
+    "tags": [
+      "Arbeit"
+    ],
+    "document_date": "2026-03-31",
+    "attributes": {
+      "Nettolohn": {
+        "amount": "2987.45",
+        "currency": "EUR"
+      }
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Nordlicht Software AG",
+        "evidence": "Nordlicht Software AG"
+      },
+      "document_type": "Lohnabrechnung",
+      "new_document_type": null,
+      "tags": [
+        "Arbeit"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-03-31",
+        "evidence": "erstellt am 31.03.2026"
+      }
+    },
+    "attributes": {
+      "Nettolohn": {
+        "value": {
+          "amount": "2987.45",
+          "currency": "EUR"
+        },
+        "evidence": "Nettoverdienst: 2.987,45 €"
+      }
+    }
+  }
+}

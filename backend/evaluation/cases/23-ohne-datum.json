@@ -1,0 +1,39 @@
+{
+  "description": "A letter without any date.",
+  "expected": {
+    "lane": "yellow",
+    "contact": "Versandhaus Bergmann GmbH",
+    "document_type": "Mitteilung",
+    "tags": [
+      "Einkauf"
+    ],
+    "document_date": null,
+    "attributes": {
+      "Kundennummer": "88 77 66"
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Versandhaus Bergmann GmbH",
+        "evidence": "Versandhaus Bergmann GmbH"
+      },
+      "document_type": "Mitteilung",
+      "new_document_type": null,
+      "tags": [
+        "Einkauf"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": null,
+        "evidence": null
+      }
+    },
+    "attributes": {
+      "Kundennummer": {
+        "value": "88 77 66",
+        "evidence": "Kundennummer: 88 77 66"
+      }
+    }
+  }
+}
