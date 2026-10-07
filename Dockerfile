@@ -4,10 +4,11 @@
 #   docling-models  Docling's layout and table models, downloaded at build time
 #   dev             devcontainer: base + uv, Node.js, pnpm, Git, Docling models
 #   runtime         production image (placeholder, built in M9)
-# All stages build for linux/amd64 and linux/arm64.
+# All stages build for linux/amd64 and linux/arm64; docling-models runs on the build machine.
 
 FROM node:24.21.0-trixie-slim AS node
 FROM ghcr.io/astral-sh/uv:0.11.33 AS uv
+FROM --platform=$BUILDPLATFORM ghcr.io/astral-sh/uv:0.11.33 AS uv-build
 
 # --- base: Python and the system packages OCRmyPDF and Docling need -----------------------------
 # libgl1 and libglib2.0-0t64: OpenCV, which Docling loads.
@@ -35,10 +36,19 @@ RUN apt-get update \
 
 # --- docling-models: the models Docling needs, never downloaded at run time ---------------------
 # Installs the locked dependencies (Docling, PyTorch CPU) in a throwaway environment and downloads
-# the models of exactly that Docling version. Rebuilt only when the lock file changes.
-FROM base AS docling-models
+# the models of exactly that Docling version. Rebuilt only when the lock file changes. The model
+# files are the same on every platform, so this stage runs natively on the build machine (no
+# emulation for arm64) and the target images copy the result.
+FROM --platform=$BUILDPLATFORM python:3.13.13-slim-trixie AS docling-models
 
-COPY --from=uv /uv /usr/local/bin/
+# Only for the build: keeps debconf from warning about a missing terminal.
+ARG DEBIAN_FRONTEND=noninteractive
+# OpenCV, which Docling loads.
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y libgl1 libglib2.0-0t64 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=uv-build /uv /usr/local/bin/
 ENV UV_PYTHON_DOWNLOADS=never \
     UV_LINK_MODE=copy
 WORKDIR /build
