@@ -2,14 +2,19 @@ import os
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import aioboto3
 import pytest
 
+from papiq.adapters.outbound.filesystem import FilesystemObjectStore
 from papiq.adapters.outbound.s3 import S3ObjectStore
+from papiq.adapters.outbound.sql import Database, migrate
 from papiq.composition.settings import Settings, load_settings
+from papiq.core.ports import ObjectStore
 from tests import probes
 from tests.builders import SECRET_KEY, TRUSTED_PROXY
+from tests.integration.adapters.sql.conftest import create_database, drop_database, postgres
 
 
 @pytest.fixture(scope="session")
@@ -67,3 +72,38 @@ async def s3_test_store(settings: Settings) -> AsyncIterator[S3ObjectStore]:
     finally:
         await store.aclose()
         await remove_prefix(settings, prefix)
+
+
+# The two set-ups of the end-to-end tests: SQLite with the filesystem, Postgres with S3 (Garage).
+@pytest.fixture(params=["sqlite+filesystem", "postgres+s3"])
+async def stores(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> AsyncIterator[tuple[Database, ObjectStore]]:
+    if request.param == "sqlite+filesystem":
+        database = Database.sqlite(tmp_path / "papiq.db")
+        await migrate(database)
+        yield database, FilesystemObjectStore(tmp_path / "objects")
+        await database.dispose()
+        return
+    settings: Settings = request.getfixturevalue("settings")
+    if settings.db_type != "postgres" or settings.db_host is None:
+        pytest.skip("PAPIQ_DB_TYPE is not postgres")
+    if not probes.postgres_answers(settings.db_host, settings.db_port):
+        pytest.skip(f"Postgres not reachable at {settings.db_host}:{settings.db_port}")
+    s3: Settings = request.getfixturevalue("s3_settings")
+    assert settings.db_name
+    name = f"{settings.db_name}_test_{secrets.token_hex(4)}"
+    await create_database(settings, name)
+    database = postgres(settings, name)
+    try:
+        await migrate(database)
+        async with s3_test_store(s3) as store:
+            yield database, store
+    finally:
+        await database.dispose()
+        await drop_database(settings, name)
+
+
+@pytest.fixture
+def object_store(stores: tuple[Database, ObjectStore]) -> ObjectStore:
+    return stores[1]
