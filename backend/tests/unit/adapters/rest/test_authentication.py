@@ -353,3 +353,24 @@ async def test_an_admin_token_does_not_lead_to_a_session(api: Api) -> None:
         f"{PREFIX}/auth/login", json={"username": "root", "password": NEW_PASSWORD}
     )
     assert response.status_code == 401, "the token's holder signed in with a session"
+
+
+async def test_auth_answers_are_not_stored(api: Api) -> None:
+    """M4-08: answers below /auth carry tokens and secrets; caches must not keep them, also
+    errors. Other answers are left alone."""
+    user = await api.user("alice")
+    answers = [
+        await api.client.post(
+            f"{PREFIX}/auth/login", json={"username": "alice", "password": PASSWORD}
+        ),
+        await api.client.get(f"{PREFIX}/auth/me"),
+        await api.client.post(
+            f"{PREFIX}/auth/login", json={"username": "alice", "password": "wrong password!"}
+        ),
+        await api.client.get(f"{PREFIX}/auth/oidc/login"),  # 404 without a provider
+        await api.client.get(f"{PREFIX}/auth/tokens", headers=auth(user)),  # 403
+    ]
+    for answer in answers:
+        assert answer.headers["cache-control"] == "no-store", answer.request.url
+    other = await api.client.get(f"{PREFIX}/drawers", headers=auth(user))
+    assert "cache-control" not in other.headers

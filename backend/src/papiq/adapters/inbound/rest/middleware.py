@@ -2,6 +2,7 @@
 
 from collections.abc import Collection
 
+from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -49,3 +50,28 @@ class LimitRequestBody:
             return message
 
         await self._app(scope, limited, send)
+
+
+class NoStore:
+    """Marks every answer below `prefix` `Cache-Control: no-store`, also errors and redirects:
+    they carry CSRF tokens, TOTP secrets, recovery codes and API tokens, which no cache may
+    keep."""
+
+    def __init__(self, app: ASGIApp, *, prefix: str) -> None:
+        self._app = app
+        self._prefix = prefix.rstrip("/")
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        path = scope.get("path", "")
+        if scope["type"] != "http" or not (
+            path == self._prefix or path.startswith(self._prefix + "/")
+        ):
+            await self._app(scope, receive, send)
+            return
+
+        async def marked(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                MutableHeaders(scope=message)["Cache-Control"] = "no-store"
+            await send(message)
+
+        await self._app(scope, receive, marked)

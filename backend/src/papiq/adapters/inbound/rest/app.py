@@ -29,7 +29,7 @@ from papiq.adapters.inbound.rest.auth import (
 )
 from papiq.adapters.inbound.rest.context import ApiContext
 from papiq.adapters.inbound.rest.events import EventHub, dispatch_forever
-from papiq.adapters.inbound.rest.middleware import LimitRequestBody
+from papiq.adapters.inbound.rest.middleware import LimitRequestBody, NoStore
 from papiq.adapters.inbound.rest.schemas import EventMessage
 
 PREFIX = "/api/v1"
@@ -98,6 +98,7 @@ def create_app(context: ApiContext) -> FastAPI:
         limit=context.max_request_size,
         exempt={("POST", f"{PREFIX}/documents")},  # the upload has its own limit
     )
+    app.add_middleware(NoStore, prefix=f"{PREFIX}/auth")
     for router in (
         account.public,
         account.router,
