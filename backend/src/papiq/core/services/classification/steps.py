@@ -450,11 +450,14 @@ def _check_attribute(
     )
 
 
+_SHORTEST_EVIDENCE = 4  # characters of a quoted passage that alone backs a yes/no or choice
+
+
 def _shown(
     definition: AttributeDefinition, value: AttributeValue, proposal: Proposal, facts: DocumentText
 ) -> tuple[bool, str]:
     """Whether the text shows the value, and what was looked for. Yes/no and choice values
-    are not written as such; for them the quoted passage must be in the text."""
+    are not written as such; for them a quoted passage of some length must be in the text."""
     match value:
         case Money():
             if not facts.has_number(value.amount):
@@ -467,7 +470,8 @@ def _shown(
         case str() if definition.data_type is AttributeType.TEXT:
             return facts.contains(value), "text"
         case _:
-            return proposal.evidence is not None, "quoted passage"
+            evidence = (proposal.evidence or "").strip()
+            return len(evidence) >= _SHORTEST_EVIDENCE, "quoted passage"
 
 
 def _common(field: str, proposal: Proposal) -> dict[str, Any]:

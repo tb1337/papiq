@@ -153,19 +153,31 @@ _CURRENCY_SIGNS = {
     "kr": {"SEK", "NOK", "DKK"},
     "kr.": {"SEK", "NOK", "DKK"},
 }
+# Active ISO 4217 codes; other three-letter words (BIS, DEN, SIE) are no currency.
+_ISO_4217_CODES = """
+    AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BGN BHD BIF BMD BND BOB BRL
+    BSD BTN BWP BYN BZD CAD CDF CHF CLP CNY COP CRC CUP CVE CZK DJF DKK DOP DZD EGP
+    ERN ETB EUR FJD FKP GBP GEL GHS GIP GMD GNF GTQ GYD HKD HNL HTG HUF IDR ILS INR
+    IQD IRR ISK JMD JOD JPY KES KGS KHR KMF KPW KRW KWD KYD KZT LAK LBP LKR LRD LSL
+    LYD MAD MDL MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MYR MZN NAD NGN NIO NOK NPR
+    NZD OMR PAB PEN PGK PHP PKR PLN PYG QAR RON RSD RUB RWF SAR SBD SCR SDG SEK SGD
+    SHP SLE SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH UGX
+    USD UYU UZS VES VND VUV WST XAF XCD XCG XOF XPF YER ZAR ZMW ZWG
+"""
+_ISO_4217 = frozenset(_ISO_4217_CODES.split())
 _WORD = re.compile(r"[^\W\d_]+\.?|[€$£¥]")
 
 
 def currencies_in(text: str) -> set[str]:
     """ISO 4217 codes the normalised `text` shows: as code (`EUR`), sign (`€`) or word
-    (`Euro`). Any three-letter word counts as a code; the caller compares with a known one."""
+    (`Euro`)."""
     found: set[str] = set()
     for match in _WORD.finditer(text):
         word = match.group()
         found.update(_CURRENCY_SIGNS.get(word, ()))
         bare = word.rstrip(".")
         found.update(_CURRENCY_SIGNS.get(bare, ()))
-        if len(bare) == 3 and bare.isascii():
+        if bare.upper() in _ISO_4217:
             found.add(bare.upper())
     if "us$" in text:
         found.add("USD")
@@ -178,15 +190,23 @@ _SHORTEST_SPACELESS = 8  # characters; shorter values compared without spaces ma
 
 
 def contains(text: str, value: str) -> bool:
-    """Whether the normalised `text` contains `value` (normalised here): as is, with umlauts
-    written as `ae`/`oe`/`ue`, or, for longer values, ignoring spaces (an IBAN in groups)."""
+    """Whether the normalised `text` contains `value` (normalised here) as whole words: as is,
+    with umlauts written as `ae`/`oe`/`ue`, or, for longer values, ignoring spaces (an IBAN in
+    groups). `Z-3` is not in `Z-3141`."""
     needle = normalise(value)
     if not needle:
         return False
-    if needle in text or fold_umlauts(needle) in fold_umlauts(text):
+    if _whole(needle, text) or _whole(fold_umlauts(needle), fold_umlauts(text)):
         return True
     spaceless = needle.replace(" ", "")
     return len(spaceless) >= _SHORTEST_SPACELESS and spaceless in text.replace(" ", "")
+
+
+def _whole(needle: str, text: str) -> bool:
+    """`needle` occurs in `text` as whole words: not next to a letter or digit, nor joined to
+    one by `-`, `.`, `/` or `,` (`R-2026` is not in `R-2026-0815`, `31` not in `31.03.2026`)."""
+    pattern = r"(?<![^\W_])(?<![^\W_][-./,])" + re.escape(needle) + r"(?![^\W_])(?![-./,][^\W_])"
+    return re.search(pattern, text) is not None
 
 
 @dataclass(frozen=True)
