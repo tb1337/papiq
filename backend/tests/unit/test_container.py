@@ -8,6 +8,7 @@ import pytest
 from papiq.adapters.outbound.crypto import Argon2PasswordHasher, PyotpTotp
 from papiq.adapters.outbound.docling import DoclingParser
 from papiq.adapters.outbound.filesystem import FilesystemObjectStore
+from papiq.adapters.outbound.meilisearch import MeilisearchIndex
 from papiq.adapters.outbound.memory import ManualClock
 from papiq.adapters.outbound.ocrmypdf import OcrmypdfEngine
 from papiq.adapters.outbound.oidc import AuthlibOidcProvider
@@ -177,6 +178,9 @@ def test_optional_ports_are_only_selected_when_configured(
     assert isinstance(built.totp, PyotpTotp)
     assert built.oidc is None
 
+    monkeypatch.setitem(container.SEARCH_INDEXES, "meilisearch", lambda _: object())
+    assert build_container(settings(meilisearch_url="http://meilisearch:7700")).search_index
+    monkeypatch.delitem(container.SEARCH_INDEXES, "meilisearch")
     with pytest.raises(AdapterNotAvailableError, match="search_index: adapter 'meilisearch'"):
         build_container(settings(meilisearch_url="http://meilisearch:7700"))
 
@@ -211,6 +215,42 @@ def test_language_model_and_embeddings_from_settings(monkeypatch: pytest.MonkeyP
     assert isinstance(embeddings, OpenAiCompatEmbeddings)
     assert embeddings.model == "bge-m3"
     assert (embeddings._headers, embeddings._timeout) == ({}, 20)
+
+
+async def test_search_index_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(container.PERSISTENCE, "sqlite", fake_persistence)
+    for table, name in ((container.OCR_ENGINES, "ocrmypdf"), (container.PARSERS, "docling")):
+        monkeypatch.setitem(table, name, lambda _: object())
+
+    built = build_container(
+        settings(
+            meilisearch_url="http://meilisearch:7700",
+            meilisearch_api_key="key",
+            meilisearch_index="papiq-test",
+            meilisearch_timeout=timedelta(seconds=7),
+            meilisearch_task_timeout=timedelta(seconds=9),
+            search_locales="deu",
+            embedding_base_url="http://ollama:11434/v1",
+            embedding_model="bge-m3",
+            embedding_dimensions=1024,
+        )
+    )
+    index = built.search_index
+    assert isinstance(index, MeilisearchIndex)
+    assert (index._index, index._dimensions, index._locales) == ("papiq-test", 1024, ["deu"])
+    assert index._task_timeout == 9
+    assert index._client.headers["Authorization"] == "Bearer key"
+    assert index._client.timeout.read == 7
+    assert index.aclose in built.closers
+
+    # Without a model there are no vectors, whatever the length says.
+    plain = build_container(
+        settings(meilisearch_url="http://meilisearch:7700", embedding_dimensions=1024)
+    )
+    assert isinstance(plain.search_index, MeilisearchIndex)
+    assert plain.search_index._dimensions is None
+    await built.aclose()
+    await plain.aclose()
 
 
 async def test_memory_container_runs_the_core() -> None:

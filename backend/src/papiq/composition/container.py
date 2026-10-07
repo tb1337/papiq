@@ -21,6 +21,7 @@ from papiq.adapters.outbound.crypto import (
 )
 from papiq.adapters.outbound.docling import DoclingParser
 from papiq.adapters.outbound.filesystem import FilesystemObjectStore
+from papiq.adapters.outbound.meilisearch import MeilisearchIndex
 from papiq.adapters.outbound.memory import (
     FakeCipher,
     FakeOcr,
@@ -160,7 +161,21 @@ def _secret(value: SecretStr | None) -> str | None:
     return None if value is None else value.get_secret_value()
 
 
-SEARCH_INDEXES: dict[str, Factory[SearchIndex]] = {}
+def meilisearch_index(settings: Settings) -> MeilisearchIndex:
+    assert settings.meilisearch_url is not None  # the adapter is only selected with a URL
+    return MeilisearchIndex(
+        url=str(settings.meilisearch_url),
+        api_key=_secret(settings.meilisearch_api_key),
+        index=settings.meilisearch_index,
+        # Vectors only where there is a model to compute them (settings guarantee the length).
+        dimensions=settings.embedding_dimensions if settings.embedding_base_url else None,
+        locales=settings.search_locales.split("+"),
+        timeout=settings.meilisearch_timeout.total_seconds(),
+        task_timeout=settings.meilisearch_task_timeout.total_seconds(),
+    )
+
+
+SEARCH_INDEXES: dict[str, Factory[SearchIndex]] = {"meilisearch": meilisearch_index}
 LANGUAGE_MODELS: dict[str, Factory[LanguageModel]] = {"openai-compatible": openai_language_model}
 EMBEDDINGS: dict[str, Factory[Embeddings]] = {"openai-compatible": openai_embeddings}
 
@@ -275,6 +290,13 @@ def build_container(settings: Settings) -> Container:
     object_store = _select("object_store", settings.storage_type, OBJECT_STORES, settings)
     if isinstance(object_store, S3ObjectStore):
         closers.append(object_store.aclose)
+    search_index = (
+        _select("search_index", "meilisearch", SEARCH_INDEXES, settings)
+        if settings.meilisearch_url is not None
+        else None
+    )
+    if isinstance(search_index, MeilisearchIndex):
+        closers.append(search_index.aclose)
     return Container(
         unit_of_work=persistence.unit_of_work,
         event_bus=persistence.event_bus,
@@ -289,11 +311,7 @@ def build_container(settings: Settings) -> Container:
         oidc=(
             _select("oidc", "authlib", OIDC_PROVIDERS, settings) if settings.oidc_enabled else None
         ),
-        search_index=(
-            _select("search_index", "meilisearch", SEARCH_INDEXES, settings)
-            if settings.meilisearch_url is not None
-            else None
-        ),
+        search_index=search_index,
         language_model=(
             _select("llm", "openai-compatible", LANGUAGE_MODELS, settings)
             if settings.llm_base_url is not None
