@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from papiq.adapters.outbound.memory import MemorySearchIndex
+from papiq.composition import container
 from papiq.composition.__main__ import main
 from tests.builders import PASSWORD, SECRET_KEY, TRUSTED_PROXY
 
@@ -75,6 +77,29 @@ def test_migrate_sets_up_an_empty_sqlite_database(
     assert {"documents", "jobs", "outbox", "alembic_version"} <= tables
     events = [json.loads(line)["event"] for line in capsys.readouterr().err.splitlines()]
     assert events.count("database migrated") == 2
+
+
+def test_reindex_needs_a_search_index(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["reindex"]) == 1
+    assert "PAPIQ_MEILISEARCH_URL is not set" in capsys.readouterr().err
+
+
+def test_reindex_rebuilds_the_index(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    monkeypatch.setenv("PAPIQ_DB_SQLITE_PATH", str(tmp_path / "papiq.db"))
+    monkeypatch.setenv("PAPIQ_MEILISEARCH_URL", "http://meilisearch:7700")
+    index = MemorySearchIndex()
+    monkeypatch.setitem(container.SEARCH_INDEXES, "meilisearch", lambda _: index)
+    for table, name in ((container.OCR_ENGINES, "ocrmypdf"), (container.PARSERS, "docling")):
+        monkeypatch.setitem(table, name, lambda _: object())
+    assert main(["migrate"]) == 0
+
+    assert main(["reindex"]) == 0
+
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    done = [event for event in events if event["event"] == "reindex finished"]
+    assert [(e["documents"], e["queued"], e["removed"]) for e in done] == [(0, 0, 0)]
 
 
 def test_failed_migration_exits_one(

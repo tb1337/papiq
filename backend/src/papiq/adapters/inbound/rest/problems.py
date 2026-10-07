@@ -25,6 +25,7 @@ from papiq.core.domain.errors import (
     NotFoundError,
     OpenFieldsError,
     PermissionDeniedError,
+    SearchError,
     SecondFactorRequiredError,
     TooManyAttemptsError,
     UnsupportedMediaTypeError,
@@ -174,4 +175,5 @@ _STATUSES: list[tuple[type[Exception], int]] = [
     (ConflictError, 409),
     (UploadTooLargeError, 413),
     (MalformedUploadError, 400),
+    (SearchError, 503),
 ]

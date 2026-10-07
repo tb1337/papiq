@@ -1,4 +1,4 @@
-"""Where document content goes: language model and embedding endpoints outside the local
+"""Where document content goes: language model, embedding and search endpoints outside the local
 network are reported at start, because document text leaves the system there."""
 
 import ipaddress
@@ -22,7 +22,7 @@ def is_local_host(host: str) -> bool:
 def external_endpoints(settings: Settings) -> dict[str, str]:
     """The configured endpoints that are not local: variable name to host."""
     found: dict[str, str] = {}
-    for name in ("llm_base_url", "embedding_base_url"):
+    for name in ("llm_base_url", "embedding_base_url", "meilisearch_url"):
         url = getattr(settings, name)
         if url is not None and url.host is not None and not is_local_host(url.host):
             found[f"PAPIQ_{name.upper()}"] = url.host

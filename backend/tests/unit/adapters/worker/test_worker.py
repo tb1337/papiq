@@ -9,13 +9,14 @@ from datetime import timedelta
 import pytest
 
 from papiq.adapters.inbound.worker import Worker
-from papiq.adapters.outbound.memory import MemoryEventBus
+from papiq.adapters.outbound.memory import MemoryEventBus, MemorySearchIndex
 from papiq.composition.container import Container, Services, build_memory_container
 from papiq.composition.container import build_services as build_all_services
 from papiq.core.domain.documents import Document
 from papiq.core.domain.events import DomainEvent
 from papiq.core.domain.pipeline import Lane, Step, StepResult
 from papiq.core.domain.users import User
+from papiq.core.services.indexing import SUBSCRIBER
 from papiq.core.services.maintenance import CLEANUP_JOB
 from tests import builders
 from tests.builders import incoming
@@ -109,6 +110,35 @@ async def test_documents_are_processed_and_events_delivered() -> None:
         await until(lambda: received and received[-1].type == "document.lane_changed")
     assert await lane(services, user, document) is Lane.GREEN
     assert received[0].type == "document.received"
+
+
+async def test_documents_reach_the_search_index() -> None:
+    container = build_memory_container()
+    services = build_services(container)
+    index = container.search_index
+    assert isinstance(index, MemorySearchIndex) and services.indexing is not None
+    container.event_bus.subscribe(SUBSCRIBER, services.indexing.on_event)
+    user = await owner(container)
+    service = Worker(
+        pipeline=services.pipeline,
+        maintenance=services.maintenance,
+        event_bus=container.event_bus,
+        concurrency=2,
+        poll_interval=FAST,
+        dispatch_interval=FAST,
+        shutdown_timeout=timedelta(seconds=5),
+        indexing=services.indexing,
+    )
+    async with running(service):
+        document = await services.pipeline.receive(
+            user.id, incoming((SAMPLES / "scan.pdf").read_bytes()), filename="invoice.pdf"
+        )
+        await until(lambda: index.documents.get(document.id) is not None)
+        await until(lambda: index.documents[document.id].lane_value == "green")
+    assert index.documents[document.id].filename == "invoice.pdf"
+    async with container.unit_of_work() as uow:  # the reconciliation is scheduled as well
+        job = await uow.jobs.claim(now=container.clock.now() + timedelta(days=1), lease=FAST)
+    assert job is not None
 
 
 async def test_the_cleanup_is_scheduled_at_start() -> None:

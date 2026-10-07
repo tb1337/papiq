@@ -25,7 +25,8 @@ SHUTDOWN_TIMEOUT = 10
 
 
 def health_checks(container: Container) -> dict[str, HealthCheck]:
-    """Reachability of the database and the object store."""
+    """Reachability of the database, the object store and, if configured, the search index (the
+    API works without it)."""
 
     async def database() -> None:
         async with container.unit_of_work() as uow:
@@ -39,7 +40,10 @@ def health_checks(container: Container) -> dict[str, HealthCheck]:
         else:
             await store.exists("health/probe")
 
-    return {"database": database, "object_store": object_store}
+    checks: dict[str, HealthCheck] = {"database": database, "object_store": object_store}
+    if container.search_index is not None:
+        checks["search"] = container.search_index.check
+    return checks
 
 
 def build_app(
@@ -53,11 +57,14 @@ def build_app(
             drawers=services.drawers,
             master_data=services.master_data,
             oidc=services.oidc,
+            search=services.search,
+            indexing=services.indexing,
             cookie_secure=settings.cookie_secure,
             pipeline=services.pipeline,
             documents=services.documents,
             event_bus=container.event_bus,
             health_checks=health_checks(container),
+            optional_checks=frozenset({"search"}),
             max_upload_size=int(settings.upload_max_size),
             max_request_size=int(settings.request_max_size),
             events_poll_interval=settings.events_poll_interval,
