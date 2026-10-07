@@ -7,8 +7,9 @@ from papiq.core.ports.identity import IdentityProvider
 from papiq.core.ports.job_queue import JobQueue
 from papiq.core.ports.llm import LanguageModel
 from papiq.core.ports.object_store import ObjectStore
-from papiq.core.ports.ocr import Ocr
-from papiq.core.ports.parser import DocumentParser
+from papiq.core.ports.ocr import Ocr, OcrResult
+from papiq.core.ports.parser import DocumentParser, ParseResult
+from papiq.core.ports.preview import PreviewRenderer
 from papiq.core.ports.repository import (
     AttributeDefinitionRepository,
     ContactRepository,
@@ -42,7 +43,10 @@ __all__ = [
     "NamedRepository",
     "ObjectStore",
     "Ocr",
+    "OcrResult",
     "Outbox",
+    "ParseResult",
+    "PreviewRenderer",
     "ProcessingLog",
     "Repository",
     "SearchIndex",

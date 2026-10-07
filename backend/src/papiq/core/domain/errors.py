@@ -42,3 +42,12 @@ class DuplicateDocumentError(ConflictError):
 
 class ConcurrencyError(ConflictError):
     """The entity was changed by someone else since it was read (stale version)."""
+
+
+class UnprocessableDocumentError(DomainError):
+    """The file cannot be processed, e.g. because it is damaged or encrypted. Repeating the
+    step would not help."""
+
+
+class UnsupportedMediaTypeError(ValidationError):
+    """The file type is not supported."""

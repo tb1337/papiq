@@ -3,6 +3,9 @@
 import pytest
 
 from papiq.adapters.outbound.memory import (
+    FakeOcr,
+    FakeParser,
+    FakePreviewRenderer,
     ManualClock,
     MemoryDatabase,
     MemoryEventBus,
@@ -15,6 +18,7 @@ from tests.contracts.clock import ClockContract
 from tests.contracts.event_bus import EventBusContract, EventBusFactory
 from tests.contracts.job_queue import JobQueueContract
 from tests.contracts.object_store import ObjectStoreContract
+from tests.contracts.processing import OcrContract, ParserContract, PreviewRendererContract
 from tests.contracts.unit_of_work import UnitOfWorkContract
 
 
@@ -65,4 +69,31 @@ class TestMemoryObjectStore(ObjectStoreContract):
 
 
 class TestManualClock(ClockContract):
+    pass
+
+
+@pytest.fixture
+def ocr() -> FakeOcr:
+    return FakeOcr()
+
+
+@pytest.fixture
+def parser() -> FakeParser:
+    return FakeParser()
+
+
+@pytest.fixture
+def preview_renderer() -> FakePreviewRenderer:
+    return FakePreviewRenderer()
+
+
+class TestFakeOcr(OcrContract):
+    pass
+
+
+class TestFakeParser(ParserContract):
+    pass
+
+
+class TestFakePreviewRenderer(PreviewRendererContract):
     pass
