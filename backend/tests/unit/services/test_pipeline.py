@@ -346,18 +346,22 @@ async def test_an_unprocessable_document_fails_at_once(world: World) -> None:
 
 
 async def test_a_cancelled_step_releases_its_job_at_once(world: World) -> None:
+    """Interruptions (the worker stops) do not use up the attempts of the retry policy."""
     blocking = Blocks()
     pipeline = world.pipeline({Step.OCR: blocking})
     owner, document = await receive(world, pipeline)
-    task = asyncio.create_task(pipeline.run_next_job())
-    await blocking.started.wait()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    for _ in range(5):  # more than RetryPolicy.max_attempts
+        blocking.started.clear()
+        task = asyncio.create_task(pipeline.run_next_job())
+        await blocking.started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
     (job,) = [job for job in world.database.jobs.values() if job.payload["step"] == "ocr"]
-    assert (job.status, job.run_at, job.last_error) == (
+    assert (job.status, job.tries, job.run_at, job.last_error) == (
         JobStatus.QUEUED,
+        0,
         world.clock.now(),
         "interrupted: the worker stopped",
     )

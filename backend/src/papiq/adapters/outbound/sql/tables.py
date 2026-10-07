@@ -204,6 +204,8 @@ jobs = Table(
     Column("dedup_key", Text, nullable=True),
     Column("status", Text, nullable=False),
     Column("attempts", Integer, nullable=False),
+    # Claims given back unfinished; they do not count against the retry policy.
+    Column("releases", Integer, nullable=False, server_default="0"),
     Column("run_at", UtcDateTime, nullable=False),
     Column("locked_until", UtcDateTime, nullable=True),
     Column("last_error", Text, nullable=True),

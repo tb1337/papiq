@@ -245,8 +245,8 @@ class PipelineService:
         lease each time) fails without running again.
 
         If the caller is cancelled after the claim (the worker shuts down), the job is released
-        at once to run again, instead of waiting for its lease to expire. The release still
-        counts as an attempt.
+        at once to run again, instead of waiting for its lease to expire; the interrupted claim
+        does not count as an attempt.
         """
         async with self._uow() as uow:
             job = await uow.jobs.claim(now=self._clock.now(), lease=self._lease, kinds=[STEP_JOB])
@@ -274,10 +274,10 @@ class PipelineService:
             return
 
         started = self._clock.now()
-        if job.attempts > self._retry.max_attempts:
+        if job.tries > self._retry.max_attempts:
             reason = (
                 f"step did not finish in {self._retry.max_attempts} attempts "
-                "(the worker stopped or ran out of time each time)"
+                "(the worker died or ran out of time each time)"
             )
             await self._record(job, document_id, step, run, _failed(reason), started)
             return
@@ -287,10 +287,10 @@ class PipelineService:
             result = _failed(str(error))
         except Exception as error:
             reason = f"{type(error).__name__}: {error}"
-            retry_at = self._retry.next_run(job.attempts, self._clock.now())
+            retry_at = self._retry.next_run(job.tries, self._clock.now())
             log.warning(
                 "pipeline step failed",
-                extra={"document_id": str(document_id), "step": step, "attempt": job.attempts},
+                extra={"document_id": str(document_id), "step": step, "attempt": job.tries},
                 exc_info=True,
             )
             if retry_at is None:
@@ -362,7 +362,7 @@ class PipelineService:
         its claim meanwhile."""
         try:
             async with self._uow() as uow:
-                await uow.jobs.reschedule(
+                await uow.jobs.release(
                     job, run_at=self._clock.now(), error="interrupted: the worker stopped"
                 )
                 await uow.commit()

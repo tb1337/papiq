@@ -63,7 +63,8 @@ SQLAlchemy 2 Core (async; aiosqlite, asyncpg); the domain classes are not ORM-ma
   never skips a late commit. The event bus is polled (`dispatch`); handlers run outside of
   transactions; failed deliveries are kept per subscriber in `event_retries` and repeated with
   growing delay (`DeliveryRetry`) until they are given up. `purge` removes events every
-  subscription has handled; `JobQueue.purge` removes finished jobs.
+  subscription has handled; `JobQueue.purge` removes finished jobs; `JobQueue.release` gives a
+  job back unfinished without counting the attempt (`Job.tries`).
 - Claiming jobs uses `FOR UPDATE SKIP LOCKED` on Postgres and the write lock on SQLite.
 
 Migrations are one Alembic chain for both databases (batch mode on SQLite), in
@@ -105,7 +106,8 @@ Receive → OCR → parse run as jobs (`pipeline.step`); the steps after parsing
   on timeout or cancellation the process group is killed. The job lease is the longer limit
   plus two minutes, so a step normally keeps its claim; if it overruns (e.g. a slow S3
   transfer), another worker takes the job over and the late result is discarded. A step
-  interrupted by a stopping worker is released at once; that still counts as an attempt.
+  interrupted by a stopping worker is released at once (`JobQueue.release`); that does not
+  count against `PAPIQ_STEP_MAX_ATTEMPTS`.
 - OCRmyPDF: `--skip-text` (pages with text are not recognised again), `--output-type pdfa`,
   languages `PAPIQ_OCR_LANGUAGES`. Images whose stated resolution gives an implausible page
   size (none, or 72 dpi from a phone) are scaled to the long edge of A4; transparency is put on
