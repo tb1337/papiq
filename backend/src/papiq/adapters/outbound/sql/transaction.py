@@ -93,6 +93,8 @@ class Transaction:
 
     async def _close(self) -> None:
         self._closed = True
+        if self._writing:
+            self.database.end_write()
         if self._connection is not None:
             connection, self._connection = self._connection, None
             await connection.close()

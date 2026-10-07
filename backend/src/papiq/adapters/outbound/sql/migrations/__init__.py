@@ -43,6 +43,7 @@ async def migrate(database: Database, revision: str = "head") -> None:
                     raise RuntimeError(f"migration breaks foreign keys: {violations}")
             await connection.commit()
         finally:
+            database.end_write()
             if database.is_sqlite:
                 await connection.rollback()
                 await connection.exec_driver_sql("PRAGMA foreign_keys=ON")

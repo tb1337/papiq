@@ -1,6 +1,9 @@
 """The SQL adapters on SQLite pass every contract suite and the SQL suites."""
 
+import asyncio
 from decimal import Decimal
+
+import pytest
 
 from sqlalchemy import text
 
@@ -67,3 +70,48 @@ async def test_decimals_and_timestamps_are_stored_as_exact_text(
         created = await connection.execute(text("SELECT created_at FROM documents"))
         assert tuple(value.one()) == ("-12.30", "text")
         assert created.scalar() == "2026-10-06 12:00:00.000000"
+
+
+async def test_a_second_writing_unit_in_the_same_task_fails_at_once(
+    uow_factory: UnitOfWorkFactory,
+) -> None:
+    """It would wait for its own write lock until the busy timeout."""
+    async with uow_factory() as outer:
+        await outer.users.add(builders.user("outer"))
+        async with uow_factory() as inner:
+            await inner.users.find_by_username("outer")  # reading is fine
+            with pytest.raises(RuntimeError, match="already has an open write transaction"):
+                await inner.users.add(builders.user("inner"))
+        await outer.commit()
+
+    async with uow_factory() as after:  # the lock was released with the commit
+        await after.users.add(builders.user("after"))
+        await after.commit()
+
+
+async def test_other_tasks_wait_for_the_writer(uow_factory: UnitOfWorkFactory) -> None:
+    order: list[str] = []
+
+    async def write(name: str, hold: float) -> None:
+        async with uow_factory() as uow:
+            await uow.users.add(builders.user(name))
+            order.append(f"{name} writes")
+            await asyncio.sleep(hold)
+            await uow.commit()
+            order.append(f"{name} committed")
+
+    first = asyncio.create_task(write("first", 0.2))
+    await asyncio.sleep(0.05)
+    await write("second", 0)
+    await first
+    assert order == ["first writes", "first committed", "second writes", "second committed"]
+
+
+async def test_a_failed_unit_releases_the_task(uow_factory: UnitOfWorkFactory) -> None:
+    with pytest.raises(ValueError, match="boom"):
+        async with uow_factory() as uow:
+            await uow.users.add(builders.user("a"))
+            raise ValueError("boom")
+    async with uow_factory() as uow:
+        await uow.users.add(builders.user("b"))
+        await uow.commit()
