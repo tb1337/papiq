@@ -15,7 +15,7 @@ from papiq.core.domain.permissions import (
     document_access,
     is_document_owner,
 )
-from papiq.core.domain.pipeline import StepRun
+from papiq.core.domain.pipeline import Lane, StepRun
 from papiq.core.ports import Clock, DocumentFilter, ObjectStore, UnitOfWork, UnitOfWorkFactory
 from papiq.core.ports.preview import PREVIEW_MEDIA_TYPE
 from papiq.core.services._access import (
@@ -25,6 +25,7 @@ from papiq.core.services._access import (
     visible_drawer,
     writable_document,
 )
+from papiq.core.services.inbox import InboxItem, Review, open_steps, step_reviews
 from papiq.core.services.maintenance import REMOVE_FILES_JOB
 from papiq.core.services.objects import archive_key, original_key, preview_key
 
@@ -159,6 +160,35 @@ class DocumentService:
             if not is_document_owner(user, document):
                 raise PermissionDeniedError(f"only the owner reads the processing log of {id}")
             return await uow.processing_log.list_for(id)
+
+    async def inbox(
+        self, actor: UserId, *, before: DocumentId | None = None, limit: int = 50
+    ) -> list[InboxItem]:
+        """The caller's yellow and red documents, newest first, with what is open in them."""
+        limit = max(1, min(limit, MAX_PAGE))
+        waiting = DocumentFilter(lanes=frozenset({Lane.YELLOW, Lane.RED}))
+        async with self._uow() as uow:
+            await load_actor(uow, actor)
+            documents = await uow.documents.query_visible(
+                actor, waiting, before=before, limit=limit
+            )
+            items = []
+            for document in documents:
+                if document.owner_id != actor:  # only owners see yellow and red documents
+                    continue
+                log = await uow.processing_log.list_for(document.id)
+                items.append(InboxItem(document, open_steps(document, log)))
+        return items
+
+    async def review(self, actor: UserId, id: DocumentId) -> Review:
+        """Owner only: what is open, and what the model proposed and how it was checked."""
+        async with self._uow() as uow:
+            user = await load_actor(uow, actor)
+            document, _ = await readable_document(uow, user, id)
+            if not is_document_owner(user, document):
+                raise PermissionDeniedError(f"only the owner reviews document {id}")
+            log = await uow.processing_log.list_for(id)
+        return Review(document, open_steps(document, log), step_reviews(log))
 
     async def update_metadata(
         self, actor: UserId, id: DocumentId, changes: DocumentChanges
