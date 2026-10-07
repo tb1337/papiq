@@ -18,6 +18,7 @@ from papiq.adapters.outbound.memory import (
     MemoryDatabase,
     MemoryEventBus,
     MemoryObjectStore,
+    MemorySearchIndex,
     MemoryUnitOfWorkFactory,
 )
 from papiq.core.domain.errors import EmbeddingsError, LanguageModelError
@@ -45,6 +46,7 @@ from tests.contracts.job_queue import JobQueueContract
 from tests.contracts.language_model import EmbeddingsContract, LanguageModelContract
 from tests.contracts.object_store import ObjectStoreContract
 from tests.contracts.processing import OcrContract, ParserContract, PreviewRendererContract
+from tests.contracts.search_index import DIMENSIONS, SearchIndexContract
 from tests.contracts.unit_of_work import UnitOfWorkContract
 
 
@@ -210,4 +212,13 @@ def failing_embeddings() -> FakeEmbeddings:
 
 
 class TestFakeEmbeddings(EmbeddingsContract):
+    pass
+
+
+@pytest.fixture
+def search_index() -> MemorySearchIndex:
+    return MemorySearchIndex(dimensions=DIMENSIONS)
+
+
+class TestMemorySearchIndex(SearchIndexContract):
     pass
