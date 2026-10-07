@@ -1,5 +1,6 @@
 """`/auth`: signing in and out, the caller's account, TOTP, API tokens, OpenID Connect."""
 
+from datetime import UTC
 from typing import Annotated
 from uuid import UUID
 
@@ -267,7 +268,10 @@ async def create_token(
     body: TokenCreate, principal: SessionPrincipal, context: Context
 ) -> TokenCreated:
     token, value = await context.auth.create_api_token(
-        principal.id, body.name, body.scope, expires_at=body.expires_at
+        principal.id,
+        body.name,
+        body.scope,
+        expires_at=None if body.expires_at is None else body.expires_at.astimezone(UTC),
     )
     return TokenCreated(**TokenOut.of(token).model_dump(), token=value)
 
