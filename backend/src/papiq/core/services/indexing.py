@@ -14,9 +14,11 @@ into the index. A job is idempotent and may be repeated.
   database after the write.
 - Vectors are computed from sections of the text (`PAPIQ_SEARCH_CHUNK_SIZE`, at most
   `PAPIQ_SEARCH_MAX_CHUNKS`) and only when the sections differ from those of the indexed
-  vectors: a change of metadata costs no embedding.
-- Failed jobs are repeated with a growing delay (about six hours in all). If only the embedding
-  fails, the last attempt writes the document without vectors; the reconciliation adds them.
+  vectors: a change of lane, drawer or date costs no embedding.
+- Failed jobs are repeated with a growing delay (about three hours in all). If only the
+  embedding fails, the document is written at once with the vectors it has (the words must not
+  wait for the vectors), the job is repeated, and the last attempt writes without vectors; the
+  reconciliation adds them.
 - `search.refresh` follows the renaming of a contact, document type or tag: it queues an index
   job for every document that carries it.
 - `search.reconcile` (recurring) compares the index with the database, queues jobs for what
@@ -28,7 +30,7 @@ import asyncio
 import hashlib
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
@@ -81,6 +83,7 @@ class IndexingPolicy:
     chunk_size: int = 1500  # characters per section that gets a vector
     max_chunks: int = 8  # sections per document; 1: one vector per document
     document_prefix: str = ""  # put before each section, for models that ask for it
+    dimensions: int | None = None  # the length of the vectors; others are refused
     reconcile_interval: timedelta = timedelta(hours=6)
     job_lease: timedelta = timedelta(minutes=10)
     rebuild_lease: timedelta = timedelta(hours=6)
@@ -149,11 +152,13 @@ class IndexingService:
             await uow.commit()
 
     async def schedule(self) -> None:
-        """Make sure a reconciliation is queued; due at once unless one is queued already."""
+        """At the start of a worker: make sure the recurring reconciliation is queued, and run
+        one now, as the index may have lost documents (or all) while no worker was running."""
         async with self._uow() as uow:
             await uow.jobs.enqueue(
                 RECONCILE_JOB, {}, run_at=self._clock.now(), dedup_key=RECONCILE_JOB
             )
+            await uow.jobs.enqueue(RECONCILE_JOB, {"once": True}, run_at=self._clock.now())
             await uow.commit()
 
     async def request_rebuild(self, actor: UserId) -> None:
@@ -199,7 +204,7 @@ class IndexingService:
             await self._failed(job, error)
             return
         if job.kind == RECONCILE_JOB:
-            await self._finish(job, next_reconcile=True)
+            await self._finish(job, next_reconcile=job.payload.get("once") is not True)
         else:
             await self._finish(job)
 
@@ -286,6 +291,11 @@ class IndexingService:
                 entry = await self._compose(snapshot, text, state)
             except EmbeddingsError as error:
                 if not tolerate_embedding_failure:
+                    # The words must not wait for the vectors: write what is known now (the
+                    # vectors that are there stay), then let the job be repeated.
+                    await self._index.upsert(
+                        [await self._compose(snapshot, text, state, embed=False, keep=True)]
+                    )
                     raise
                 log.warning(
                     "indexing without vectors, the embedding failed",
@@ -316,12 +326,21 @@ class IndexingService:
         return data.decode("utf-8", errors="replace")[: self._policy.max_text]
 
     async def _compose(
-        self, snapshot: _Snapshot, text: str, state: IndexState | None, *, embed: bool = True
+        self,
+        snapshot: _Snapshot,
+        text: str,
+        state: IndexState | None,
+        *,
+        embed: bool = True,
+        keep: bool = False,
     ) -> IndexDocument:
-        """The index entry; `state` is what the index holds now (None: build for a new index)."""
+        """The index entry; `state` is what the index holds now (None: build for a new index).
+        Without `embed` the entry has no vectors, or with `keep` the ones the index holds."""
         document = snapshot.document
         vectors: tuple[tuple[float, ...], ...] | None = ()
         stamp: EmbeddingStamp | None = None
+        if not embed and keep and state is not None and state.embedding is not None:
+            vectors = None
         if embed and self._embeddings is not None:
             sections = self._sections(snapshot, text)
             stamp = EmbeddingStamp(
@@ -333,6 +352,12 @@ class IndexingService:
                 result = await self._embeddings.embed(sections)
                 if len(result.vectors) != len(sections):
                     raise EmbeddingsError(f"expected {len(sections)} vectors")
+                wanted = self._policy.dimensions
+                if wanted is not None and any(len(vector) != wanted for vector in result.vectors):
+                    raise EmbeddingsError(
+                        f"the vectors of {self._embeddings.model} do not have the "
+                        f"{wanted} numbers of PAPIQ_EMBEDDING_DIMENSIONS"
+                    )
                 vectors = tuple(tuple(vector) for vector in result.vectors)
         return IndexDocument(
             id=document.id,
@@ -394,19 +419,22 @@ class IndexingService:
 
     # --- the whole index ------------------------------------------------------------------------
 
-    async def reconcile(self) -> Reconciled:
+    async def reconcile(self, also: Collection[DocumentId] = ()) -> Reconciled:
         """Queue index jobs for documents that are missing or stale in the index and remove
         entries of documents that are gone. A stale document has another version than the
-        database, or (with embeddings) vectors of no or another model."""
+        database, or (with embeddings) vectors of no or another model. `also`: documents to
+        queue in any case."""
         indexed = {state.id: state async for state in self._index.states()}
         async with self._uow() as uow:
             documents = await uow.documents.list_all()
         model = None if self._embeddings is None else self._embeddings.model
+        queue = set(also)
         stale: list[DocumentId] = []
         for document in documents:
             state = indexed.pop(document.id, None)
             if (
-                state is None
+                document.id in queue
+                or state is None
                 or state.version != document.version
                 or (
                     model is not None
@@ -426,6 +454,7 @@ class IndexingService:
         async with self._uow() as uow:
             ids = sorted(document.id for document in await uow.documents.list_all())
         build = await self._index.begin_rebuild()
+        built: dict[DocumentId, tuple[object, ...]] = {}
         try:
             added = 0
             for start in range(0, len(ids), self._policy.batch_size):
@@ -433,6 +462,7 @@ class IndexingService:
                 for id in ids[start : start + self._policy.batch_size]:
                     snapshot = await self._snapshot(id)
                     if snapshot is not None:  # deleted meanwhile
+                        built[id] = snapshot.key
                         entries.append(
                             await self._compose(snapshot, await self._read_text(id), None)
                         )
@@ -444,8 +474,14 @@ class IndexingService:
         except BaseException:
             await asyncio.shield(build.abort())
             raise
-        # Jobs that ran during the rebuild wrote to the old index.
-        reconciled = await self.reconcile()
+        # Jobs that ran during the rebuild wrote to the old index. What changed since a document
+        # was built, a rename of a contact, type or tag included, is queued again.
+        changed = []
+        for id, key in built.items():
+            current = await self._snapshot(id)
+            if current is None or current.key != key:
+                changed.append(id)
+        reconciled = await self.reconcile(changed)
         log.info("search index rebuilt", extra={"documents": added})
         return Rebuilt(documents=added, queued=reconciled.queued, removed=reconciled.removed)
 

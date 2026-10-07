@@ -11,7 +11,7 @@ from papiq.adapters.outbound.memory import (
 )
 from papiq.core.domain.attributes import AttributeType
 from papiq.core.domain.documents import DocumentChanges
-from papiq.core.domain.errors import PermissionDeniedError, SearchIndexError
+from papiq.core.domain.errors import EmbeddingsError, PermissionDeniedError, SearchIndexError
 from papiq.core.domain.jobs import JobStatus
 from papiq.core.domain.pipeline import Lane, Step
 from papiq.core.domain.search import IndexDocument
@@ -212,7 +212,7 @@ async def test_a_failing_embedding_service_is_waited_for(world: World) -> None:
     await setup.bus.dispatch()
     indexing = setup.indexing
     assert await run_due(indexing) == 2  # the events `received` and `step_completed`
-    assert received.id not in setup.index.documents
+    assert setup.entry(received.id).vectors == ()  # found by its words, the vectors follow
     jobs = index_jobs(world)
     assert [job.status for job in jobs] == [JobStatus.QUEUED] * 2
     assert all(job.run_at > world.clock.now() for job in jobs)
@@ -236,8 +236,7 @@ async def test_the_last_attempt_writes_without_vectors_and_the_reconciliation_ad
     await setup.put_text(received.id, "Text")
     await setup.bus.dispatch()
     indexing = setup.indexing
-    for attempt in range(10):
-        assert received.id not in setup.index.documents, attempt
+    for _ in range(10):
         world.clock.advance(HOUR)
         assert await run_due(indexing) == 2
     entry = setup.entry(received.id)
@@ -248,6 +247,42 @@ async def test_the_last_attempt_writes_without_vectors_and_the_reconciliation_ad
     assert (await indexing.reconcile()).queued == 1
     await setup.settle(pipeline=False)
     assert len(setup.entry(received.id).vectors or ()) == 1
+
+
+async def test_an_embedding_failure_keeps_the_vectors_that_are_there(world: World) -> None:
+    broken = BrokenEmbeddings()
+    broken.up = True
+    setup = Setup(world, embeddings=broken)
+    owner = await world.user()
+    document = await setup.document(owner)
+    before = setup.entry(document.id)
+    assert before.embedding is not None
+    stamp = before.embedding
+
+    broken.up = False
+    await world.documents.update_metadata(owner.id, document.id, DocumentChanges(title="Neu"))
+    await setup.settle(pipeline=False)
+    entry = setup.entry(document.id)
+    assert entry.title == "Neu"  # the words follow at once
+    assert entry.vectors == before.vectors  # the vectors of the old text stay
+    assert entry.embedding == stamp
+
+    broken.up = True
+    world.clock.advance(HOUR)
+    await setup.settle(pipeline=False)
+    assert setup.entry(document.id).embedding != stamp
+
+
+async def test_vectors_of_another_length_are_refused(world: World) -> None:
+    setup = Setup(world, policy=IndexingPolicy(dimensions=3))  # the fake vectors have more
+    owner = await world.user()
+    received = await world.pipeline().receive(owner.id, incoming(b"%PDF-1 f"), filename="f.pdf")
+    await setup.put_text(received.id, "Text")
+    with pytest.raises(EmbeddingsError, match="PAPIQ_EMBEDDING_DIMENSIONS"):
+        await setup.indexing.index_document(received.id)
+    assert setup.entry(received.id).vectors == ()  # still found by its words
+    await setup.indexing.index_document(received.id, tolerate_embedding_failure=True)
+    assert setup.entry(received.id).embedding is None
 
 
 async def test_a_job_that_keeps_failing_is_given_up(world: World) -> None:
@@ -348,8 +383,12 @@ async def test_the_reconciliation_notices_vectors_of_another_model(world: World)
 async def test_the_reconciliation_repeats_itself(setup: Setup) -> None:
     await setup.indexing.schedule()
     await setup.indexing.schedule()
-    assert [j.kind for j in setup.world.database.jobs.values()] == [RECONCILE_JOB]
-    assert await setup.indexing.run_next_job()
+    jobs = setup.world.database.jobs.values()
+    # One that recurs, and one for each start of a worker, which runs once.
+    assert sorted(j.payload.get("once") is True for j in jobs) == [False, True, True]
+    assert all(j.kind == RECONCILE_JOB for j in jobs)
+    while await setup.indexing.run_next_job():
+        pass
     queued = [j for j in setup.world.database.jobs.values() if j.status is JobStatus.QUEUED]
     assert [j.kind for j in queued] == [RECONCILE_JOB]
     assert queued[0].run_at == setup.world.clock.now() + setup.policy.reconcile_interval
@@ -384,6 +423,29 @@ async def test_a_rebuild_notices_changes_made_while_it_ran(world: World) -> None
     assert (result.documents, result.queued) == (2, 1)  # the new index has the old version
     await setup.settle(pipeline=False)
     assert setup.entry(earlier).title == "Geändert"
+
+
+async def test_a_rebuild_notices_a_rename_made_while_it_ran(world: World) -> None:
+    index = HookedIndex()
+    setup = Setup(world, index=index, policy=IndexingPolicy(batch_size=1))
+    owner, admin = await world.user(), await world.user(role=Role.ADMIN)
+    first, second = await setup.document(owner, "one"), await setup.document(owner, "two")
+    contact = await setup.master_data.create_contact(admin.id, "Stadtwerke")
+    for document in (first, second):
+        changes = DocumentChanges(contact_id=contact.id)
+        await world.documents.update_metadata(owner.id, document.id, changes)
+    await setup.settle(pipeline=False)
+
+    async def rename() -> None:
+        # The refresh and index jobs run now and write to the index that is about to be replaced.
+        await setup.master_data.rename_contact(admin.id, contact.id, "Energie AG")
+        await setup.settle(pipeline=False)
+
+    index.after_first_batch = rename
+    result = await setup.indexing.rebuild()
+    assert result.queued >= 1  # a document built with the old name; the version did not change
+    await setup.settle(pipeline=False)
+    assert {setup.entry(first.id).contact, setup.entry(second.id).contact} == {"Energie AG"}
 
 
 async def test_only_admins_request_a_rebuild(setup: Setup) -> None:

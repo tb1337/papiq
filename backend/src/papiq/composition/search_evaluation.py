@@ -114,8 +114,11 @@ async def run_search_evaluation(
             policy_of(settings),
             backends,
             ratios,
-            indexing=indexing_policy_of(settings),
-            searching=replace(search_policy_of(settings), embed_timeout=QUERY_TIMEOUT),
+            # The length of the vectors is measured per model, not the configured one.
+            indexing=replace(indexing_policy_of(settings), dimensions=None),
+            searching=replace(
+                search_policy_of(settings), embed_timeout=QUERY_TIMEOUT, dimensions=None
+            ),
             progress=say if progress else None,
         )
     finally:

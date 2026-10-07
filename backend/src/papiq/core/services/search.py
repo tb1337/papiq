@@ -37,6 +37,7 @@ class SearchPolicy:
     semantic_ratio: float = 0.5  # weight of the meaning against the words, 0 to 1
     embed_timeout: timedelta = timedelta(seconds=5)  # for the query; then plain full text
     query_prefix: str = ""  # put before the query, for models that ask for it
+    dimensions: int | None = None  # the length of the vectors; a query of another goes by words
 
     def __post_init__(self) -> None:
         if not 0 <= self.semantic_ratio <= 1:
@@ -54,7 +55,7 @@ class SearchItem:
 @dataclass(frozen=True)
 class SearchPage:
     items: list[SearchItem]  # best first; may be fewer than asked for
-    estimated_total: int  # an upper bound of the hits, as far as the caller may see them
+    estimated_total: int  # of the hits, as far as the caller may see them; not exact
     next_offset: int | None  # where the next page starts; None after the last one
     semantic: bool  # whether the meaning took part (it does not if embeddings are off or down)
 
@@ -135,7 +136,9 @@ class SearchService:
             )
 
         end = offset + len(result.hits)
-        more = len(result.hits) == limit and end < min(result.estimated_total, MAX_HITS)
+        # A search with meaning can reach every document, whatever the estimate of the words.
+        reach = MAX_HITS if result.semantic else min(result.estimated_total, MAX_HITS)
+        more = len(result.hits) == limit and end < reach
         return SearchPage(items, result.estimated_total, end if more else None, result.semantic)
 
     async def _embed(self, text: str) -> tuple[float, ...] | None:
@@ -149,7 +152,18 @@ class SearchService:
         except (EmbeddingsError, TimeoutError) as error:
             log.warning("searching without meaning, the query was not embedded: %s", error)
             return None
-        return tuple(result.vectors[0]) if result.vectors else None
+        if not result.vectors:
+            return None
+        vector = tuple(result.vectors[0])
+        wanted = self._policy.dimensions
+        if wanted is not None and len(vector) != wanted:
+            log.warning(
+                "searching without meaning, the query vector has %d numbers, not %d",
+                len(vector),
+                wanted,
+            )
+            return None
+        return vector
 
 
 def _matches(document: Document, filter: DocumentFilter) -> bool:

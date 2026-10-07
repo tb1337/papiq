@@ -56,7 +56,7 @@ class SearchHit:
 @dataclass(frozen=True, kw_only=True)
 class SearchResult:
     hits: list[SearchHit]  # best first
-    estimated_total: int  # an upper bound, not exact
+    estimated_total: int  # of the hits of the words (all with meaning); not exact
     semantic: bool  # whether vectors took part
 
 

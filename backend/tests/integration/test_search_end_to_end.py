@@ -14,12 +14,14 @@ from typing import Any
 
 import httpx2
 import pytest
+from sqlalchemy import func, select
 
 from papiq.adapters.inbound.rest import PREFIX
 from papiq.adapters.inbound.worker import Worker
 from papiq.adapters.outbound.meilisearch import MeilisearchIndex
 from papiq.adapters.outbound.memory import FakeEmbeddings
 from papiq.adapters.outbound.sql import Database, SqlEventBus, SqlUnitOfWorkFactory
+from papiq.adapters.outbound.sql.tables import jobs
 from papiq.composition.api import build_app
 from papiq.composition.container import (
     Container,
@@ -75,6 +77,7 @@ class System:
     client: httpx2.AsyncClient
     settings: Settings
     index_name: str
+    database: Database
 
     async def user(self, role: Role = Role.USER) -> User:
         user = builders.user(role=role)
@@ -114,6 +117,29 @@ class System:
                     await asyncio.sleep(0.2)
         except TimeoutError:
             pytest.fail(f"timeout: {what}")
+
+    async def settled(self) -> None:
+        """Wait until no search job is queued or running."""
+
+        async def active() -> int:
+            statement = (
+                select(func.count())
+                .select_from(jobs)
+                .where(
+                    jobs.c.status.in_(["queued", "running"]),
+                    jobs.c.kind.in_(["search.index", "search.refresh", "search.rebuild"]),
+                )
+            )
+            async with self.database.engine.connect() as connection:
+                return int((await connection.execute(statement)).scalar_one())
+
+        async def idle() -> bool:
+            if await active():
+                return False
+            await asyncio.sleep(0.5)  # events that are still on their way
+            return not await active()
+
+        await self.eventually(idle, "the worker is idle")
 
     async def found(self, user: User, text: str, expected: set[str], **params: Any) -> None:
         """Wait until the search finds exactly `expected` (the index follows a moment later)."""
@@ -170,7 +196,7 @@ async def system(stores: tuple[Database, ObjectStore], settings: Settings) -> As
     running = asyncio.create_task(worker.run())
     try:
         async with serving(app) as url, httpx2.AsyncClient(base_url=url, timeout=30) as client:
-            yield System(container, services, client, settings, name)
+            yield System(container, services, client, settings, name, database)
     finally:
         worker.stop()
         await asyncio.wait_for(running, timeout=60)
@@ -244,7 +270,8 @@ async def test_the_index_is_rebuilt_on_an_empty_meilisearch(system: System) -> N
     await system.found(owner, "Steuerbescheid", {first})
     await system.found(owner, "Versicherungspolice", {second})
 
-    # Meilisearch loses everything.
+    # Meilisearch loses everything, while no job is at work.
+    await system.settled()
     await drop(system.settings, system.index_name)
 
     async def gone() -> bool:
