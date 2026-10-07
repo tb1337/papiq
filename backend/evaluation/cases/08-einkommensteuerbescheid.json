@@ -1,0 +1,50 @@
+{
+  "description": "Income tax assessment with a refund.",
+  "expected": {
+    "lane": "green",
+    "contact": "Finanzamt Musterstadt",
+    "document_type": "Bescheid",
+    "tags": [
+      "Steuer"
+    ],
+    "document_date": "2026-06-18",
+    "attributes": {
+      "Aktenzeichen": "123/456/78901",
+      "Betrag": {
+        "amount": "1234.56",
+        "currency": "EUR"
+      }
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Finanzamt Musterstadt",
+        "evidence": "Finanzamt Musterstadt"
+      },
+      "document_type": "Bescheid",
+      "new_document_type": null,
+      "tags": [
+        "Steuer"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-06-18",
+        "evidence": "Datum: 18.06.2026"
+      }
+    },
+    "attributes": {
+      "Aktenzeichen": {
+        "value": "123/456/78901",
+        "evidence": "Steuernummer: 123/456/78901"
+      },
+      "Betrag": {
+        "value": {
+          "amount": "1234.56",
+          "currency": "EUR"
+        },
+        "evidence": "Erstattungsbetrag von 1.234,56 €"
+      }
+    }
+  }
+}

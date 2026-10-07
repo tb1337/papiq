@@ -1,0 +1,52 @@
+{
+  "description": "Home contents insurance policy.",
+  "expected": {
+    "lane": "green",
+    "contact": "Hanse Versicherung AG",
+    "document_type": "Versicherung",
+    "tags": [
+      "Versicherung",
+      "Wohnung"
+    ],
+    "document_date": "2025-12-01",
+    "attributes": {
+      "Versicherungsnummer": "HR-2026-55501",
+      "Beitrag": {
+        "amount": "89.90",
+        "currency": "EUR"
+      }
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Hanse Versicherung AG",
+        "evidence": "Hanse Versicherung AG"
+      },
+      "document_type": "Versicherung",
+      "new_document_type": null,
+      "tags": [
+        "Versicherung",
+        "Wohnung"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2025-12-01",
+        "evidence": "Hamburg, 01.12.2025"
+      }
+    },
+    "attributes": {
+      "Versicherungsnummer": {
+        "value": "HR-2026-55501",
+        "evidence": "Versicherungsnummer: HR-2026-55501"
+      },
+      "Beitrag": {
+        "value": {
+          "amount": "89.90",
+          "currency": "EUR"
+        },
+        "evidence": "Hausrat Komfort | 89,90 €"
+      }
+    }
+  }
+}

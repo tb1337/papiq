@@ -1,0 +1,50 @@
+{
+  "description": "Credit note for a returned order.",
+  "expected": {
+    "lane": "green",
+    "contact": "Versandhaus Bergmann GmbH",
+    "document_type": "Gutschrift",
+    "tags": [
+      "Einkauf"
+    ],
+    "document_date": "2026-06-25",
+    "attributes": {
+      "Betrag": {
+        "amount": "49.99",
+        "currency": "EUR"
+      },
+      "Kundennummer": "88 77 66"
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Versandhaus Bergmann GmbH",
+        "evidence": "Versandhaus Bergmann GmbH"
+      },
+      "document_type": "Gutschrift",
+      "new_document_type": null,
+      "tags": [
+        "Einkauf"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-06-25",
+        "evidence": "Datum: 25.06.2026"
+      }
+    },
+    "attributes": {
+      "Betrag": {
+        "value": {
+          "amount": "49.99",
+          "currency": "EUR"
+        },
+        "evidence": "schreiben wir Ihnen 49,99 € gut"
+      },
+      "Kundennummer": {
+        "value": "88 77 66",
+        "evidence": "Kundennummer: 88 77 66"
+      }
+    }
+  }
+}
