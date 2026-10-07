@@ -24,6 +24,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels its running build; every push to main is built.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   dev-image:
     runs-on: ubuntu-latest

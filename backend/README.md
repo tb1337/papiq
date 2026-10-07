@@ -377,4 +377,4 @@ test module subclasses each suite as `Test...` and provides the adapter fixture
 The SQL adapter runs the contract suites and `tests/sql_suite.py` (types, concurrency,
 migrations) on SQLite in `tests/unit/adapters/sql` (a migrated database file per test) and on
 Postgres in `tests/integration/adapters/sql` (a database of its own per test session, emptied
-before every test). The CI fails if the Postgres run skips them.
+before every test). The CI job `integration` fails if any integration test skips.
