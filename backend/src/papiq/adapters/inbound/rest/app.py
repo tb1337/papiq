@@ -3,11 +3,30 @@
 import asyncio
 import contextlib
 from collections.abc import AsyncIterator
+from typing import Any
 
 from fastapi import FastAPI
+from fastapi.dependencies.models import Dependant
+from fastapi.routing import APIRoute, iter_route_contexts
 
 from papiq import __version__
-from papiq.adapters.inbound.rest import documents, health, problems, streams
+from papiq.adapters.inbound.rest import (
+    account,
+    documents,
+    drawers,
+    health,
+    master_data,
+    problems,
+    streams,
+    users,
+)
+from papiq.adapters.inbound.rest.auth import (
+    SECURITY,
+    SECURITY_SCHEMES,
+    SESSION_ONLY,
+    authenticate,
+    session_principal,
+)
 from papiq.adapters.inbound.rest.context import ApiContext
 from papiq.adapters.inbound.rest.events import EventHub, dispatch_forever
 from papiq.adapters.inbound.rest.schemas import EventMessage
@@ -17,8 +36,13 @@ PREFIX = "/api/v1"
 DESCRIPTION = """\
 Papiq is a headless document management system; this API is the only way in.
 
-Errors are problem details (RFC 9457, `application/problem+json`). Authentication follows in
-M4: until then every request that needs a user is answered with 401.
+Errors are problem details (RFC 9457, `application/problem+json`).
+
+Authentication: a session cookie from `POST /auth/login` (web UI; changing requests also send
+the header `X-CSRF-Token`) or a personal API token as `Authorization: Bearer papiq_…`. Every
+endpoint except sign-in and health needs one of them (401 without). A `read` token may only
+read (403). Documents and drawers the caller may not see are "not found" (404), the same as
+ones that do not exist.
 """
 
 
@@ -68,8 +92,17 @@ def create_app(context: ApiContext) -> FastAPI:
     app.state.context = context
     app.state.hub = hub
     problems.install(app)
-    for module in (documents, streams, health):
-        app.include_router(module.router, prefix=PREFIX)
+    for router in (
+        account.public,
+        account.router,
+        users.router,
+        *master_data.ROUTERS,
+        drawers.router,
+        documents.router,
+        streams.router,
+        health.router,
+    ):
+        app.include_router(router, prefix=PREFIX)
 
     original_openapi = app.openapi
 
@@ -89,10 +122,33 @@ def create_app(context: ApiContext) -> FastAPI:
         # Validation errors are problems too; FastAPI's own schemas for them are unused.
         for unused in ("HTTPValidationError", "ValidationError"):
             components.pop(unused, None)
+        schema["components"]["securitySchemes"] = SECURITY_SCHEMES
+        for context in iter_route_contexts(app.routes):
+            route = context.original_route
+            if isinstance(route, APIRoute) and route.include_in_schema:
+                for method in context.methods or ():
+                    operation = schema["paths"][context.path_format][method.lower()]
+                    operation["security"] = security_of(route)
         return schema
 
     app.openapi = openapi  # type: ignore[method-assign]
     return app
+
+
+def security_of(route: APIRoute) -> list[dict[str, list[str]]]:
+    """From the route's dependencies: public (none), session only, or session or token."""
+    calls = set(_calls(route.dependant))
+    if session_principal in calls:
+        return SESSION_ONLY
+    if authenticate in calls:
+        return SECURITY
+    return []
+
+
+def _calls(dependant: Dependant) -> Any:
+    for dependency in dependant.dependencies:
+        yield dependency.call
+        yield from _calls(dependency)
 
 
 def close_event_streams(app: FastAPI) -> None:

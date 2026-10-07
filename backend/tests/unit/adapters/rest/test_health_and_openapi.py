@@ -1,18 +1,20 @@
 """Health endpoint and the OpenAPI contract."""
 
+import json
+import re
 from typing import Any
 
 import httpx2
 
 from papiq.adapters.inbound.rest import PREFIX, ApiContext, create_app
 from papiq.composition.container import build_memory_container, build_services
+from tests.builders import PASSWORD, SECRET_KEY
 from tests.unit.adapters.rest.conftest import Api
 
 PROBLEM = "application/problem+json"
 
 
 async def test_health_is_ok_without_authentication(api: Api) -> None:
-    del api.app.dependency_overrides[next(iter(api.app.dependency_overrides))]
     response = await api.client.get(f"{PREFIX}/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "checks": {"database": "ok", "object_store": "ok"}}
@@ -30,6 +32,10 @@ async def test_a_failing_check_makes_the_api_unavailable() -> None:
 
     app = create_app(
         ApiContext(
+            auth=services.auth,
+            users=services.users,
+            drawers=services.drawers,
+            master_data=services.master_data,
             pipeline=services.pipeline,
             documents=services.documents,
             event_bus=container.event_bus,
@@ -57,9 +63,60 @@ async def openapi(api: Api) -> dict[str, Any]:
 
 async def test_openapi_lists_every_endpoint(api: Api) -> None:
     paths = (await openapi(api))["paths"]
+    master_data = {
+        (f"{PREFIX}/{kind}{suffix}", method)
+        for kind in ("contacts", "document-types", "tags", "attributes")
+        for suffix, method in [
+            ("", "get"),
+            ("", "post"),
+            ("/{id}", "get"),
+            ("/{id}", "patch"),
+            ("/{id}", "delete"),
+        ]
+    }
     assert {(path, method) for path, item in paths.items() for method in item} == {
+        (f"{PREFIX}/auth/login", "post"),
+        (f"{PREFIX}/auth/logout", "post"),
+        (f"{PREFIX}/auth/me", "get"),
+        (f"{PREFIX}/auth/password", "post"),
+        (f"{PREFIX}/auth/sessions", "delete"),
+        (f"{PREFIX}/auth/totp", "post"),
+        (f"{PREFIX}/auth/totp/confirm", "post"),
+        (f"{PREFIX}/auth/totp/disable", "post"),
+        (f"{PREFIX}/auth/totp/recovery-codes", "post"),
+        (f"{PREFIX}/auth/tokens", "get"),
+        (f"{PREFIX}/auth/tokens", "post"),
+        (f"{PREFIX}/auth/tokens/{{id}}", "delete"),
+        (f"{PREFIX}/auth/oidc", "get"),
+        (f"{PREFIX}/auth/oidc/login", "get"),
+        (f"{PREFIX}/auth/oidc/callback", "get"),
+        (f"{PREFIX}/auth/oidc/link", "post"),
+        (f"{PREFIX}/auth/oidc/link", "delete"),
+        (f"{PREFIX}/users", "get"),
+        (f"{PREFIX}/users", "post"),
+        (f"{PREFIX}/users/{{id}}", "get"),
+        (f"{PREFIX}/users/{{id}}", "patch"),
+        (f"{PREFIX}/users/{{id}}", "delete"),
+        (f"{PREFIX}/users/{{id}}/password", "post"),
+        (f"{PREFIX}/users/{{id}}/totp", "delete"),
+        (f"{PREFIX}/users/{{id}}/oidc", "delete"),
+        *master_data,
+        (f"{PREFIX}/drawers", "get"),
+        (f"{PREFIX}/drawers", "post"),
+        (f"{PREFIX}/drawers/{{id}}", "get"),
+        (f"{PREFIX}/drawers/{{id}}", "patch"),
+        (f"{PREFIX}/drawers/{{id}}", "delete"),
+        (f"{PREFIX}/drawers/{{id}}/shares/{{user_id}}", "put"),
+        (f"{PREFIX}/drawers/{{id}}/shares/{{user_id}}", "delete"),
+        (f"{PREFIX}/documents", "get"),
         (f"{PREFIX}/documents", "post"),
         (f"{PREFIX}/documents/{{id}}", "get"),
+        (f"{PREFIX}/documents/{{id}}", "patch"),
+        (f"{PREFIX}/documents/{{id}}", "delete"),
+        (f"{PREFIX}/documents/{{id}}/move", "post"),
+        (f"{PREFIX}/documents/{{id}}/original", "get"),
+        (f"{PREFIX}/documents/{{id}}/archive", "get"),
+        (f"{PREFIX}/documents/{{id}}/preview", "get"),
         (f"{PREFIX}/documents/{{id}}/log", "get"),
         (f"{PREFIX}/documents/{{id}}/retry", "post"),
         (f"{PREFIX}/documents/{{id}}/reprocess", "post"),
@@ -104,7 +161,7 @@ async def test_the_upload_body_is_multipart(api: Api) -> None:
 async def test_schemas_of_status_log_and_events(api: Api) -> None:
     schema = await openapi(api)
     schemas = schema["components"]["schemas"]
-    assert {"DocumentStatus", "DocumentAccepted", "LogEntry", "EventMessage", "Health"} <= set(
+    assert {"DocumentDetails", "DocumentAccepted", "LogEntry", "EventMessage", "Health"} <= set(
         schemas
     )
     reprocess = schemas["ReprocessRequest"]["properties"]["from_step"]
@@ -116,3 +173,67 @@ async def test_schemas_of_status_log_and_events(api: Api) -> None:
     data = stream["itemSchema"]["properties"]["data"]
     assert data["contentSchema"] == {"$ref": "#/components/schemas/EventMessage"}
     assert "$ref" not in stream["itemSchema"]
+
+
+async def test_every_operation_declares_its_security(api: Api) -> None:
+    schema = await openapi(api)
+    schemes = schema["components"]["securitySchemes"]
+    assert schemes["session"]["type"] == "apiKey" and schemes["session"]["in"] == "cookie"
+    assert schemes["token"] == {
+        "type": "http",
+        "scheme": "bearer",
+        "description": schemes["token"]["description"],
+    }
+    allowed: list[list[dict[str, list[str]]]] = [
+        [],
+        [{"session": []}],
+        [{"session": []}, {"token": []}],
+    ]
+    for path, item in schema["paths"].items():
+        for method, operation in item.items():
+            security = operation["security"]
+            assert security in allowed, (path, method)
+            responses = operation["responses"]
+            if security:
+                assert "401" in responses, (path, method)
+            if security == [{"session": []}]:
+                assert "403" in responses, (path, method)
+            assert "500" in responses or path.endswith("/health"), (path, method)
+            assert operation.get("summary"), (path, method)
+
+
+async def test_bodies_and_answers_are_described(api: Api) -> None:
+    schema = await openapi(api)
+    components = schema["components"]["schemas"]
+    for name in ("LoginRequest", "SessionOut", "Me", "TokenCreated", "DocumentDetails"):
+        assert name in components, name
+    for path, item in schema["paths"].items():
+        for method, operation in item.items():
+            for status, response in operation["responses"].items():
+                assert response.get("description"), (path, method, status)
+    login = schema["paths"][f"{PREFIX}/auth/login"]["post"]
+    assert set(login["responses"]) >= {"200", "401", "415", "422", "429", "500"}
+    assert login["requestBody"]["content"]["application/json"]
+
+
+async def test_no_secrets_in_the_contract(api: Api) -> None:
+    """Examples are placeholders; nothing of the test configuration leaks into the document."""
+    text = json.dumps(await openapi(api))
+    for secret in (PASSWORD, SECRET_KEY):
+        assert secret not in text
+    assert not re.search(r"papiq_[A-Za-z0-9_-]{20,}", text)
+    assert "BEGIN" not in text and "PRIVATE" not in text
+    assert (
+        "password"
+        not in json.dumps(
+            [
+                example
+                for item in json.loads(text)["paths"].values()
+                for operation in item.values()
+                for response in operation["responses"].values()
+                for content in response.get("content", {}).values()
+                for example in [content.get("example")]
+                if example
+            ]
+        ).lower()
+    )

@@ -158,9 +158,19 @@ def test_the_api_serves_health_and_stops_on_sigterm(tmp_path: Path) -> None:
                     health = json.load(answer)
             except OSError:
                 time.sleep(0.1)
+        login = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/v1/auth/login",
+            data=json.dumps({"username": "admin", "password": PASSWORD}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with opener.open(login, timeout=5) as answer:
+            signed_in = json.load(answer)
+            cookie = answer.headers["Set-Cookie"]
         process.send_signal(signal.SIGTERM)
         output = process.stderr.read()
         assert process.wait(timeout=30) == 0, output
     assert health == {"status": "ok", "checks": {"database": "ok", "object_store": "ok"}}
+    assert signed_in["user"]["role"] == "admin"
+    assert cookie.startswith("__Host-papiq_session=") and "Secure" in cookie
     assert "first admin created" in output
     assert PASSWORD not in output
