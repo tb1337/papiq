@@ -7,18 +7,21 @@ from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import NotFoundError, PermissionDeniedError, ValidationError
 from papiq.core.domain.ids import DocumentId, new_id
 from papiq.core.domain.pipeline import Lane
-from papiq.core.domain.rules import ApplicationStatus, ForceReview, SetTitle
+from papiq.core.domain.rules import ApplicationStatus, ForceReview, SetDrawer, SetTitle
 from papiq.core.services.inbox import RULES_APPLY
 from papiq.core.services.rules.retroactive import BATCH
 from tests.unit.services.conftest import World
 from tests.unit.services.rules_support import (
     MAX_DOCUMENTS,
+    Classifies,
     RuleWorld,
     add_tags,
     channel_api,
+    contact_is,
     definition,
     incoming_pdf,
     rule_world,
+    text_matches,
 )
 
 
@@ -219,3 +222,50 @@ async def test_an_application_ends_when_its_rule_is_deleted(world: World) -> Non
     assert (await r.stored(document)).tag_ids == set()
     with pytest.raises(NotFoundError):
         await r.applications.preview(owner.id, rule.id)
+
+
+async def test_filing_on_an_unconfirmed_contact_is_a_conflict_until_accepted(
+    world: World,
+) -> None:
+    r = await rule_world(world)
+    owner, reader = await world.user(), await world.user()
+    acme = await r.contact("ACME")
+    shared = await world.drawers.create(owner.id, "Shared")
+    await world.drawers.share(owner.id, shared.id, reader.id, ShareLevel.READ)
+    # The model set the contact; no person confirmed it.
+    document = await r.arrive(owner, classify=Classifies(contact=acme.id))
+    rule = await r.user_rule(owner, definition("ACME", contact_is(acme.id), SetDrawer(shared.id)))
+
+    (item,) = (await r.applications.preview(owner.id, rule.id)).items
+    assert item.effects == ()
+    assert [(note.field, note.kind) for note in item.conflicts] == [("drawer", "conflict")]
+
+    await r.applications.start(owner.id, rule.id, version=1, documents=[document.id])
+    await run_jobs(r)
+    assert (await r.stored(document)).drawer_id == document.drawer_id
+
+    await r.applications.start(
+        owner.id, rule.id, version=1, documents=[document.id], accept_conflicts=[document.id]
+    )
+    await run_jobs(r)
+    assert (await r.stored(document)).drawer_id == shared.id
+
+
+async def test_an_unexpected_error_ends_the_application(world: World) -> None:
+    r = await rule_world(world)
+    owner = await world.user()
+    tax = await r.tag("tax")
+    document = await r.arrive(owner, text="# Rechnung")
+    rule = await r.user_rule(owner, definition("Tax", text_matches("Rech"), add_tags(tax.id)))
+
+    async def broken(pattern: str, text: str, *, case_sensitive: bool) -> bool:
+        raise RuntimeError("broken")
+
+    r.matcher.search = broken  # type: ignore[method-assign]
+    application = await r.applications.start(owner.id, rule.id, version=1, documents=[document.id])
+
+    assert await r.applications.run_next_job()
+    assert not await r.applications.run_next_job()
+    done = await r.applications.get(owner.id, application.id)
+    assert (done.status, done.error) == (ApplicationStatus.FAILED, "stopped by an internal error")
+    assert (await r.stored(document)).tag_ids == set()

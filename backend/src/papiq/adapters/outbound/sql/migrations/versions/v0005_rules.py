@@ -89,9 +89,11 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_rule_applications")),
     )
     op.create_index(op.f("ix_rule_applications_rule_id"), "rule_applications", ["rule_id"])
+    op.create_index(op.f("ix_rule_applications_user_id"), "rule_applications", ["user_id"])
 
 
 def downgrade() -> None:
+    op.drop_index(op.f("ix_rule_applications_user_id"), table_name="rule_applications")
     op.drop_index(op.f("ix_rule_applications_rule_id"), table_name="rule_applications")
     op.drop_table("rule_applications")
     op.drop_table("rule_versions")

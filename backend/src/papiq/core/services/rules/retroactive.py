@@ -46,6 +46,7 @@ from papiq.core.services._access import load_actor
 from papiq.core.services.inbox import RULES_APPLY
 from papiq.core.services.rules.management import visible_rule
 from papiq.core.services.rules.running import (
+    PatternBudget,
     Prepared,
     RuleRun,
     apply_plan,
@@ -63,6 +64,8 @@ BATCH = 25
 """Documents per job; the next job continues."""
 SCAN = 200
 """Documents a preview page looks at, at most."""
+PREVIEW_BUDGET = 20.0
+"""Seconds the patterns of a preview page may take together; the page ends early then."""
 _LANES = frozenset({Lane.GREEN, Lane.YELLOW, Lane.RED})
 
 
@@ -127,12 +130,21 @@ class RuleApplicationService:
             )
         items: list[PreviewItem] = []
         next_cursor = documents[-1].id if len(documents) == SCAN else None
+        budget = PatternBudget(PREVIEW_BUDGET)
+        last: DocumentId | None = None
         for document in documents:
             if len(items) == limit:
                 next_cursor = items[-1].document.id
                 break
+            if budget.exhausted and last is not None:
+                next_cursor = last
+                break
+            last = document.id
+            async with self._uow() as uow:
+                if not await _candidate(uow, user, rule, document):
+                    continue
             prepared = await prepare(
-                self._store, self._matcher, [rule], document, max_text=self._max_text
+                self._store, self._matcher, [rule], document, max_text=self._max_text, budget=budget
             )
             async with self._uow() as uow:
                 current = await uow.documents.find(document.id)
@@ -204,7 +216,25 @@ class RuleApplicationService:
             raise
         except ConcurrencyError:
             log.warning("lost the claim of a rule job", extra={"job_id": str(job.id)})
+        except Exception as error:
+            log.exception("rule application failed", extra={"job_id": str(job.id)})
+            await self._abort(job, error)
         return True
+
+    async def _abort(self, job: Job, error: Exception) -> None:
+        """An unexpected error: end the application, so it does not run again and again."""
+        try:
+            async with self._uow() as uow:
+                await uow.jobs.fail(job, error=f"{type(error).__name__}: {error}")
+                application = await uow.rule_applications.find(
+                    RuleApplicationId(UUID(str(job.payload.get("application_id"))))
+                )
+                if application is not None and application.finished_at is None:
+                    application.finish(self._clock.now(), error="stopped by an internal error")
+                    await uow.rule_applications.update(application)
+                await uow.commit()
+        except (ConcurrencyError, ValueError):
+            log.warning("could not end a failed rule application", extra={"job_id": str(job.id)})
 
     async def _run(self, job: Job) -> None:
         try:
@@ -253,13 +283,22 @@ class RuleApplicationService:
             prepared = await prepare(
                 self._store, self._matcher, [rule], document, max_text=self._max_text
             )
-        async with self._uow() as uow:
-            application = await uow.rule_applications.get(id)
-            document_id = application.remaining[0]
-            outcome = await self._apply_one(uow, user, rule, document_id, prepared, application)
-            application.record(document_id, outcome)
-            await uow.rule_applications.update(application)
-            await uow.commit()
+        try:
+            async with self._uow() as uow:
+                application = await uow.rule_applications.get(id)
+                document_id = application.remaining[0]
+                outcome = await self._apply_one(uow, user, rule, document_id, prepared, application)
+                application.record(document_id, outcome)
+                await uow.rule_applications.update(application)
+                await uow.commit()
+        except ConcurrencyError:
+            # The document changed meanwhile (or another worker took the application over;
+            # then this fails again and the claim is lost).
+            async with self._uow() as uow:
+                application = await uow.rule_applications.get(id)
+                application.record(application.remaining[0], "changed meanwhile; not applied")
+                await uow.rule_applications.update(application)
+                await uow.commit()
         return False
 
     async def _apply_one(
