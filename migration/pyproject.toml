@@ -1,0 +1,42 @@
+[project]
+name = "papiq-migration"
+version = "0.1.0"
+description = "Takes over a Paperless-ngx archive into Papiq through the two REST APIs"
+readme = "README.md"
+license = "GPL-3.0-only"
+requires-python = ">=3.13"
+dependencies = [
+    "httpx2==2.13.1",
+]
+
+[project.scripts]
+papiq-migration = "papiq_migration.cli:main"
+
+[dependency-groups]
+dev = [
+    "mypy==2.4.0",
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "ruff==0.16.10",
+]
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "N"]
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
