@@ -54,6 +54,7 @@ def make_app(
             rules=services.rules,
             rule_applications=services.rule_applications,
             webhooks=services.webhooks,
+            webhook_delivery=services.webhook_delivery,
             event_bus=container.event_bus,
             health_checks={"database": ok, "object_store": ok},
             max_upload_size=max_upload,

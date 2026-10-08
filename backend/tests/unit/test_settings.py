@@ -337,6 +337,17 @@ def test_unknown_variables_are_listed(monkeypatch: pytest.MonkeyPatch) -> None:
     assert find_unknown_variables() == ["PAPIQ_DB_TYPO"]
 
 
+def test_webhook_defaults() -> None:
+    settings = load_settings()
+    assert settings.webhooks_per_user == 20
+    assert settings.webhook_secret_grace == timedelta(hours=24)
+    assert settings.webhook_timeout == timedelta(seconds=10)
+    assert settings.webhook_max_attempts == 10
+    assert settings.webhook_retry_delay == timedelta(seconds=30)
+    assert settings.webhook_disable_after == 20
+    assert settings.webhook_concurrency == 4
+
+
 def test_worker_and_processing_defaults() -> None:
     settings = load_settings()
     assert settings.worker_concurrency == 2
@@ -375,13 +386,12 @@ def test_invalid_worker_settings_name_the_variable(
     assert name in error_message(monkeypatch, {name: value})
 
 
-def test_the_api_needs_a_valid_secret_key(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_every_role_needs_a_valid_secret_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The worker decrypts webhook secrets to sign requests.
     monkeypatch.delenv("PAPIQ_SECRET_KEY")
-    for role in ("all", "api"):
+    for role in ("all", "api", "worker"):
         message = error_message(monkeypatch, {"PAPIQ_ROLE": role})
-        assert f"PAPIQ_SECRET_KEY is required when PAPIQ_ROLE={role}" in message
-    set_env(monkeypatch, {"PAPIQ_ROLE": "worker"})
-    assert load_settings().secret_key is None
+        assert "PAPIQ_SECRET_KEY is required" in message
     message = error_message(monkeypatch, {"PAPIQ_SECRET_KEY": "too-short"})
     assert "PAPIQ_SECRET_KEY" in message and "openssl rand -base64 32" in message
     assert "too-short" not in message

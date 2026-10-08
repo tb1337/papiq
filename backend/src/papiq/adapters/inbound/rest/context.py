@@ -19,7 +19,7 @@ from papiq.core.services.rules import RuleService
 from papiq.core.services.rules.retroactive import RuleApplicationService
 from papiq.core.services.search import SearchService
 from papiq.core.services.users import UserService
-from papiq.core.services.webhooks import WebhookService
+from papiq.core.services.webhooks import WebhookDeliveryService, WebhookService
 
 type HealthCheck = Callable[[], Awaitable[None]]
 
@@ -35,6 +35,7 @@ class ApiContext:
     rules: RuleService
     rule_applications: RuleApplicationService
     webhooks: WebhookService
+    webhook_delivery: WebhookDeliveryService
     event_bus: EventBus
     health_checks: Mapping[str, HealthCheck]
     max_upload_size: int

@@ -271,3 +271,19 @@ async def list_deliveries(
         limit=limit,
     )
     return [DeliveryOut.of(delivery) for delivery in found]
+
+
+@router.post(
+    "/{id}/test",
+    summary="Send a test request",
+    description=(
+        "Sends a `webhook.test` request to the URL now, signed like any other, without "
+        "repetition; works for a switched-off webhook too. The answer is the entry of the "
+        "delivery log: `delivered` for a 2xx answer, else `gave_up` with status or error. "
+        "Owner only."
+    ),
+    response_model=DeliveryOut,
+    responses=problem_responses(401, 403, 404, 422),
+)
+async def test_webhook(id: UUID, user: CurrentUser, context: Context) -> DeliveryOut:
+    return DeliveryOut.of(await context.webhook_delivery.send_test(user, WebhookId(id)))

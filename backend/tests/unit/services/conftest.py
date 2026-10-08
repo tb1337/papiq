@@ -8,6 +8,7 @@ from papiq.adapters.outbound.memory import (
     FakeOidcProvider,
     FakePasswordHasher,
     FakeTotp,
+    FakeWebhookSender,
     ManualClock,
     MemoryDatabase,
     MemoryObjectStore,
@@ -26,7 +27,7 @@ from papiq.core.services.master_data import MasterDataService
 from papiq.core.services.oidc import OidcService
 from papiq.core.services.pipeline import PipelineService, PlaceholderStep, StepExecutor
 from papiq.core.services.users import UserService
-from papiq.core.services.webhooks import WebhookService
+from papiq.core.services.webhooks import WebhookDeliveryService, WebhookPolicy, WebhookService
 from tests import builders
 
 
@@ -70,6 +71,7 @@ class World:
     cipher: FakeCipher = field(default_factory=FakeCipher)
     totp: FakeTotp = field(default_factory=FakeTotp)
     idp: FakeOidcProvider = field(default_factory=FakeOidcProvider)
+    sender: FakeWebhookSender = field(default_factory=FakeWebhookSender)
 
     @property
     def uow(self) -> MemoryUnitOfWorkFactory:
@@ -111,6 +113,9 @@ class World:
     @property
     def webhooks(self) -> WebhookService:
         return WebhookService(self.uow, self.clock, self.cipher)
+
+    def webhook_delivery(self, policy: WebhookPolicy | None = None) -> WebhookDeliveryService:
+        return WebhookDeliveryService(self.uow, self.clock, self.cipher, self.sender, policy)
 
     def pipeline(self, executors: Mapping[Step, StepExecutor] | None = None) -> PipelineService:
         return PipelineService(

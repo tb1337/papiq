@@ -3,6 +3,7 @@
 from uuid import UUID
 
 from papiq.adapters.inbound.rest import PREFIX
+from papiq.adapters.outbound.memory import FakeWebhookSender
 from papiq.core.domain.identity import TokenScope
 from papiq.core.domain.ids import DocumentId, EventId, WebhookId, new_id
 from papiq.core.domain.webhooks import DeliveryOutcome, WebhookDelivery
@@ -159,3 +160,30 @@ async def test_the_deliveries_are_listed_newest_first_in_pages(api: Api) -> None
     assert first[0]["outcome"] == "delivered" and first[0]["status_code"] == 204
     rest = await api.client.get(url, params={"before": first[-1]["id"]}, headers=auth(user))
     assert [item["id"] for item in rest.json()] == sorted(ids, reverse=True)[2:]
+
+
+async def test_a_test_request_is_sent_and_logged(api: Api) -> None:
+    user, other, admin = await api.user(), await api.user(), await api.admin()
+    created = await post(api, "/webhooks", BODY, auth(user))
+    url = f"{PREFIX}/webhooks/{created['id']}/test"
+    response = await api.client.post(url, headers=auth(user))
+    assert response.status_code == 200, response.text
+    row = response.json()
+    assert (row["outcome"], row["event_type"], row["document_id"]) == (
+        "delivered",
+        "webhook.test",
+        None,
+    )
+    sender = api.container.webhook_sender
+    assert isinstance(sender, FakeWebhookSender) and len(sender.requests) == 1
+    listed = await api.client.get(
+        f"{PREFIX}/webhooks/{created['id']}/deliveries", headers=auth(user)
+    )
+    assert [item["id"] for item in listed.json()] == [row["id"]]
+
+    assert (await api.client.post(url, headers=auth(other))).status_code == 404
+    assert (await api.client.post(url, headers=auth(admin))).status_code == 403
+    _, token = await api.services.auth.create_api_token(user.id, "reader", TokenScope.READ)
+    assert (await api.client.post(url, headers=bearer(token))).status_code == 403
+    assert (await api.client.post(url)).status_code == 401
+    assert len(sender.requests) == 1
