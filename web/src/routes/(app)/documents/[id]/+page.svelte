@@ -5,7 +5,7 @@
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
@@ -93,14 +93,28 @@
 		}).map((step) => ({ value: step, label: stepLabel[step]() }));
 	});
 
+	// An answer for a document the page has left behind must not replace the current one.
 	async function load() {
+		const wanted = id;
 		try {
-			document = await unwrap(api.GET('/api/v1/documents/{id}', { params: { path: { id } } }));
-			problem = null;
+			const loaded = await unwrap(
+				api.GET('/api/v1/documents/{id}', { params: { path: { id: wanted } } })
+			);
+			if (wanted === id) {
+				document = loaded;
+				problem = null;
+			}
 		} catch (error) {
-			problem = error;
+			if (wanted === id) problem = error;
 		}
 	}
+
+	$effect(() => {
+		void id;
+		untrack(() => {
+			if (document && document.id !== id) document = null;
+		});
+	});
 
 	$effect(() => {
 		void id;
@@ -291,10 +305,12 @@
 			</div>
 		</div>
 
-		<section class="flex flex-col gap-3" aria-labelledby="log-heading">
-			<h2 id="log-heading" class="text-lg font-semibold">{m.log_title()}</h2>
-			<ProcessingLog documentId={id} />
-		</section>
+		{#if manageable}
+			<section class="flex flex-col gap-3" aria-labelledby="log-heading">
+				<h2 id="log-heading" class="text-lg font-semibold">{m.log_title()}</h2>
+				<ProcessingLog documentId={id} />
+			</section>
+		{/if}
 	{/if}
 </div>
 

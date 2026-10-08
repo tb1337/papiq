@@ -130,15 +130,17 @@
 						{/if}
 					</div>
 					<div class="flex flex-wrap gap-1">
-						<Button
-							variant="ghost"
-							size="icon"
-							disabled={busy}
-							aria-label={m.webhook_test({ name: hook.name })}
-							onclick={() => test(hook)}
-						>
-							<Send aria-hidden="true" />
-						</Button>
+						{#if hook.owner_id === session.user?.id}
+							<Button
+								variant="ghost"
+								size="icon"
+								disabled={busy}
+								aria-label={m.webhook_test({ name: hook.name })}
+								onclick={() => test(hook)}
+							>
+								<Send aria-hidden="true" />
+							</Button>
+						{/if}
 						<a
 							href="{BASE}/webhooks/{hook.id}"
 							aria-label={m.webhook_log({ name: hook.name })}
@@ -146,14 +148,16 @@
 						>
 							<History aria-hidden="true" />
 						</a>
-						<Button
-							variant="ghost"
-							size="icon"
-							aria-label={m.webhook_renew({ name: hook.name })}
-							onclick={() => (renewing = hook)}
-						>
-							<KeyRound aria-hidden="true" />
-						</Button>
+						{#if hook.owner_id === session.user?.id}
+							<Button
+								variant="ghost"
+								size="icon"
+								aria-label={m.webhook_renew({ name: hook.name })}
+								onclick={() => (renewing = hook)}
+							>
+								<KeyRound aria-hidden="true" />
+							</Button>
+						{/if}
 						<Button
 							variant="ghost"
 							size="icon"

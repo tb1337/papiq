@@ -43,6 +43,8 @@ export class PagedList<T> {
 	async refresh(): Promise<void> {
 		const count = this.items.length;
 		const generation = ++this.#generation;
+		// A page in flight is obsolete now and will not clear `loading` itself.
+		this.loading = false;
 		let items: T[] = [];
 		let next: string | number | null = null;
 		try {
@@ -52,7 +54,8 @@ export class PagedList<T> {
 				next = page.next;
 			} while (next !== null && items.length < count);
 		} catch (error) {
-			if (generation === this.#generation) this.error = error;
+			// A list already on screen stays; the next event or reload tries again.
+			if (generation === this.#generation && !this.loaded) this.error = error;
 			return;
 		}
 		if (generation !== this.#generation) return;

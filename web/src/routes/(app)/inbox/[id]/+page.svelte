@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
@@ -46,7 +46,7 @@
 	);
 	const hasDrawer = $derived(checks.some((check) => check.field === 'drawer'));
 	const failedStep = $derived(review?.open.find((step) => step.outcome === 'failed') ?? null);
-	const drawers = $derived(writableDrawers(lookup?.drawers ?? [], session.user));
+	const drawers = $derived(writableDrawers(lookup?.drawers ?? [], session.user, false));
 
 	async function load() {
 		try {
@@ -58,15 +58,26 @@
 	}
 
 	// The form starts from the document and the model's suggestions; a new state of the document
-	// (after an event) starts it again.
+	// (after an event) starts it again, unless the user has changed something meanwhile.
+	let baseline: { id: string; form: string } | null = null;
 	$effect(() => {
 		if (!review || !lookup) return;
 		const next: Record<string, ReviewValue> = {};
 		for (const check of review.open.flatMap((step) => step.fields)) {
 			next[check.field] = initialValue(check, review.document, lookup.attributes);
 		}
-		values = next;
-		drawerId = review.document.drawer_id;
+		const fresh = review.document.drawer_id;
+		const documentId = review.document.id;
+		untrack(() => {
+			const edited =
+				baseline !== null &&
+				baseline.id === documentId &&
+				JSON.stringify([values, drawerId]) !== baseline.form;
+			if (edited) return;
+			values = next;
+			drawerId = fresh;
+			baseline = { id: documentId, form: JSON.stringify([values, drawerId]) };
+		});
 	});
 
 	$effect(() => {

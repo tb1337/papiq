@@ -34,8 +34,9 @@
 
 	const own = $derived(account?.id === session.user?.id);
 
-	async function load() {
-		account = null;
+	async function load(initial = false) {
+		// After a change the dialog keeps showing the account until the new state arrives.
+		if (initial) account = null;
 		problem = null;
 		try {
 			const data = await unwrap(
@@ -53,7 +54,7 @@
 			password = '';
 			revoke = false;
 			resetError = null;
-			void load();
+			void load(true);
 		}
 	});
 

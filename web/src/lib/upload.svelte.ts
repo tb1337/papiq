@@ -70,6 +70,23 @@ export class Uploads {
 		this.#pump();
 	}
 
+	/** After a reconnect of the event stream: a lane event may have been missed meanwhile. */
+	recheck(): void {
+		for (const item of this.items) {
+			if (item.state === 'processing') {
+				void this.#refreshLane(item).then(() => this.#settled.forEach((handler) => handler()));
+			}
+		}
+	}
+
+	/** Forget everything: another person may sign in next in this browser. */
+	reset(): void {
+		this.#stop?.();
+		this.#stop = null;
+		this.#queue = [];
+		this.items = [];
+	}
+
 	clearFinished(): void {
 		this.items = this.items.filter((item) => item.state !== 'done' && item.state !== 'failed');
 	}

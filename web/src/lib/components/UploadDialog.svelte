@@ -21,7 +21,7 @@
 	// Uploads go into the caller's own drawers or those shared for writing; empty = default.
 	const choices = $derived([
 		{ value: '', label: m.upload_default_drawer() },
-		...writableDrawers(drawers, session.user).map((drawer) => ({
+		...writableDrawers(drawers, session.user, false).map((drawer) => ({
 			value: drawer.id,
 			label: drawer.name
 		}))
