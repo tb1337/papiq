@@ -127,6 +127,10 @@ class Settings(BaseSettings):
     # The ID token claim that names a new account.
     oidc_username_claim: str = "preferred_username"
 
+    # Webhooks: how many a user may have; how long a renewed secret's predecessor still signs.
+    webhooks_per_user: Annotated[int, Field(ge=1, le=1000)] = 20
+    webhook_secret_grace: Seconds = timedelta(hours=24)
+
     # Worker: background jobs, event delivery and cleanup.
     worker_concurrency: Annotated[int, Field(ge=1, le=64)] = 2
     worker_poll_interval: Seconds = timedelta(seconds=1)

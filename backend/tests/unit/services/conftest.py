@@ -26,6 +26,7 @@ from papiq.core.services.master_data import MasterDataService
 from papiq.core.services.oidc import OidcService
 from papiq.core.services.pipeline import PipelineService, PlaceholderStep, StepExecutor
 from papiq.core.services.users import UserService
+from papiq.core.services.webhooks import WebhookService
 from tests import builders
 
 
@@ -106,6 +107,10 @@ class World:
     @property
     def documents(self) -> DocumentService:
         return DocumentService(self.uow, self.clock, self.object_store)
+
+    @property
+    def webhooks(self) -> WebhookService:
+        return WebhookService(self.uow, self.clock, self.cipher)
 
     def pipeline(self, executors: Mapping[Step, StepExecutor] | None = None) -> PipelineService:
         return PipelineService(
