@@ -70,16 +70,18 @@ jobs:
           lock='^backend/(pyproject\.toml|uv\.lock)$'
           # web/openapi.json: a backend test compares it with the API.
           code="^backend/|^web/openapi\.json$|^\.devcontainer/(compose\.yml|dev\.env|garage)|$ci"
-          web="^web/|$ci"
+          web="^web/|^\.github/workflows/ci\.yml$"
           pipeline="^backend/src/papiq/adapters/outbound/(docling|ocrmypdf|pdfium)/"
           pipeline="$pipeline|^backend/src/papiq/core/(services/(pipeline|steps|objects)\.py|domain/pipeline)"
           pipeline="$pipeline|^backend/src/papiq/composition/|^backend/tests/(integration|samples|contracts)/"
           image="^(Dockerfile|\.dockerignore)$|^\.devcontainer/|$ci"
           runtime="^(Dockerfile|\.dockerignore)$|^deploy/|^web/|^\.github/workflows/ci\.yml$"
-          # The runtime image's inputs; documentation and the UI's tests do not change the image.
+          # The runtime image's inputs. Documentation, the UI's tests and the API description (the
+          # web job builds the client; its types leave nothing in the build) do not change it.
+          not_in_image='^web/tests/|\.test\.ts$|^web/(openapi\.json|src/lib/api/schema\.ts|playwright\.config\.ts)$'
           runtime_changed() {
             [ "$files" = ALL ] || echo "$files" | grep -v '\.md$' \
-              | grep -vE '^web/tests/|\.test\.ts$' | grep -qE "$runtime|$lock"
+              | grep -vE "$not_in_image" | grep -qE "$runtime|$lock"
           }
           if [ "$EVENT" = push ]; then
             matches "$lock|$ci" && echo "backend=true" >> "$GITHUB_OUTPUT"

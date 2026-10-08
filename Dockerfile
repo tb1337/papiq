@@ -190,7 +190,8 @@ COPY deploy/image/rootfs/ /
 # its jobs, so s6 waits 40 s for the services; Compose `stop_grace_period` is 60 s. s6 sits out the
 # whole S6_KILL_GRACETIME before it ends, so that stays short (1 s). Raise the first two together.
 # The database and the objects live on the volume /data (the defaults of settings.py are
-# relative paths). The API serves the web UI below /ui. PUID and PGID are not Papiq settings: the user of the Papiq processes.
+# relative paths). The API serves the web UI below /ui. PUID and PGID are not Papiq settings:
+# the user of the Papiq processes.
 ENV PATH="/command:/opt/papiq/venv/bin:$PATH" \
     S6_BEHAVIOUR_IF_STAGE2_FAILS=2 \
     S6_SERVICES_GRACETIME=40000 \
