@@ -5,6 +5,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -219,3 +220,63 @@ def test_the_api_serves_health_and_stops_on_sigterm(tmp_path: Path) -> None:
     assert cookie.startswith("__Host-papiq_session=") and "Secure" in cookie
     assert "first admin created" in output
     assert PASSWORD not in output
+
+
+def _events(capsys: pytest.CaptureFixture[str]) -> list[str]:
+    return [json.loads(line)["event"] for line in capsys.readouterr().err.splitlines()]
+
+
+def test_check_schema_tells_whether_the_database_is_migrated(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    path = tmp_path / "data" / "papiq.db"
+    monkeypatch.setenv("PAPIQ_DB_SQLITE_PATH", str(path))
+
+    assert main(["check-schema"]) == 1
+    assert not path.exists()  # looking does not create the file
+    assert "the database schema is not migrated" in _events(capsys)
+
+    assert main(["migrate"]) == 0
+    capsys.readouterr()
+    assert main(["check-schema"]) == 0
+    assert "database schema is current" in _events(capsys)
+
+
+def test_check_schema_rejects_a_database_of_a_newer_version(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    path = tmp_path / "papiq.db"
+    monkeypatch.setenv("PAPIQ_DB_SQLITE_PATH", str(path))
+    assert main(["migrate"]) == 0
+    with sqlite3.connect(path) as connection:
+        connection.execute("UPDATE alembic_version SET version_num = '9999'")
+    capsys.readouterr()
+
+    started = time.monotonic()
+    assert main(["check-schema", "--wait", "30"]) == 1  # no waiting: it will not get better
+
+    assert time.monotonic() - started < 10
+    assert any("newer version" in event for event in _events(capsys))
+
+
+def test_check_schema_waits_for_the_migration(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    path = tmp_path / "papiq.db"
+    monkeypatch.setenv("PAPIQ_DB_SQLITE_PATH", str(path))
+    monkeypatch.setattr("papiq.composition.database.SCHEMA_POLL_INTERVAL", 0.1)
+
+    timer = threading.Timer(1.0, lambda: main(["migrate"]))
+    timer.start()
+    try:
+        assert main(["check-schema", "--wait", "30"]) == 0
+    finally:
+        timer.join()
+
+    assert "waiting for the database schema to be migrated" in _events(capsys)
+
+
+def test_wait_only_goes_with_check_schema(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        main(["migrate", "--wait", "5"])
+    assert "--wait only goes with check-schema" in capsys.readouterr().err
