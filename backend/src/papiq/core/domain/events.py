@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import ClassVar
 
-from papiq.core.domain.ids import DocumentId, DrawerId, EventId, new_id
+from papiq.core.domain.ids import DocumentId, DrawerId, EventId, UserId, new_id
 from papiq.core.domain.pipeline import Lane, Outcome, Step
 from papiq.core.domain.validation import require_utc
 
@@ -61,7 +61,12 @@ class DocumentUpdated(DocumentEvent):
 
 @dataclass(frozen=True, kw_only=True)
 class DocumentDeleted(DocumentEvent):
+    """`readers`: who could read the document when it was deleted (the document is gone, so
+    nobody can be checked afterwards). Internal: pushed events and webhook requests do not
+    carry it."""
+
     type: ClassVar[str] = "document.deleted"
+    readers: tuple[UserId, ...] = ()
 
 
 EVENT_TYPES: dict[str, type[DomainEvent]] = {

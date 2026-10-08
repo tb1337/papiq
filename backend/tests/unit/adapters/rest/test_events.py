@@ -57,6 +57,16 @@ async def test_events_reach_only_users_who_may_read_the_document(api: Api) -> No
         assert shared_events[-1] == "document.lane_changed"  # visible once green
         assert streams[stranger.id].events == []
 
+        # A deleted document cannot be checked any more: those who could read it hear of it.
+        deleted = await client.delete(f"{PREFIX}/documents/{document}", headers=auth(owner))
+        assert deleted.status_code == 204
+        await until(lambda: "document.deleted" in own.types())
+        await until(lambda: "document.deleted" in streams[reader.id].types())
+        await asyncio.sleep(0.1)
+        assert own.events[-1] == {**own.events[-1], "type": "document.deleted"}
+        assert "readers" not in own.events[-1] and "readers" not in streams[reader.id].events[-1]
+        assert streams[stranger.id].events == []
+
         close_event_streams(api.app)
         await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
 

@@ -6,8 +6,8 @@ that moment. Events are pushed only to connected clients; there is no replay, so
 reconnects fetches the current state. One API instance is assumed: several instances would
 share the subscription and each would see only part of the events (a broker is the way out).
 
-`document.deleted` is not pushed: after deletion nobody can be checked for access (decided
-with the webhooks in M8).
+`document.deleted` goes to the users who could read the document when it was deleted: the event
+carries their ids (a deleted document cannot be checked afterwards). They are not sent on.
 """
 
 import asyncio
@@ -97,7 +97,7 @@ class EventHub:
         bus.subscribe(SUBSCRIBER, self.handle)
 
     async def handle(self, event: DomainEvent) -> None:
-        if not isinstance(event, DocumentEvent) or isinstance(event, DocumentDeleted):
+        if not isinstance(event, DocumentEvent):
             return
         listeners = [
             listener
@@ -106,9 +106,12 @@ class EventHub:
         ]
         if not listeners:
             return
-        readers = await self._documents.filter_readers(
-            event.document_id, {listener.user for listener in listeners}
-        )
+        if isinstance(event, DocumentDeleted):
+            readers = set(event.readers)
+        else:
+            readers = await self._documents.filter_readers(
+                event.document_id, {listener.user for listener in listeners}
+            )
         for listener in listeners:
             if listener.user in readers:
                 listener.offer(event)
@@ -135,7 +138,11 @@ class EventHub:
 
 def message(event: DocumentEvent) -> dict[str, Any]:
     """The JSON payload of an event."""
-    fields = {field.name: getattr(event, field.name) for field in dataclasses.fields(event)}
+    fields = {
+        field.name: getattr(event, field.name)
+        for field in dataclasses.fields(event)
+        if field.name != "readers"
+    }
     payload: dict[str, Any] = jsonable_encoder({"type": event.type, **fields})
     return payload
 
