@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -22,11 +23,18 @@ env:
 jobs:
   # Which jobs the change needs. Jobs are skipped by `if`, not by `paths`, so that a skipped
   # job counts as passed for required checks.
+  #
+  # A pull request runs what its files touch; `integration` and `devcontainer` (the long ones)
+  # wait until it is no draft, and `devcontainer` ignores lock files there. A push to main runs
+  # the checks again only where they write a cache: `backend` (mypy) and `integration` (Docling
+  # models) when the lock file changed, `devcontainer` (layers) when its inputs or the lock file
+  # changed. Everything else was checked in the pull request.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       backend: ${{ steps.diff.outputs.backend }}
+      integration: ${{ steps.diff.outputs.integration }}
       devcontainer: ${{ steps.diff.outputs.devcontainer }}
     steps:
       - uses: actions/checkout@v6
@@ -35,6 +43,8 @@ jobs:
       - id: diff
         env:
           BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          EVENT: ${{ github.event_name }}
+          DRAFT: ${{ github.event.pull_request.draft }}
         run: |
           # Unknown base (new branch, force push): run everything.
           if git cat-file -e "$BASE^{commit}" 2>/dev/null; then
@@ -45,12 +55,21 @@ jobs:
           echo "$files"
           matches() { [ "$files" = ALL ] || echo "$files" | grep -qE "$1"; }
           ci='^\.github/(workflows/ci\.yml|compose\.ci\.yml)$'
-          if matches "^backend/|^\.devcontainer/(compose\.yml|dev\.env|garage)|$ci"; then
-            echo "backend=true" >> "$GITHUB_OUTPUT"
+          lock='^backend/(pyproject\.toml|uv\.lock)$'
+          code="^backend/|^\.devcontainer/(compose\.yml|dev\.env|garage)|$ci"
+          image="^(Dockerfile|\.dockerignore)$|^\.devcontainer/|$ci"
+          if [ "$EVENT" = push ]; then
+            matches "$lock|$ci" && echo "backend=true" >> "$GITHUB_OUTPUT"
+            matches "^backend/uv\.lock$|$ci" && echo "integration=true" >> "$GITHUB_OUTPUT"
+            matches "$image|$lock" && echo "devcontainer=true" >> "$GITHUB_OUTPUT"
+          else
+            matches "$code" && echo "backend=true" >> "$GITHUB_OUTPUT"
+            if [ "$DRAFT" != true ]; then
+              matches "$code" && echo "integration=true" >> "$GITHUB_OUTPUT"
+              matches "$image" && echo "devcontainer=true" >> "$GITHUB_OUTPUT"
+            fi
           fi
-          if matches "^(Dockerfile|\.dockerignore)$|^\.devcontainer/|^backend/(pyproject\.toml|uv\.lock)$|$ci"; then
-            echo "devcontainer=true" >> "$GITHUB_OUTPUT"
-          fi
+          exit 0
 
   # Lint, types, import contracts and the unit tests (the SQL adapter on SQLite among them).
   backend:
@@ -88,7 +107,7 @@ jobs:
   # the OCR programs and the Docling models, on the runner. No test may skip.
   integration:
     needs: changes
-    if: needs.changes.outputs.backend == 'true'
+    if: needs.changes.outputs.integration == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
