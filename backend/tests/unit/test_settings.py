@@ -346,6 +346,22 @@ def test_variables_of_the_image_are_not_unknown(monkeypatch: pytest.MonkeyPatch)
     assert find_unknown_variables() == []
 
 
+def test_the_web_ui_is_off_by_default() -> None:
+    assert load_settings().ui_dir is None
+
+
+def test_the_web_ui_directory_needs_its_index(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    message = error_message(monkeypatch, {"PAPIQ_UI_DIR": str(tmp_path)})
+    assert f"PAPIQ_UI_DIR: no index.html in {tmp_path}" in message
+    set_env(monkeypatch, {"PAPIQ_ROLE": "worker"})
+    assert load_settings().ui_dir == tmp_path  # the worker serves nothing
+    (tmp_path / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    set_env(monkeypatch, {"PAPIQ_ROLE": "all"})
+    assert load_settings().ui_dir == tmp_path
+
+
 def test_webhook_defaults() -> None:
     settings = load_settings()
     assert settings.webhooks_per_user == 20
