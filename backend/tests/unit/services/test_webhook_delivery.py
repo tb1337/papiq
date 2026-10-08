@@ -10,7 +10,7 @@ import pytest
 
 from papiq.core.domain.documents import Document
 from papiq.core.domain.drawers import Drawer, ShareLevel
-from papiq.core.domain.errors import NotFoundError, PermissionDeniedError
+from papiq.core.domain.errors import NotFoundError
 from papiq.core.domain.events import (
     DocumentDeleted,
     DocumentFiled,
@@ -465,14 +465,14 @@ async def test_the_test_request_is_sent_once_and_logged(world: World) -> None:
     assert (await world.webhooks.get(user.id, webhook.id)).failed_streak == 0
 
 
-async def test_only_the_owner_tests_a_webhook(world: World) -> None:
+async def test_the_owner_and_admins_test_a_webhook(world: World) -> None:
     admin, owner, other = await world.user(role=Role.ADMIN), await world.user(), await world.user()
     webhook, _ = await hook(world, owner)
     service = world.webhook_delivery()
     with pytest.raises(NotFoundError):
         await service.send_test(other.id, webhook.id)
-    with pytest.raises(PermissionDeniedError):
-        await service.send_test(admin.id, webhook.id)
     with pytest.raises(NotFoundError):
         await service.send_test(owner.id, WebhookId(new_id()))
     assert world.sender.requests == []
+    await service.send_test(admin.id, webhook.id)
+    assert len(world.sender.requests) == 1

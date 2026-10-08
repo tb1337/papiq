@@ -98,10 +98,13 @@ async def test_users_see_only_their_webhooks_and_admins_all(api: Api) -> None:
         f"{PREFIX}/webhooks", params={"owner": str(new_id())}, headers=auth(admin)
     )
     assert narrowed.json() == []
-    # Admins read, but do not change.
-    assert (await api.client.patch(url, json={"name": "x"}, headers=auth(admin))).status_code == 403
-    assert (await api.client.delete(url, headers=auth(admin))).status_code == 403
-    assert (await api.client.post(f"{url}/secret", headers=auth(admin))).status_code == 403
+    # Admins change, renew and delete as well.
+    changed = await api.client.patch(url, json={"name": "x"}, headers=auth(admin))
+    assert (changed.status_code, changed.json()["name"]) == (200, "x")
+    renewed = await api.client.post(f"{url}/secret", headers=auth(admin))
+    assert renewed.status_code == 200 and renewed.json()["secret"].startswith("whsec_")
+    assert (await api.client.delete(url, headers=auth(admin))).status_code == 204
+    assert (await api.client.get(url, headers=auth(owner))).status_code == 404
 
 
 async def test_a_read_token_reads_but_changes_nothing(api: Api) -> None:
@@ -182,8 +185,9 @@ async def test_a_test_request_is_sent_and_logged(api: Api) -> None:
     assert [item["id"] for item in listed.json()] == [row["id"]]
 
     assert (await api.client.post(url, headers=auth(other))).status_code == 404
-    assert (await api.client.post(url, headers=auth(admin))).status_code == 403
     _, token = await api.services.auth.create_api_token(user.id, "reader", TokenScope.READ)
     assert (await api.client.post(url, headers=bearer(token))).status_code == 403
     assert (await api.client.post(url)).status_code == 401
     assert len(sender.requests) == 1
+    assert (await api.client.post(url, headers=auth(admin))).status_code == 200
+    assert len(sender.requests) == 2

@@ -23,8 +23,8 @@ from papiq.core.services.webhooks import CreatedWebhook
 router = APIRouter(prefix="/webhooks", tags=["webhooks"], dependencies=PROTECTED)
 
 WHO = (
-    "Its owner. Admins read every webhook and its log, never the secret; they do not change "
-    "other users' webhooks (403). Other users' webhooks are not found (404)."
+    "Its owner, or an admin (who also changes, deletes and tests other users' webhooks and "
+    "sees the secret only when renewing it). Other users' webhooks are not found (404)."
 )
 EVENT_TYPES_HELP = (
     f"Event types: {', '.join(f'`{name}`' for name in event_type_names())}, or `{ALL_EVENTS}` "

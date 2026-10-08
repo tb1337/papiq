@@ -59,7 +59,7 @@ from papiq.core.ports import (
     WebhookSender,
 )
 from papiq.core.services._access import load_actor
-from papiq.core.services.webhooks.management import owned_webhook, secret_context
+from papiq.core.services.webhooks.management import manageable_webhook, secret_context
 from papiq.core.services.webhooks.policy import WebhookPolicy
 
 log = logging.getLogger(__name__)
@@ -147,10 +147,10 @@ class WebhookDeliveryService:
         return True
 
     async def send_test(self, actor: UserId, id: WebhookId) -> WebhookDelivery:
-        """Owner only: send a `webhook.test` request now, once, and return the log row. Works
+        """Owner or admin: send a `webhook.test` request now, once, and return the log row. Works
         for a switched-off webhook too; does not count towards switching it off."""
         async with self._uow() as uow:
-            webhook = await owned_webhook(uow, await load_actor(uow, actor), id)
+            webhook = await manageable_webhook(uow, await load_actor(uow, actor), id)
         event_id = EventId(new_id())
         now = self._clock.now()
         secrets = self._decrypt(webhook, now)

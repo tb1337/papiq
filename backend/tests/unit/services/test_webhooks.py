@@ -8,7 +8,6 @@ from papiq.core.domain.errors import (
     AuthenticationError,
     ConflictError,
     NotFoundError,
-    PermissionDeniedError,
     ValidationError,
 )
 from papiq.core.domain.ids import WebhookId, new_id
@@ -79,17 +78,17 @@ async def test_others_do_not_find_a_webhook_but_admins_read_it(world: World) -> 
     assert await service.list(other.id, owner=owner.id) == []
 
 
-async def test_admins_do_not_change_other_users_webhooks(world: World) -> None:
+async def test_admins_change_renew_and_delete_other_users_webhooks(world: World) -> None:
     owner, admin = await world.user(), await world.user(role=Role.ADMIN)
     service = world.webhooks
     hook = (await service.create(owner.id, name="x", url=URL, event_types=["*"])).webhook
-    with pytest.raises(PermissionDeniedError):
-        await service.update(admin.id, hook.id, name="mine")
-    with pytest.raises(PermissionDeniedError):
-        await service.delete(admin.id, hook.id)
-    with pytest.raises(PermissionDeniedError):
-        await service.renew_secret(admin.id, hook.id)
-    assert (await service.get(owner.id, hook.id)).name == "x"
+    assert (await service.update(admin.id, hook.id, name="by admin")).name == "by admin"
+    renewed = await service.renew_secret(admin.id, hook.id)
+    assert renewed.secret.startswith("whsec_")
+    assert (await service.get(owner.id, hook.id)).owner_id == owner.id
+    await service.delete(admin.id, hook.id)
+    with pytest.raises(NotFoundError):
+        await service.get(owner.id, hook.id)
 
 
 async def test_the_owner_changes_and_switches_off_and_on(world: World) -> None:
