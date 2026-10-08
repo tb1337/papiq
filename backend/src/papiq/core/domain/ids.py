@@ -19,6 +19,8 @@ ApiTokenId = NewType("ApiTokenId", UUID)
 ExternalIdentityId = NewType("ExternalIdentityId", UUID)
 RuleId = NewType("RuleId", UUID)
 RuleApplicationId = NewType("RuleApplicationId", UUID)
+WebhookId = NewType("WebhookId", UUID)
+DeliveryId = NewType("DeliveryId", UUID)
 
 _TIMESTAMP_BITS = 48
 _RANDOM_BITS = 80
