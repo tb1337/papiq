@@ -123,7 +123,7 @@ Drei Speicher mit klarer Aufgabe: Datenbank für Metadaten, Objektspeicher für 
 
 - Hybride Suche: Volltext und Vektoren in einem Aufruf.
 - Index ist abgeleitet und jederzeit aus Datenbank und S3 neu aufbaubar; Aktualisierung per Job, daher kurz verzögert.
-- Nur die API spricht mit Meilisearch; jede Suche wird auf die Schubladen gefiltert, die der Nutzer sehen darf.
+- Nur die API spricht mit Meilisearch; jede Suche wird auf die Reichweite des Nutzers gefiltert (Admins mit `all_users`: alle Dokumente).
 - Deutsche Komposita werden zerlegt; Stemming nach Kenntnisstand nicht vorhanden, die semantische Suche fängt das ab ([Quelle](https://www.meilisearch.com/docs/resources/internals/typo_tolerance.md)).
 
 ## Datenmodell
@@ -146,12 +146,13 @@ Angelehnt an Paperless-ngx, ohne Speicherpfade, mit Schubladen als Ablage- und R
 
 Rechte hängen an der Schublade, nie am einzelnen Dokument.
 
-- **Rollen:** Admin (Nutzer, Stammdaten, Regeln) und Nutzer.
+- **Rollen:** Admin und Nutzer. Admins haben alle Rechte und sehen alles (Tobi, 08.10.2026): Sie lesen und ändern alle Dokumente (auch fremde in Gelb, Rot und in Verarbeitung), lesen das Verarbeitungsprotokoll, wiederholen, verarbeiten neu, bestätigen und löschen; sie sehen und verwalten alle Schubladen (umbenennen, Freigaben, löschen) und legen in jede ab; sie lesen und ändern alle Regeln und Webhooks; dazu Nutzer und Stammdaten. Ein deaktivierter Admin hat keine Rechte.
+- **Reichweite:** eigene Dokumente und grüne Dokumente in eigenen oder freigegebenen Schubladen. Listen, Posteingang und Suche zeigen die Reichweite; Admins schalten auf alle Nutzer um (`all_users`). Webhooks melden nur Dokumente in der Reichweite ihres Besitzers, auch bei Admins; SSE erhalten Admins zu allen Dokumenten.
 - **Besitzer** eines Dokuments hat Lese- und Schreibrecht.
 - **Andere Nutzer** sehen ein Dokument nur über eine Schublade, die mit ihnen geteilt ist – mit „lesen“ oder „lesen/schreiben“.
 - **Teilen nach Kontakt und Typ** wird als Ablageregel umgesetzt: „Kontakt X + Typ Y → Schublade Z“. Sichtbarkeit bleibt eine explizite Zuordnung und ändert sich nicht still durch eine Fehlklassifizierung.
-- **Posteingang:** Dokumente in Gelb oder Rot sieht nur der Besitzer, bis sie gelöst sind.
-- **Verschieben** in eine andere Schublade: der Besitzer (nur in Schubladen, in denen er schreiben darf) oder ein Admin (jedes Dokument in jede Schublade, ohne dadurch Leserecht zu erhalten). Eine Freigabe erlaubt kein Verschieben.
+- **Posteingang:** Dokumente in Gelb oder Rot sieht nur der Besitzer (und Admins), bis sie gelöst sind. Bestätigt ein Admin, legt er nur in Schubladen ab, in die der Besitzer schreiben darf (die Ablage prüft den Besitzer).
+- **Verschieben** in eine andere Schublade: der Besitzer (nur in Schubladen, in denen er schreiben darf) oder ein Admin (jedes Dokument in jede Schublade). Eine Freigabe erlaubt kein Verschieben.
 - **Stammdaten** sind global sichtbar – Kontaktnamen sehen alle Nutzer (bewusst akzeptiert).
 
 ## Authentifizierung
@@ -208,7 +209,7 @@ LangGraph wird nicht eingesetzt: Die Verzweigung je Dokumenttyp ist deterministi
 Hybride Suche in Meilisearch: Wörter und Bedeutung (Vektoren) in einer Anfrage, `GET /documents/search`.
 
 - **Index folgt den Dokumenten.** Jedes Dokument-Ereignis erzeugt einen Job; er liest den aktuellen Stand aus Datenbank und Objektspeicher, schreibt ihn in den Index und prüft danach, ob sich das Dokument inzwischen geändert hat. Fehlgeschlagene Jobs wiederholen sich mit wachsendem Abstand (etwa drei Stunden insgesamt); fällt nur das Embedding aus, steht das Dokument sofort mit seinen Wörtern im Index. Der Index enthält nichts, was nicht in der Datenbank steht: Ein Abgleich (alle sechs Stunden und bei jedem Start des Workers) und ein vollständiger Neuaufbau (`POST /search/reindex`, `reindex`) stellen ihn jederzeit wieder her; der Neuaufbau läuft neben dem aktiven Index und wird getauscht.
-- **Rechte.** Der Index kennt Besitzer, Schublade und Lane und filtert danach (Besitzer sieht alles, andere nur Grünes in eigenen oder geteilten Schubladen); jeder Treffer wird zusätzlich gegen die Datenbank geprüft. Eine entzogene Freigabe wirkt damit sofort. Dokumente in Verarbeitung stehen im Index und sind nur für den Besitzer sichtbar.
+- **Rechte.** Der Index kennt Besitzer, Schublade und Lane und filtert danach (Besitzer sieht alles, andere nur Grünes in eigenen oder geteilten Schubladen; ein Admin mit `all_users` alles); jeder Treffer wird zusätzlich gegen die Datenbank geprüft. Eine entzogene Freigabe wirkt damit sofort. Dokumente in Verarbeitung stehen im Index und sind nur für den Besitzer sichtbar.
 - **Abschnitte.** Der Text wird in Abschnitte von etwa 1500 Zeichen geteilt (höchstens 8, zusammen höchstens 200 000 Zeichen im Index); jeder bekommt einen Vektor, der erste beginnt mit Titel, Kontakt, Typ und Tags. Der Text dahinter ist per Wörtern auffindbar, aber ohne Vektor.
 - **Namen im Index.** Kontakt, Typ und Tags stehen als Namen im Index; eine Umbenennung stößt die betroffenen Dokumente neu an.
 - **Ausfälle.** Ohne Embedding-Dienst (oder bei zu langsamer Anfrage-Einbettung) sucht Papiq nur mit Wörtern. Ein Ausfall der Suche macht `/health` `degraded`, nicht `503`.
@@ -224,7 +225,7 @@ Regeln sind Daten in der Datenbank, keine Code-Änderung; sie werden in der Web-
 | Art | Angelegt von | Wirkt auf | Erlaubte Aktionen |
 | --- | --- | --- | --- |
 | Globale Regel | Admin | alle Dokumente | Tags, Attribute, Prüfung erzwingen – nichts, was Sichtbarkeit ändert |
-| Nutzer-Regel | jeder Nutzer | nur eigene Dokumente | alle Aktionen; Schublade nur, wenn der Nutzer dort schreiben darf |
+| Nutzer-Regel | jeder Nutzer | nur eigene Dokumente | alle Aktionen; Schublade nur, wenn der Besitzer der Regel dort schreiben darf (auch wenn ein Admin sie ändert) |
 
 **Aufbau einer Regel**
 
@@ -250,13 +251,13 @@ Gespeichert als JSON, geprüft mit Pydantic; die UI bietet einen Baukasten.
 - **Probelauf:** Vor dem Speichern einer Dokumentänderung zeigt die UI die Folgen, z. B. „Dokument wandert in Schublade Z – sichtbar für User B“.
 - **Nachvollziehbarkeit:** Regeln sind versioniert; das Verarbeitungsprotokoll hält fest, welche Regel in welcher Version was geändert hat.
 
-**Sichtbarkeit (M7):** Admins lesen alle Regeln; ändern dürfen sie nur globale Regeln. Nutzer-Regeln liest und ändert nur ihr Besitzer.
+**Sichtbarkeit (M7, M11b):** Globale Regeln lesen alle, ändern nur Admins. Nutzer-Regeln lesen und ändern ihr Besitzer und Admins (Tobi, 08.10.2026); andere Nutzer erfahren nicht, dass es sie gibt.
 
 **Rückwirkendes Anwenden (erster Wurf)**
 
 Regeln wirken nicht automatisch auf bestehende Dokumente. Anlegen oder Ändern einer Regel betrifft nur künftige Eingänge und Änderungen.
 
-Rückwirkend nur auf ausdrücklichen Wunsch: Button „Auf bestehende Dokumente anwenden" an der Regel. Ein Auswahldialog listet die betroffenen Dokumente mit den jeweiligen Änderungen; der Nutzer wählt aus, was angewendet wird. Dokumente, bei denen die Regel einen Konflikt erzeugt, sind markiert; wählt der Nutzer sie trotzdem aus, gilt das als bewusste Entscheidung und der Regelwert wird ohne Umweg über Gelb übernommen. Die Ausführung läuft als Hintergrund-Job.
+Rückwirkend nur auf ausdrücklichen Wunsch: Button „Auf bestehende Dokumente anwenden" an der Regel. Eine Nutzer-Regel wenden ihr Besitzer und Admins an, auf Dokumente ihres Besitzers; eine globale Regel jeder, auf die Dokumente, in die er schreiben darf (Admins: alle). Ein Auswahldialog listet die betroffenen Dokumente mit den jeweiligen Änderungen; der Nutzer wählt aus, was angewendet wird. Dokumente, bei denen die Regel einen Konflikt erzeugt, sind markiert; wählt der Nutzer sie trotzdem aus, gilt das als bewusste Entscheidung und der Regelwert wird ohne Umweg über Gelb übernommen. Die Ausführung läuft als Hintergrund-Job.
 
 ## Asynchronität und Ereignisse
 
@@ -282,7 +283,7 @@ Kein API-Aufruf wartet auf OCR, Parsing oder LLM: Die API nimmt an, quittiert so
 **Webhooks (Egress)**
 
 - Webhooks melden Ereignisse an externe Systeme. Eingehende Daten (Ingress) laufen über die normale REST-API mit API-Token, z. B. `POST /documents`.
-- Jeder Nutzer legt eigene Webhooks an; sie melden nur Ereignisse zu Dokumenten, die dieser Nutzer sehen darf.
+- Jeder Nutzer legt eigene Webhooks an; sie melden nur Ereignisse zu Dokumenten in der Reichweite dieses Nutzers (auch bei Admins: ihre Rechte erweitern Webhooks nicht).
 - Schlanke Ereignisse: nur Ereignistyp, Zeitpunkt, Ereignis-ID und Dokument-ID. Details holt der Empfänger per API mit eigenem Token; dabei greifen die Schubladen-Rechte.
 - Abonnement: Ziel-URL, Ereignistypen, Geheimnis.
 - Zustellung signiert (HMAC-SHA256), Wiederholung mit wachsendem Abstand, Zustellprotokoll in der UI.
