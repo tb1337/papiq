@@ -42,6 +42,9 @@ request."""
 PERSON_DRAWER = "person:drawer"
 """`model_version` of a log entry in which a person chose the drawer outside the inbox (an
 upload into a given drawer, a move); rules leave the drawer then."""
+CHOSEN_DRAWER = "drawer_id"
+"""Key of the drawer a person chose, in the input of a `PERSON_DRAWER` entry and the output of a
+`PERSON` entry."""
 OUTSIDE_PIPELINE = frozenset({RULES_CHANGE, RULES_APPLY, PERSON_DRAWER})
 """Log entries written outside processing; they say nothing about a step's state."""
 ALWAYS_SET = frozenset({"drawer", "title", "review"})
@@ -213,6 +216,22 @@ def decide(
         entered={step: tuple(fields) for step, fields in entered.items()},
         kept={step: tuple(fields) for step, fields in kept.items()},
     )
+
+
+def drawer_chooser(log: Sequence[StepRun], drawer: UUID) -> UUID | None:
+    """Who last put the document into `drawer` by hand (confirming, uploading into a given
+    drawer, moving), if anyone. Entries written before the drawer was recorded name none."""
+    for entry in reversed(log):
+        result = entry.result
+        if result.model_version == PERSON_DRAWER:
+            actor, chosen = result.input.get("actor"), result.input.get(CHOSEN_DRAWER)
+        elif result.model_version == PERSON:
+            actor, chosen = result.output.get("confirmed_by"), result.output.get(CHOSEN_DRAWER)
+        else:
+            continue
+        if chosen == str(drawer):
+            return UUID(actor) if isinstance(actor, str) else None
+    return None
 
 
 def confirmation(

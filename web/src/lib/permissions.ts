@@ -39,7 +39,7 @@ export function writableDrawers<T extends { owner_id: string; access: string }>(
 }
 
 /** Drawers another user may write to, as far as the shares show it (admins see every share):
- * where an admin files that user's document or that user's rule files. */
+ * where that user's rule files when an admin changes it. */
 export function drawersWritableBy<
 	T extends { owner_id: string; shares?: readonly { user_id: string; level: string }[] | null }
 >(drawers: readonly T[], owner: Actor): T[] {
@@ -54,8 +54,8 @@ export function drawersWritableBy<
 	);
 }
 
-/** Drawers that file a document or rule of `owner` when `caller` acts: the caller's own choice
- * for themselves, else the owner's (an admin acting for another user). */
+/** Drawers a rule of `owner` may file into when `caller` changes it: the caller's own choice
+ * for themselves, else the owner's (an admin changing another user's rule). */
 export function drawersFor<
 	T extends {
 		owner_id: string;

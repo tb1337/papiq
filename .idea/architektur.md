@@ -151,7 +151,7 @@ Rechte hängen an der Schublade, nie am einzelnen Dokument.
 - **Besitzer** eines Dokuments hat Lese- und Schreibrecht.
 - **Andere Nutzer** sehen ein Dokument nur über eine Schublade, die mit ihnen geteilt ist – mit „lesen“ oder „lesen/schreiben“.
 - **Teilen nach Kontakt und Typ** wird als Ablageregel umgesetzt: „Kontakt X + Typ Y → Schublade Z“. Sichtbarkeit bleibt eine explizite Zuordnung und ändert sich nicht still durch eine Fehlklassifizierung.
-- **Posteingang:** Dokumente in Gelb oder Rot sieht nur der Besitzer (und Admins), bis sie gelöst sind. Bestätigt ein Admin, legt er nur in Schubladen ab, in die der Besitzer schreiben darf (die Ablage prüft den Besitzer).
+- **Posteingang:** Dokumente in Gelb oder Rot sieht nur der Besitzer (und Admins), bis sie gelöst sind. Bestätigt ein Admin, legt er in jede Schublade ab; die Ablage prüft sonst, ob der Besitzer in die Schublade schreiben darf.
 - **Verschieben** in eine andere Schublade: der Besitzer (nur in Schubladen, in denen er schreiben darf) oder ein Admin (jedes Dokument in jede Schublade). Eine Freigabe erlaubt kein Verschieben.
 - **Stammdaten** sind global sichtbar – Kontaktnamen sehen alle Nutzer (bewusst akzeptiert).
 
