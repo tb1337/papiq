@@ -9,7 +9,8 @@
     "ghcr.io/devcontainers/features/docker-outside-of-docker:1": { "moby": false }
   },
   "containerEnv": {
-    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
+    "GH_TOKEN": "${localEnv:GH_DEVCONTAINER_TOKEN}"
   },
   // API, Vite, and the services of the compose network (Meilisearch, Garage S3).
   "forwardPorts": [8000, 5173, "meilisearch:7700", "garage:3900"],
