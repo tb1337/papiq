@@ -22,7 +22,7 @@ gid=4321
 failures=0
 
 cleanup() {
-  docker rm -f $(docker ps -aq --filter "name=^${prefix}-") >/dev/null 2>&1 || true
+  docker rm -fv $(docker ps -aq --filter "name=^${prefix}-") >/dev/null 2>&1 || true
   docker volume rm $(docker volume ls -q --filter "name=^${prefix}-") >/dev/null 2>&1 || true
   rm -rf "$work"
 }
@@ -165,6 +165,12 @@ check "no worker process" test "$(count api 'composition worker')" -eq 0
 check "svc-worker stays down" bash -c "docker exec $prefix-api s6-svstat /run/service/svc-worker | grep -q '^down'"
 
 step "role worker: waits for the schema, starts when the API container has migrated"
+start waiter PAPIQ_ROLE=worker
+wait_for 60 "a worker waits for the schema" bash -c "docker logs $prefix-waiter 2>&1 | grep -q 'waiting for the database schema'"
+started=$SECONDS
+docker stop "$prefix-waiter" >/dev/null
+check "a waiting worker stops at once, exit code 0 (took $((SECONDS - started)) s)" \
+  bash -c "[ $((SECONDS - started)) -lt 20 ] && [ \"\$(docker inspect --format '{{.State.ExitCode}}' $prefix-waiter)\" = 0 ]"
 VOLUME=$prefix-shared start worker PAPIQ_ROLE=worker
 wait_for 60 "the worker waits for the schema" bash -c "docker logs $prefix-worker 2>&1 | grep -q 'waiting for the database schema'"
 check "no migration by the worker" test "$(logs worker | grep -c 'database migrated')" -eq 0
@@ -172,6 +178,7 @@ check "not healthy yet" bash -c "[ \"\$(docker inspect --format '{{.State.Health
 VOLUME=$prefix-shared start migrator PAPIQ_ROLE=api
 wait_for 180 "the worker container becomes healthy" healthy worker || logs worker
 check "the worker runs" test "$(count worker 'composition worker')" -eq 1
+check "the worker is ready for the healthcheck" docker exec "$prefix-worker" test -e /run/papiq-worker-ready
 check "no API process in the worker container" test "$(count worker 'composition api')" -eq 0
 
 step "invalid configuration stops the container with a reason"
@@ -183,6 +190,10 @@ docker run -d --name "$prefix-root" -e PUID=0 -e PAPIQ_SECRET_KEY_FILE=/run/secr
   -v "$work/secret_key:/run/secrets/secret_key:ro" "$image" >/dev/null
 wait_for 60 "the container with PUID=0 stops" exited root || true
 check "PUID=0 is refused" grep -q 'must not be 0' <(logs root)
+docker run -d --name "$prefix-path" -e PAPIQ_DB_SQLITE_PATH=/papiq.db -e PAPIQ_SECRET_KEY_FILE=/run/secrets/secret_key \
+  -v "$work/secret_key:/run/secrets/secret_key:ro" "$image" >/dev/null
+wait_for 60 "the container with a database in / stops" exited path || true
+check "a database path in the root folder is refused" grep -q 'is the root folder' <(logs path)
 docker run -d --name "$prefix-role" -e PAPIQ_ROLE=proxy -e PAPIQ_SECRET_KEY_FILE=/run/secrets/secret_key \
   -v "$work/secret_key:/run/secrets/secret_key:ro" "$image" >/dev/null
 wait_for 60 "the container with an invalid role stops" exited role || true
