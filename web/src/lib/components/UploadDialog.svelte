@@ -12,18 +12,22 @@
 	import { m } from '#lib/paraglide/messages.js';
 	import { session } from '#lib/session.svelte.ts';
 	import { uploads } from '#lib/upload.svelte.ts';
-	import type { Drawer } from '#lib/masterdata.svelte.ts';
+	import { drawerLabel, type Drawer, type UserName } from '#lib/masterdata.svelte.ts';
 	import { cn } from '#lib/utils.ts';
 
-	let { open = $bindable(false), drawers }: { open?: boolean; drawers: readonly Drawer[] } =
-		$props();
+	let {
+		open = $bindable(false),
+		drawers,
+		users
+	}: { open?: boolean; drawers: readonly Drawer[]; users: readonly UserName[] } = $props();
 
-	// Uploads go into the caller's own drawers or those shared for writing; empty = default.
+	// Uploads go into the caller's own drawers or those shared for writing, any for admins;
+	// empty = default.
 	const choices = $derived([
 		{ value: '', label: m.upload_default_drawer() },
-		...writableDrawers(drawers, session.user, false).map((drawer) => ({
+		...writableDrawers(drawers, session.user).map((drawer) => ({
 			value: drawer.id,
-			label: drawer.name
+			label: drawerLabel(drawer, users, session.user?.id)
 		}))
 	]);
 	let drawerId = $state('');
