@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { toast } from 'svelte-sonner';
 	import { api } from '#lib/api/client.ts';
@@ -42,8 +43,12 @@
 	let fieldErrors = $state<Record<string, string>>({});
 	let formError = $state<string | null>(null);
 
-	// The form starts from the stored state, and again after every reload of the document.
-	$effect(() => {
+	const snapshot = () => JSON.stringify([title, date, contact, documentType, tags, values]);
+	let baseline: { id: string; form: string } | null = null;
+
+	// The form starts from the stored state, and again after a reload of the document, unless the
+	// user has changed something meanwhile: an event must not wipe their input.
+	function fromDocument() {
 		title = document.title;
 		date = document.document_date ?? '';
 		contact = document.contact_id ?? '';
@@ -55,6 +60,16 @@
 				toField(attribute.data_type, document.attributes[attribute.id])
 			])
 		);
+		baseline = { id: document.id, form: snapshot() };
+	}
+
+	$effect(() => {
+		void document;
+		void lookup.attributes;
+		untrack(() => {
+			const edited = baseline?.id === document.id && snapshot() !== baseline.form;
+			if (!edited) fromDocument();
+		});
 	});
 
 	// Attributes that fit the chosen type, and those the document already has.
@@ -131,6 +146,7 @@
 				})
 			);
 			preview = null;
+			baseline = null;
 			toast.success(m.document_saved());
 			if ('title' in result) onsaved(result);
 			else {
@@ -149,17 +165,7 @@
 	function reset() {
 		fieldErrors = {};
 		formError = null;
-		title = document.title;
-		date = document.document_date ?? '';
-		contact = document.contact_id ?? '';
-		documentType = document.document_type_id ?? '';
-		tags = [...document.tag_ids];
-		values = Object.fromEntries(
-			lookup.attributes.map((attribute) => [
-				attribute.id,
-				toField(attribute.data_type, document.attributes[attribute.id])
-			])
-		);
+		fromDocument();
 	}
 </script>
 

@@ -8,7 +8,7 @@
 	import { Badge } from '#lib/components/ui/badge/index.ts';
 	import { Button } from '#lib/components/ui/button/index.ts';
 	import * as Table from '#lib/components/ui/table/index.ts';
-	import { describeError } from '#lib/errors.ts';
+	import { describeError, reportError } from '#lib/errors.ts';
 	import { formatDate } from '#lib/i18n.ts';
 	import { PagedList } from '#lib/paging.svelte.ts';
 	import { m } from '#lib/paraglide/messages.js';
@@ -31,11 +31,17 @@
 	});
 
 	$effect(() => {
-		void id;
+		const wanted = id;
+		name = '';
 		void list.reload();
-		api
-			.GET('/api/v1/webhooks/{id}', { params: { path: { id } } })
-			.then(({ data }) => (name = data?.name ?? ''));
+		unwrap(api.GET('/api/v1/webhooks/{id}', { params: { path: { id: wanted } } })).then(
+			(hook) => {
+				if (wanted === id) name = hook.name;
+			},
+			(error) => {
+				if (wanted === id) reportError(error);
+			}
+		);
 	});
 
 	const outcomeLabel: Record<Outcome, () => string> = {

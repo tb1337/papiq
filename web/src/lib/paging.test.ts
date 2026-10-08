@@ -53,4 +53,37 @@ describe('PagedList', () => {
 		await items.reload();
 		expect(items.items).toEqual([1, 2]);
 	});
+
+	it('is not stuck loading when a refresh overtakes a page in flight', async () => {
+		let release: () => void = () => {};
+		let hold = false;
+		const items = new PagedList<number>(async (after) => {
+			if (hold && after === 'two') await new Promise<void>((resolve) => (release = resolve));
+			return pages[(after as string | null) ?? 'start'];
+		});
+		await items.reload();
+		hold = true;
+		const more = items.more();
+		hold = false;
+		await items.refresh();
+		release();
+		await more;
+		expect(items.loading).toBe(false);
+		expect(items.items).toEqual([1, 2]);
+		await items.more();
+		expect(items.items).toEqual([1, 2, 3]);
+	});
+
+	it('keeps the list when a refresh fails', async () => {
+		let fail = false;
+		const items = new PagedList<number>(async () => {
+			if (fail) throw new Error('boom');
+			return pages.start;
+		});
+		await items.reload();
+		fail = true;
+		await items.refresh();
+		expect(items.error).toBeNull();
+		expect(items.items).toEqual([1, 2]);
+	});
 });

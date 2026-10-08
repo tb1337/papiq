@@ -32,6 +32,9 @@
 	let doc: pdfjs.PDFDocumentProxy | null = null;
 	let loadingTask: pdfjs.PDFDocumentLoadingTask | null = null;
 	let observer: IntersectionObserver | null = null;
+	// Only the newest layout may set the pages; none after the viewer is gone.
+	let layoutRun = 0;
+	let destroyed = false;
 	// Plain bookkeeping, nothing in the markup reads these.
 	// eslint-disable-next-line svelte/prefer-svelte-reactivity
 	const tasks = new Map<number, pdfjs.RenderTask>();
@@ -84,10 +87,12 @@
 	/** Sizes of all pages at the current zoom; the canvases fill in when they come into view. */
 	async function layout() {
 		if (!doc) return;
+		const run = ++layoutRun;
 		const next: { width: number; height: number }[] = [];
 		const base = fitWidth();
 		for (let number = 1; number <= doc.numPages; number++) {
 			const page = await doc.getPage(number);
+			if (destroyed || run !== layoutRun) return;
 			const viewport = page.getViewport({ scale: 1 });
 			const scale = (base / viewport.width) * zoom;
 			next.push({ width: viewport.width * scale, height: viewport.height * scale });
@@ -99,10 +104,14 @@
 	}
 
 	async function draw(number: number, canvas: HTMLCanvasElement) {
-		if (!doc || rendered.has(number)) return;
+		if (!doc || destroyed || rendered.has(number)) return;
 		rendered.add(number);
 		const page = await doc.getPage(number);
 		const size = pages[number - 1];
+		if (destroyed || !size) {
+			rendered.delete(number);
+			return;
+		}
 		const unscaled = page.getViewport({ scale: 1 });
 		const ratio = window.devicePixelRatio || 1;
 		const viewport = page.getViewport({ scale: (size.width / unscaled.width) * ratio });
@@ -149,6 +158,7 @@
 
 	onMount(() => void open());
 	onDestroy(() => {
+		destroyed = true;
 		observer?.disconnect();
 		for (const task of tasks.values()) task.cancel();
 		void loadingTask?.destroy();
