@@ -65,6 +65,7 @@ _PROBLEMS: dict[int, tuple[str, str]] = {
     502: ("Bad Gateway", "the identity provider cannot be reached"),
     403: ("Forbidden", "only the owner controls processing of this document"),
     404: ("Not Found", "document 01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b not found"),
+    405: ("Method Not Allowed", "the method is not allowed here"),
     409: ("Conflict", "duplicate of document 01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b"),
     413: ("Content Too Large", "the request body is larger than 1048576 bytes"),
     415: ("Unsupported Media Type", "unsupported file type"),

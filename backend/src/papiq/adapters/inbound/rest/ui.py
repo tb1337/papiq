@@ -44,7 +44,8 @@ def ui_routes(directory: Path) -> list[BaseRoute]:
         return RedirectResponse(f"{UI_PREFIX}/", status_code=308)
 
     async def serve(request: Request) -> Response:
-        path: str = request.path_params["path"]
+        # Without empty segments: `//_app/x` is `_app/x`.
+        path = "/".join(part for part in request.path_params["path"].split("/") if part)
         found = await run_in_threadpool(_find, root, path)
         if found is not None:
             cache = IMMUTABLE if path.startswith(_IMMUTABLE_DIRECTORY) else REVALIDATE
