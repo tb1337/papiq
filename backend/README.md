@@ -289,7 +289,8 @@ version; deleting is a soft delete.
 
   `matches` takes `case_sensitive` (default false). Patterns run with the `regex` package
   (`adapters/outbound/regex`) in a thread with a time limit (`PAPIQ_RULES_PATTERN_TIMEOUT`); a
-  pattern that times out does not match and is logged. The text is the parsed Markdown without
+  pattern that times out does not match and is logged. All patterns of one run on one
+  document get two seconds together, a preview page twenty; the patterns left do not match. The text is the parsed Markdown without
   markup, at most `PAPIQ_RULES_MAX_TEXT` characters; it is loaded only if a rule looks at it.
 - **Actions.** `set_drawer`, `set_contact`, `set_document_type`, `set_title` (placeholders
   `{contact}`, `{document_type}`, `{document_date}`, `{filename}`), `add_tags`, `remove_tags`,
@@ -298,21 +299,24 @@ version; deleting is a soft delete.
   another rule match in the same run. Contact, type and tags the model set and no person
   confirmed are distrusted: a rule that matches only because of them does not file into a
   drawer that others see (shared or another user's); it is reported instead. Retroactively
-  this does not apply: the person picks each document from the preview.
+  such a move is a conflict: it acts only where the person accepts it.
 - **Combining.** A field set by one rule, or by several to the same value, is set. Different
   values are a conflict and nothing is set; priority never decides. A value a person decided
-  is never replaced (the rule is logged as overruled); a value the model set and no person
+  in the current processing run is never replaced (the rule is logged as overruled): in the
+  inbox, by a change, or the drawer chosen on upload or by moving the document; a value the model set and no person
   confirmed is not replaced either (conflict). Tags of all rules are combined; added by one and
   removed by another is a conflict.
 - **On arrival** conflicts, refused actions and forced reviews make `apply_rules` uncertain: the
   document waits in the inbox. Confirming it there (`POST /documents/{id}/confirm`, optionally
-  with `drawer_id`) decides the open fields and continues to filing. Filing checks once more
-  that the owner may file into the drawer.
+  with `drawer_id`) decides the open fields and continues to filing; a forced review the owner
+  saw counts as answered. Filing checks once more that the owner may file into the drawer; if
+  not, confirming needs a `drawer_id` (`422` with `open_fields: ["drawer"]`).
 - **On a change** (`PATCH /documents/{id}`) rules are edge-triggered: a rule acts only if it
   holds after the change and did not hold before. Fields the person set in this change, or
   decided before in this processing run, are not touched. Nothing turns yellow: what cannot be applied is only reported, in the `rules`
-  block of the answer (to the owner). `POST /documents/{id}/dry-run` shows the same without
-  storing anything.
+  block of the answer (to the owner). If the rules file the document where an editor who made
+  the change can no longer read it, the editor's answer is only `{"id": …, "access": null}`.
+  `POST /documents/{id}/dry-run` shows the same without storing anything.
 - **Retroactively.** `POST /rules/{id}/apply/preview` lists the documents the current version
   would change, newest first, with changes and conflicts (a page looks at 200 documents at
   most). `POST /rules/{id}/apply` pins a version and applies it to the selected documents (at
@@ -327,7 +331,8 @@ version; deleting is a soft delete.
 - **Log.** Every run is a processing log entry of step `apply_rules` with the rules and versions
   checked, matches, effects and notes. `model_version`: `rules` (the pipeline step),
   `rules:change` (after a change; it also records what the person changed), `rules:apply`
-  (retroactive), `person` (a confirmation). Later runs read from the log which values a person
+  (retroactive), `person` (a confirmation), `person:drawer` (a drawer chosen on upload or by
+  moving). Later runs read from the log which values a person
   decided and which the model set.
 
 ## Search
