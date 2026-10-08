@@ -22,7 +22,8 @@ them) and are read with the attribute definitions where needed (`check_attribute
 """
 
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import StrEnum
@@ -389,10 +390,15 @@ class RuleDefinition:
             raise ValidationError("a rule needs at least one action")
         if len(self.actions) > MAX_ACTIONS:
             raise ValidationError(f"a rule has at most {MAX_ACTIONS} actions")
-        single = [_single_key(action) for action in self.actions]
-        repeated = {key for key in single if key is not None and single.count(key) > 1}
-        if repeated:
-            raise ValidationError(f"an action sets the same field twice: {sorted(repeated)[0]}")
+        seen: set[str] = set()
+        for index, action in enumerate(self.actions):
+            key = _single_key(action)
+            if key in seen:
+                raise ValidationError(
+                    f"actions[{index}]: an action sets the same field twice: {key}"
+                )
+            if key is not None:
+                seen.add(key)
 
     def references(self) -> References:
         contacts: set[ContactId] = set()
@@ -468,11 +474,11 @@ def _single_key(action: Action) -> str | None:
 def check_scope(definition: RuleDefinition, scope: RuleScope) -> None:
     """A global rule may only tag, set attributes and force a review."""
     if scope is RuleScope.GLOBAL:
-        for action in definition.actions:
+        for index, action in enumerate(definition.actions):
             if not isinstance(action, GLOBAL_ACTIONS):
                 raise ValidationError(
-                    f"a global rule cannot {action.type}: global rules only add or remove "
-                    "tags, set attributes and force a review"
+                    f"actions[{index}]: a global rule cannot {action.type}: global rules only "
+                    "add or remove tags, set attributes and force a review"
                 )
 
 
@@ -480,24 +486,45 @@ def check_attributes(
     definition: RuleDefinition, definitions: Mapping[AttributeId, AttributeDefinition]
 ) -> None:
     """Conditions and actions on attributes fit the attribute's data type. ValidationError
-    otherwise; a missing attribute is a ValidationError too."""
-    for condition in definition.conditions.conditions():
+    otherwise, naming the place; a missing attribute is a ValidationError too."""
+    for place, condition in condition_places(definition.conditions):
         if condition.field is not ConditionField.ATTRIBUTE:
             continue
         assert condition.attribute_id is not None
-        attribute = _attribute(definitions, condition.attribute_id)
-        if condition.op not in ATTRIBUTE_OPERATORS[attribute.data_type]:
-            raise ValidationError(
-                f"operator '{condition.op}' does not apply to attribute '{attribute.name}' "
-                f"({attribute.data_type})"
-            )
-        if condition.op in (Operator.CONTAINS, Operator.MATCHES):
-            continue
-        for value in condition.values:
-            attribute_from_json(attribute, value)
-    for action in definition.actions:
+        with _at(place):
+            attribute = _attribute(definitions, condition.attribute_id)
+            if condition.op not in ATTRIBUTE_OPERATORS[attribute.data_type]:
+                raise ValidationError(
+                    f"operator '{condition.op}' does not apply to attribute '{attribute.name}' "
+                    f"({attribute.data_type})"
+                )
+            if condition.op in (Operator.CONTAINS, Operator.MATCHES):
+                continue
+            for value in condition.values:
+                attribute_from_json(attribute, value)
+    for index, action in enumerate(definition.actions):
         if isinstance(action, SetAttribute):
-            attribute_from_json(_attribute(definitions, action.attribute_id), action.value)
+            with _at(f"actions[{index}]"):
+                attribute_from_json(_attribute(definitions, action.attribute_id), action.value)
+
+
+def condition_places(group: Group, where: str = "conditions") -> Iterator[tuple[str, Condition]]:
+    """The conditions of the tree with their place in the JSON form, depth first."""
+    for index, item in enumerate(group.items):
+        place = f"{where}.{group.mode}[{index}]"
+        if isinstance(item, Group):
+            yield from condition_places(item, place)
+        else:
+            yield place, item
+
+
+@contextmanager
+def _at(place: str) -> Iterator[None]:
+    """Prefix the message of a ValidationError with `place`."""
+    try:
+        yield
+    except ValidationError as error:
+        raise ValidationError(f"{place}: {error}") from None
 
 
 def _attribute(

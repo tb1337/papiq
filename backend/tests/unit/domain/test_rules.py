@@ -739,6 +739,33 @@ def test_missing_attribute_is_rejected() -> None:
         check_attributes(definition(SetAttribute(attr.id, "x")), {})
 
 
+def test_errors_of_stored_data_and_scope_name_the_place() -> None:
+    """So that a client puts the message next to the condition or action concerned."""
+    number = attribute(AttributeType.NUMBER)
+    condition = Condition(
+        field=ConditionField.ATTRIBUTE, op=Operator.IS, value="abc", attribute_id=number.id
+    )
+    nested = definition(
+        AddTags(frozenset({TAG})),
+        SetAttribute(number.id, "seven"),
+        conditions=group(ALWAYS, group(ALWAYS, condition, mode="any")),
+    )
+    with pytest.raises(
+        ValidationError, match=r"^conditions\.all\[1\]\.any\[1\]: .*does not accept"
+    ):
+        check_attributes(nested, {number.id: number})
+    fitting = definition(SetAttribute(number.id, "seven"), AddTags(frozenset({TAG})))
+    with pytest.raises(ValidationError, match=r"^actions\[0\]: .*does not accept"):
+        check_attributes(fitting, {number.id: number})
+    with pytest.raises(ValidationError, match=r"^actions\[1\]: a global rule cannot set_drawer"):
+        check_scope(
+            definition(AddTags(frozenset({TAG})), SetDrawer(DrawerId(new_id()))),
+            RuleScope.GLOBAL,
+        )
+    with pytest.raises(ValidationError, match=r"^actions\[2\]: an action sets the same field"):
+        definition(SetTitle("A"), AddTags(frozenset({TAG})), SetTitle("B"))
+
+
 # --- references -------------------------------------------------------------------------------
 
 
