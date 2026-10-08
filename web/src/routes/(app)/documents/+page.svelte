@@ -6,16 +6,13 @@
 	import { api } from '#lib/api/client.ts';
 	import { unwrap } from '#lib/api/call.ts';
 	import DocumentFilters from '#lib/components/DocumentFilters.svelte';
-	import DocumentThumb from '#lib/components/DocumentThumb.svelte';
-	import LaneBadge from '#lib/components/LaneBadge.svelte';
+	import DocumentRow from '#lib/components/DocumentRow.svelte';
 	import UploadDialog from '#lib/components/UploadDialog.svelte';
 	import { Button } from '#lib/components/ui/button/index.ts';
-	import { BASE } from '#lib/base.ts';
 	import { describeError } from '#lib/errors.ts';
 	import { events } from '#lib/events.svelte.ts';
 	import { apiQuery, isFiltered, parseFilters, writeFilters, type Filters } from '#lib/filters.ts';
-	import { formatDate } from '#lib/i18n.ts';
-	import { loadLookup, names, type Lookup } from '#lib/masterdata.svelte.ts';
+	import { loadLookup, type Lookup } from '#lib/masterdata.svelte.ts';
 	import { PagedList } from '#lib/paging.svelte.ts';
 	import { m } from '#lib/paraglide/messages.js';
 	import { uploads } from '#lib/upload.svelte.ts';
@@ -33,9 +30,6 @@
 		);
 		return { items: data.items, next: data.next_cursor };
 	});
-
-	const contactName = $derived(names(lookup?.contacts ?? []));
-	const typeName = $derived(names(lookup?.documentTypes ?? []));
 
 	// Reload when the filters change, and after a reconnect of the event stream.
 	$effect(() => {
@@ -101,27 +95,7 @@
 	{:else}
 		<ul class="flex flex-col gap-2" aria-busy={list.loading}>
 			{#each list.items as document (document.id)}
-				<li>
-					<a
-						href="{BASE}/documents/{document.id}"
-						class="flex items-center gap-4 rounded-2xl border bg-card p-3 transition-colors hover:border-primary"
-					>
-						<DocumentThumb id={document.id} class="h-20 w-14 shrink-0 rounded-lg border" />
-						<div class="flex min-w-0 flex-1 flex-col gap-1">
-							<span class="truncate font-medium">{document.title}</span>
-							<span class="truncate text-sm text-muted-foreground">
-								{[
-									document.contact_id ? contactName.get(document.contact_id) : null,
-									document.document_type_id ? typeName.get(document.document_type_id) : null,
-									formatDate(document.document_date ?? document.created_at)
-								]
-									.filter(Boolean)
-									.join(' · ')}
-							</span>
-						</div>
-						<LaneBadge lane={document.lane} />
-					</a>
-				</li>
+				<li><DocumentRow {document} {lookup} /></li>
 			{/each}
 		</ul>
 		{#if list.loading && !list.loaded}

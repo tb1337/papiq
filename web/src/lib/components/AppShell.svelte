@@ -12,6 +12,7 @@
 	import * as Sheet from '#lib/components/ui/sheet/index.ts';
 	import { reportError } from '#lib/errors.ts';
 	import { home, loginHref } from '#lib/navigation.ts';
+	import { inbox } from '#lib/inbox.svelte.ts';
 	import { m } from '#lib/paraglide/messages.js';
 	import { href, isCurrent, SETTINGS, visibleSections, type Section } from '#lib/sections.ts';
 	import { session } from '#lib/session.svelte.ts';
@@ -50,6 +51,14 @@
 	>
 		{#if vertical}<section.icon class="size-[18px]" aria-hidden="true" />{/if}
 		{section.label()}
+		{#if section.path === '/inbox' && inbox.count > 0}
+			<span
+				class="grid h-5 min-w-5 place-items-center rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground"
+				aria-label={m.inbox_count({ count: inbox.count })}
+			>
+				{inbox.more ? `${inbox.count}+` : inbox.count}
+			</span>
+		{/if}
 	</a>
 {/snippet}
 

@@ -12,7 +12,13 @@
 		value = $bindable(),
 		error,
 		id
-	}: { attribute: Attribute; value: FieldValue; error?: string; id: string } = $props();
+	}: {
+		attribute: Attribute;
+		// A review holds lists too (tags); an attribute never gets one.
+		value: FieldValue | string[];
+		error?: string;
+		id: string;
+	} = $props();
 
 	const yesNo = $derived([
 		{ value: '', label: m.value_unset() },
@@ -27,7 +33,7 @@
 
 <Field.Field>
 	<Field.Label for={id}>{attribute.name}</Field.Label>
-	{#if attribute.data_type === 'amount' && typeof value === 'object'}
+	{#if attribute.data_type === 'amount' && typeof value === 'object' && !Array.isArray(value)}
 		<div class="flex gap-2">
 			<Input
 				{id}
