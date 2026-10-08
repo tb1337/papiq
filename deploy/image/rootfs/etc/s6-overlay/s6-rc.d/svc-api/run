@@ -1,0 +1,11 @@
+#!/command/with-contenv sh
+# Uvicorn with the REST API, MCP and the event streams. Only with PAPIQ_ROLE all or api.
+role=$(printf %s "${PAPIQ_ROLE:-all}" | tr '[:upper:]' '[:lower:]')
+case "$role" in
+  all | api) ;;
+  *)
+    echo "svc-api: not started with PAPIQ_ROLE=$role"
+    exec s6-svc -Od .
+    ;;
+esac
+exec papiq-run python -m papiq.composition api

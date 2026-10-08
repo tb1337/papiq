@@ -27,13 +27,15 @@ jobs:
   # Which jobs the change needs. Jobs are skipped by `if`, not by `paths`, so that a skipped
   # job counts as passed for required checks.
   #
-  # A pull request runs what its files touch; `integration` and `devcontainer` (the long ones)
-  # wait until it is no draft, and `devcontainer` ignores lock files there. The slow tests
+  # A pull request runs what its files touch; `integration`, `devcontainer` and `image` (the long
+  # ones) wait until it is no draft, and `devcontainer` ignores lock files there. The slow tests
   # (OCR, Docling: marker `docling`) run only if the change touches what they exercise
   # (`heavy`). A push to main runs
   # the checks again only where they write a cache: `backend` (mypy) and `integration` (Docling
   # models) when the lock file changed, `devcontainer` (layers) when its inputs or the lock file
-  # changed. Everything else was checked in the pull request.
+  # changed. Everything else was checked in the pull request, `image` too (it writes no cache).
+  # `image` looks at what goes into the runtime image besides the code (Dockerfile, deploy/
+  # without the Markdown files, the lock file), not at the code: its tests cover that.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -42,6 +44,7 @@ jobs:
       integration: ${{ steps.diff.outputs.integration }}
       heavy: ${{ steps.diff.outputs.heavy }}
       devcontainer: ${{ steps.diff.outputs.devcontainer }}
+      image: ${{ steps.diff.outputs.image }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -67,6 +70,11 @@ jobs:
           pipeline="$pipeline|^backend/src/papiq/core/(services/(pipeline|steps|objects)\.py|domain/pipeline)"
           pipeline="$pipeline|^backend/src/papiq/composition/|^backend/tests/(integration|samples|contracts)/"
           image="^(Dockerfile|\.dockerignore)$|^\.devcontainer/|$ci"
+          runtime="^(Dockerfile|\.dockerignore)$|^deploy/|^\.github/workflows/ci\.yml$"
+          # The runtime image's inputs; documentation in deploy/ does not change the image.
+          runtime_changed() {
+            [ "$files" = ALL ] || echo "$files" | grep -v '\.md$' | grep -qE "$runtime|$lock"
+          }
           if [ "$EVENT" = push ]; then
             matches "$lock|$ci" && echo "backend=true" >> "$GITHUB_OUTPUT"
             matches "^backend/uv\.lock$|$ci" && echo "integration=true" >> "$GITHUB_OUTPUT"
@@ -78,6 +86,7 @@ jobs:
               matches "$code" && echo "integration=true" >> "$GITHUB_OUTPUT"
               matches "$pipeline|$lock|$ci" && echo "heavy=true" >> "$GITHUB_OUTPUT"
               matches "$image" && echo "devcontainer=true" >> "$GITHUB_OUTPUT"
+              runtime_changed && echo "image=true" >> "$GITHUB_OUTPUT"
             fi
           fi
           exit 0
@@ -238,3 +247,42 @@ jobs:
       - name: Show service logs
         if: failure()
         run: $COMPOSE logs
+
+  # The runtime image, only when its inputs change, natively on each architecture (amd64 and
+  # arm64 side by side; the arm64 runner replaces the emulation that was slow and filled the
+  # disk). Builds the image without pushing it, then `deploy/test-image.sh` starts it with
+  # SQLite: migration, health, user (never root), roles, a PDF through OCR and Docling, stop.
+  # No layer cache: measured, a cold build takes 2.5 minutes, while restoring the cache takes
+  # about one minute and writing it two more, and it would take space from the 10 GB of the
+  # repository's caches.
+  image:
+    needs: changes
+    if: needs.changes.outputs.image == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    name: image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v4
+        with:
+          cache-binary: false
+      - name: Build the runtime image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: runtime
+          load: true
+          tags: papiq:ci
+          secrets: hf_token=${{ secrets.HF_TOKEN }}
+      - name: Size of the image
+        run: docker image inspect papiq:ci --format 'image size {{.Size}} bytes' | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Test the image
+        run: deploy/test-image.sh papiq:ci

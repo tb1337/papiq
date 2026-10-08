@@ -30,3 +30,7 @@ data/
 !.idea/reviews/
 .vscode/
 .DS_Store
+
+# Secrets of the example stacks (deploy/create-secrets.sh)
+deploy/secrets/
+deploy/backup/

@@ -7,13 +7,15 @@ convert between rows and domain objects explicitly.
 
 from papiq.adapters.outbound.sql.database import Database
 from papiq.adapters.outbound.sql.event_bus import SqlEventBus
-from papiq.adapters.outbound.sql.migrations import migrate
+from papiq.adapters.outbound.sql.migrations import SchemaState, migrate, schema_state
 from papiq.adapters.outbound.sql.unit_of_work import SqlUnitOfWork, SqlUnitOfWorkFactory
 
 __all__ = [
     "Database",
+    "SchemaState",
     "SqlEventBus",
     "SqlUnitOfWork",
     "SqlUnitOfWorkFactory",
     "migrate",
+    "schema_state",
 ]

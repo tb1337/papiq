@@ -1,0 +1,70 @@
+#!/command/with-contenv sh
+# Before anything else: the user, the folders of the volume and the configuration.
+set -eu
+
+fail() {
+  echo "init-papiq: $*" >&2
+  exit 1
+}
+
+puid=${PUID:-1000}
+pgid=${PGID:-1000}
+case "$puid$pgid" in
+  *[!0-9]*) fail "PUID and PGID must be numbers (got PUID=$puid, PGID=$pgid)" ;;
+esac
+if [ "$puid" -eq 0 ] || [ "$pgid" -eq 0 ]; then
+  fail "PUID and PGID must not be 0: no Papiq process runs as root"
+fi
+
+# HOME of the Papiq processes (caches of the libraries); gone with the container.
+mkdir -p /run/papiq-home
+chown "$puid:$pgid" /run/papiq-home
+chmod 700 /run/papiq-home
+
+# The folders of the volume are chowned: refuse relative paths and system folders, where a typo
+# in a setting would hand the image to PUID:PGID or leave the data outside a volume.
+safe() { # safe VARIABLE FOLDER
+  case "$2" in
+    /) fail "$1: '$2' is the root folder" ;;
+    /*) ;;
+    *) fail "$1: '$2' must be an absolute path (the image keeps its data in /data)" ;;
+  esac
+  case "$(printf %s "$2" | cut -d/ -f2)" in
+    bin | boot | dev | etc | lib | lib64 | opt | proc | root | run | sbin | sys | usr)
+      fail "$1: '$2' is a system folder; use /data or a mounted volume"
+      ;;
+  esac
+}
+
+# Make PUID:PGID the owner of the folder. Recursive only if the folder itself belongs to someone
+# else, so that a large object store is not walked at every start.
+own() {
+  mkdir -p "$1"
+  if [ "$(stat -c '%u:%g' "$1")" != "$puid:$pgid" ]; then
+    echo "init-papiq: giving $1 to $puid:$pgid"
+    chown -R "$puid:$pgid" "$1" || fail "cannot change the owner of $1 (a network share?)"
+  fi
+}
+
+lower() { printf %s "$1" | tr '[:upper:]' '[:lower:]'; }
+
+if [ "$(lower "${PAPIQ_DB_TYPE:-sqlite}")" = sqlite ]; then
+  database=${PAPIQ_DB_SQLITE_PATH:-/data/papiq.db}
+  safe PAPIQ_DB_SQLITE_PATH "$(dirname "$database")"
+  own "$(dirname "$database")"
+  # A restored backup may have left the files with another owner.
+  for file in "$database" "$database-wal" "$database-shm"; do
+    if [ -e "$file" ] && [ "$(stat -c '%u:%g' "$file")" != "$puid:$pgid" ]; then
+      chown "$puid:$pgid" "$file" || fail "cannot change the owner of $file"
+    fi
+  done
+fi
+if [ "$(lower "${PAPIQ_STORAGE_TYPE:-filesystem}")" = filesystem ]; then
+  safe PAPIQ_STORAGE_PATH "${PAPIQ_STORAGE_PATH:-/data/objects}"
+  own "${PAPIQ_STORAGE_PATH:-/data/objects}"
+fi
+
+echo "init-papiq: Papiq runs as $puid:$pgid, PAPIQ_ROLE=${PAPIQ_ROLE:-all}"
+# Fails with a readable message for any invalid or missing setting. Runs as the user of the
+# services, so that secret files must be readable by them.
+exec papiq-run python -m papiq.composition check
