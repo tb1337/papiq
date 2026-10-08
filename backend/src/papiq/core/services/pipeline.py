@@ -24,6 +24,7 @@ from papiq.core.domain.errors import (
     ValidationError,
 )
 from papiq.core.domain.ids import DocumentId, DrawerId, JobId, TagId, UserId
+from papiq.core.domain.imports import IMPORTED, ImportedMetadata
 from papiq.core.domain.jobs import Job, JobStatus
 from papiq.core.domain.json_value import JsonObject
 from papiq.core.domain.permissions import can_control_document, can_file_into
@@ -172,6 +173,8 @@ class PipelineService:
         filename: str,
         drawer: DrawerId | None = None,
         channel: Channel = Channel.API,
+        owner: UserId | None = None,
+        imported: ImportedMetadata | None = None,
     ) -> Document:
         """Store the original, then create the document, its first events and the OCR job in
         one transaction.
@@ -183,6 +186,12 @@ class PipelineService:
         twice at the same moment. An
         original that is stored already (another owner has the same file) is not stored again.
         `channel`: how the document arrived (for rules).
+
+        `owner`: an active admin may receive the document on behalf of another active user, who
+        becomes its owner (the duplicate check, the default drawer and the write access to
+        `drawer` are the owner's). `imported`: metadata of a document taken over from another
+        system, for an active admin and the channel `migration` only; it is checked against the
+        master data now and applied by the classification steps instead of the language model.
         """
         started = self._clock.now()
         sha256 = file.sha256
@@ -192,18 +201,24 @@ class PipelineService:
                 f"unsupported file type; supported: {', '.join(media_types.SUPPORTED)}"
             )
         async with self._uow() as uow:
-            target = await self._target_drawer(uow, actor, drawer, sha256)
+            owner = await self._owner(uow, actor, owner, channel, imported)
+            target = await self._target_drawer(uow, owner, drawer, sha256)
+            if imported is not None:
+                await _check_imported(uow, owner, imported, started)
         key = original_key(sha256)
         if not await self._store.exists(key):
             await self._store.upload(key, file.path, content_type=media_type)
 
-        result = StepResult(
-            outcome=Outcome.OK,
-            output={"sha256": sha256.hex, "size": file.size, "media_type": media_type},
-        )
+        output: JsonObject = {"sha256": sha256.hex, "size": file.size, "media_type": media_type}
+        if owner != actor:
+            output["uploaded_by"] = str(actor)
+        if imported is not None:
+            output[IMPORTED] = imported.to_json()
+        result = StepResult(outcome=Outcome.OK, output=output)
         try:
             return await self._create(
                 actor,
+                owner,
                 target,
                 sha256,
                 file.path,
@@ -217,7 +232,7 @@ class PipelineService:
         except ConflictError:
             # The same file arrived twice at the same moment; the other upload won.
             async with self._uow() as uow:
-                existing = await uow.documents.find_by_sha256(actor, sha256)
+                existing = await uow.documents.find_by_sha256(owner, sha256)
             if existing is None:
                 raise
             raise DuplicateDocumentError(existing.id) from None
@@ -225,6 +240,7 @@ class PipelineService:
     async def _create(
         self,
         actor: UserId,
+        owner: UserId,
         target: DrawerId,
         sha256: Sha256,
         path: Path,
@@ -246,9 +262,9 @@ class PipelineService:
             if not await self._store.exists(key):
                 await self._store.upload(key, path, content_type=media_type)
             # Check again: rights or a duplicate may have changed while the file was stored.
-            await self._target_drawer(uow, actor, target, sha256)
+            await self._target_drawer(uow, owner, target, sha256)
             document = Document.receive(
-                owner_id=actor,
+                owner_id=owner,
                 drawer_id=target,
                 sha256=sha256,
                 original_filename=filename,
@@ -275,9 +291,34 @@ class PipelineService:
             await uow.commit()
         return document
 
+    async def _owner(
+        self,
+        uow: UnitOfWork,
+        actor: UserId,
+        owner: UserId | None,
+        channel: Channel,
+        imported: ImportedMetadata | None,
+    ) -> UserId:
+        """Who will own the document: the caller, or for an admin the user they name."""
+        uploader = await load_actor(uow, actor)
+        if imported is not None:
+            if channel is not Channel.MIGRATION:
+                raise ValidationError("metadata: only with the channel 'migration'")
+            if not uploader.is_active_admin:
+                raise PermissionDeniedError("only admins can give metadata with an upload")
+        if owner is None or owner == actor:
+            return actor
+        if not uploader.is_active_admin:
+            raise PermissionDeniedError("only admins can upload on behalf of another user")
+        target = await uow.users.find(owner)
+        if target is None or not target.active:
+            raise NotFoundError("user", owner)
+        return owner
+
     async def _target_drawer(
         self, uow: UnitOfWork, actor: UserId, drawer: DrawerId | None, sha256: Sha256
     ) -> DrawerId:
+        """The drawer for a document of `actor` (its owner)."""
         user = await load_actor(uow, actor)
         existing = await uow.documents.find_by_sha256(actor, sha256)
         if existing is not None:
@@ -587,6 +628,30 @@ async def _enqueue_step(uow: UnitOfWork, document: Document, now: datetime) -> J
     return await uow.jobs.enqueue(
         STEP_JOB, payload, run_at=now, dedup_key=f"{document.id}:{run}:{step.value}"
     )
+
+
+async def _check_imported(
+    uow: UnitOfWork, owner: UserId, imported: ImportedMetadata, now: datetime
+) -> None:
+    """ValidationError if the metadata does not fit the master data: unknown contact, type or
+    tag, or attribute values that do not fit their definition or the document type."""
+    changes = replace(imported.classification(), tag_ids=imported.tag_ids)
+    changes = replace(changes, attributes=dict(imported.attributes))
+    try:
+        await check_references(uow, changes)
+        definitions = {item.id: item for item in await uow.attributes.list_all()}
+        scratch = Document.receive(
+            owner_id=owner,
+            drawer_id=DrawerId(owner),
+            sha256=Sha256("0" * 64),
+            original_filename="scratch",
+            media_type="application/pdf",
+            result=StepResult(outcome=Outcome.OK),
+            now=now,
+        )
+        scratch.apply_changes(changes, definitions, now)
+    except NotFoundError as error:
+        raise ValidationError(f"metadata: {error}") from None
 
 
 def _failed(reason: str) -> StepResult:
