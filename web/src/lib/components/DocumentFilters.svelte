@@ -1,5 +1,6 @@
 <script lang="ts">
 	import X from '@lucide/svelte/icons/x';
+	import AllUsersToggle from '#lib/components/AllUsersToggle.svelte';
 	import NativeSelect from '#lib/components/NativeSelect.svelte';
 	import { Button } from '#lib/components/ui/button/index.ts';
 	import {
@@ -9,8 +10,9 @@
 		type Filters,
 		type LaneFilter
 	} from '#lib/filters.ts';
-	import type { Lookup } from '#lib/masterdata.svelte.ts';
+	import { drawerLabel, type Lookup } from '#lib/masterdata.svelte.ts';
 	import { m } from '#lib/paraglide/messages.js';
+	import { session } from '#lib/session.svelte.ts';
 	import { cn } from '#lib/utils.ts';
 
 	// The filters of the list and the search. The page stores them in the URL.
@@ -30,6 +32,12 @@
 		{ value: '', label },
 		...list.map((entry) => ({ value: entry.id, label: entry.name }))
 	];
+	const drawers = $derived(
+		lookup.drawers.map((drawer) => ({
+			id: drawer.id,
+			name: drawerLabel(drawer, lookup.users, session.user?.id)
+		}))
+	);
 	const tagName = $derived(new Map(lookup.tags.map((tag) => [tag.id, tag.name])));
 	const freeTags = $derived(lookup.tags.filter((tag) => !filters.tags.includes(tag.id)));
 
@@ -65,7 +73,7 @@
 		<NativeSelect
 			aria-label={m.filter_drawer()}
 			value={filters.drawer ?? ''}
-			options={all(m.filter_drawer(), lookup.drawers)}
+			options={all(m.filter_drawer(), drawers)}
 			onchange={(value) => set({ drawer: value || null })}
 			class="h-10 w-48"
 		/>
@@ -80,6 +88,7 @@
 		{/key}
 	</div>
 	<div class="flex flex-wrap items-center gap-2">
+		<AllUsersToggle pressed={filters.allUsers} onchange={(allUsers) => set({ allUsers })} />
 		{#each LANE_FILTERS as lane (lane)}
 			<button
 				type="button"
@@ -109,7 +118,11 @@
 			</span>
 		{/each}
 		{#if isFiltered(filters)}
-			<Button variant="ghost" size="sm" onclick={() => onchange({ ...NO_FILTERS })}>
+			<Button
+				variant="ghost"
+				size="sm"
+				onclick={() => onchange({ ...NO_FILTERS, allUsers: filters.allUsers })}
+			>
 				{m.filter_reset()}
 			</Button>
 		{/if}

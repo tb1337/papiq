@@ -111,4 +111,4 @@
 	{/if}
 </div>
 
-<UploadDialog bind:open={uploadOpen} drawers={lookup?.drawers ?? []} />
+<UploadDialog bind:open={uploadOpen} drawers={lookup?.drawers ?? []} users={lookup?.users ?? []} />

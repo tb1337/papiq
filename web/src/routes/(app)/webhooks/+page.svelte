@@ -19,6 +19,7 @@
 	import { describeError, reportError } from '#lib/errors.ts';
 	import type { UserName } from '#lib/masterdata.svelte.ts';
 	import { m } from '#lib/paraglide/messages.js';
+	import { canManageWebhook } from '#lib/permissions.ts';
 	import { session } from '#lib/session.svelte.ts';
 	import { cn } from '#lib/utils.ts';
 
@@ -130,7 +131,7 @@
 						{/if}
 					</div>
 					<div class="flex flex-wrap gap-1">
-						{#if hook.owner_id === session.user?.id}
+						{#if canManageWebhook(hook, session.user)}
 							<Button
 								variant="ghost"
 								size="icon"
@@ -148,7 +149,7 @@
 						>
 							<History aria-hidden="true" />
 						</a>
-						{#if hook.owner_id === session.user?.id}
+						{#if canManageWebhook(hook, session.user)}
 							<Button
 								variant="ghost"
 								size="icon"
