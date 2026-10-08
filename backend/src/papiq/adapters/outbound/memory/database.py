@@ -82,6 +82,8 @@ LOGIN_FAILURES = Table("login failures", _no_keys)
 RULES = Table("rule", _no_keys)
 RULE_VERSIONS = Table("rule version", _no_keys)
 RULE_APPLICATIONS = Table("rule application", _no_keys)
+WEBHOOKS = Table("webhook", _no_keys)
+WEBHOOK_DELIVERIES = Table("webhook delivery", _no_keys)
 
 
 @dataclass

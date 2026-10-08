@@ -11,6 +11,8 @@ import structlog
 
 from papiq.composition.settings import Settings
 
+HTTP_CLIENT_LOGGERS = ("httpx", "httpx2", "httpcore")
+
 
 def configure_logging(settings: Settings) -> None:
     """Route all log records through structlog, formatted per `PAPIQ_LOG_FORMAT`."""
@@ -47,6 +49,10 @@ def configure_logging(settings: Settings) -> None:
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(settings.log_level)
+    # The HTTP clients log the full URL of every request at INFO. Webhook and model URLs may carry
+    # a credential in their path or query (n8n, Home Assistant), so only warnings get through.
+    for name in HTTP_CLIENT_LOGGERS:
+        logging.getLogger(name).setLevel(max(logging.WARNING, root.level))
     access = logging.getLogger("uvicorn.access")
     if not any(isinstance(f, HideCallbackQuery) for f in access.filters):
         access.addFilter(HideCallbackQuery())

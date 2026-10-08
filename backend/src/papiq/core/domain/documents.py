@@ -2,7 +2,7 @@
 
 import hashlib
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum, StrEnum
@@ -368,9 +368,14 @@ class Document:
         self._record(DocumentFiled(document_id=self.id, occurred_at=now, drawer_id=drawer_id))
         self._touch(now)
 
-    def delete(self, now: datetime) -> None:
-        """Record the deletion; the caller removes the document from the repository."""
-        self._record(DocumentDeleted(document_id=self.id, occurred_at=now))
+    def delete(self, now: datetime, readers: Iterable[UserId] = ()) -> None:
+        """Record the deletion; the caller removes the document from the repository.
+        `readers`: the users who may read the document now, for the event."""
+        self._record(
+            DocumentDeleted(
+                document_id=self.id, occurred_at=now, readers=tuple(dict.fromkeys(readers))
+            )
+        )
 
     # --- events ---------------------------------------------------------------------------------
 

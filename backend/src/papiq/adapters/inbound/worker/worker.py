@@ -3,6 +3,8 @@
 - `concurrency` job loops claim and run due jobs (the cleanup when due, then search indexing,
   else pipeline steps);
   a loop that finds nothing waits `poll_interval`.
+- `webhook_concurrency` further loops deliver webhooks, apart from the job loops: a receiver that
+  does not answer holds up deliveries, never the pipeline.
 - One loop dispatches the outbox (`EventBus.dispatch`) every `dispatch_interval` while there is
   nothing to deliver, and at once again while there is.
 - After an error, a loop waits longer, doubling up to `MAX_BACKOFF`.
@@ -24,6 +26,7 @@ from papiq.core.services.indexing import IndexingService
 from papiq.core.services.maintenance import MaintenanceService
 from papiq.core.services.pipeline import PipelineService
 from papiq.core.services.rules.retroactive import RuleApplicationService
+from papiq.core.services.webhooks import WebhookDeliveryService
 
 log = logging.getLogger(__name__)
 
@@ -43,11 +46,15 @@ class Worker:
         shutdown_timeout: timedelta,
         indexing: IndexingService | None = None,
         rules: RuleApplicationService | None = None,
+        webhooks: WebhookDeliveryService | None = None,
+        webhook_concurrency: int = 4,
     ) -> None:
         self._pipeline = pipeline
         self._rules = rules
         self._maintenance = maintenance
         self._indexing = indexing
+        self._webhooks = webhooks
+        self._webhook_concurrency = webhook_concurrency
         self._bus = event_bus
         self._concurrency = concurrency
         self._poll = poll_interval
@@ -71,6 +78,11 @@ class Worker:
             *(
                 asyncio.create_task(self._loop(f"jobs-{n}", self._run_job, self._poll))
                 for n in range(1, self._concurrency + 1)
+            ),
+            *(
+                asyncio.create_task(self._loop(f"webhooks-{n}", self._deliver, self._poll))
+                for n in range(1, self._webhook_concurrency + 1)
+                if self._webhooks is not None
             ),
             asyncio.create_task(self._loop("events", self._dispatch, self._dispatch_interval)),
         ]
@@ -114,6 +126,9 @@ class Worker:
             or await self._pipeline.run_next_job()
             or (self._rules is not None and await self._rules.run_next_job())
         )
+
+    async def _deliver(self) -> bool:
+        return self._webhooks is not None and await self._webhooks.run_next_job()
 
     async def _dispatch(self) -> bool:
         return await self._bus.dispatch() > 0

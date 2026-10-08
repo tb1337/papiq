@@ -64,12 +64,16 @@ def build_app(
             documents=services.documents,
             rules=services.rules,
             rule_applications=services.rule_applications,
+            webhooks=services.webhooks,
+            webhook_delivery=services.webhook_delivery,
             event_bus=container.event_bus,
             health_checks=health_checks(container),
             optional_checks=frozenset({"search"}),
             max_upload_size=int(settings.upload_max_size),
             max_request_size=int(settings.request_max_size),
             events_poll_interval=settings.events_poll_interval,
+            mcp_enabled=settings.mcp_enabled,
+            mcp_text_max=settings.mcp_text_max,
         )
     )
 

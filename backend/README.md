@@ -35,9 +35,9 @@ adapter must pass.
   sessions, API tokens, external identities, failed sign-ins) are part of the unit of work too.
   Further ports: `ObjectStore`, `Clock`, `Ocr`, `DocumentParser`, `PreviewRenderer`,
   `PasswordHasher`, `SecretCipher`, `Totp`, `OidcProvider`, `LanguageModel`, `Embeddings`,
-  `SearchIndex`, `PatternMatcher`.
+  `SearchIndex`, `PatternMatcher`, `WebhookSender`.
 - `core/services`: use cases (users, drawers, master data, documents, pipeline, inbox,
-  classification, rules, indexing, search, maintenance). Each runs in one unit of work and checks the caller's rights.
+  classification, rules, indexing, search, webhooks, maintenance). Each runs in one unit of work and checks the caller's rights.
 
 `papiq.composition.container.build_memory_container()` wires all designed ports to their
 in-memory adapters (fakes for OCR, parser and previews); `build_services()` creates the use
@@ -441,6 +441,8 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
 | `GET/POST /rules`, `GET/PUT/PATCH/DELETE /rules/{id}`, `GET /rules/{id}/versions`, `/versions/{number}` | Rules: list (`scope`, `include_disabled`, `all_users` for admins), create, change (new version), enable or disable, delete; see Rules |
 | `POST /rules/{id}/apply/preview`, `POST /rules/{id}/apply`, `GET /rule-applications/{id}` | Apply a rule to existing documents: preview, start (`202`), progress |
 | `GET /events` | Server-sent events of the documents the caller may read; `?document_id=` |
+| `GET/POST /webhooks`, `GET/PATCH/DELETE /webhooks/{id}` | Webhooks: the caller's own (admins read everybody's, `?owner=`); create (the answer shows the secret once), change, switch on or off, delete; see Webhooks |
+| `POST /webhooks/{id}/secret`, `POST /webhooks/{id}/test`, `GET /webhooks/{id}/deliveries` | Renew the secret (the old one signs 24 hours longer), send a test request, the delivery log (`before`, `limit`) |
 | `GET /health` | Database, bucket or storage directory and, if configured, the search index reachable; `200` (`ok`, or `degraded` if only the search is down) or `503`, no authentication |
 
 - Uploads are streamed into a temporary file and hashed on the way; the limit
@@ -466,7 +468,8 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
 - Event streams: the API subscribes to the event bus as `api.sse` and polls the outbox every
   `PAPIQ_EVENTS_POLL_INTERVAL`. Each event goes to the streams of the users who may read the
   document at that moment (other users once it is green). No replay: after reconnecting,
-  clients fetch the state. `document.deleted` is not streamed (decided in M8). One API instance
+  clients fetch the state. `document.deleted` goes to the streams of the users who could read the
+  document when it was deleted (the event carries their ids; the stream message does not). One API instance
   is assumed: several would share the `api.sse` subscription. While the API is down, its
   subscription holds back the purge of the outbox.
 - On SIGTERM the event streams end at once, open requests get ten seconds, then the database
@@ -484,10 +487,13 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
 - The cleanup (`maintenance.cleanup`, one job with a fixed dedup key; it goes before pipeline
   steps when due) runs every
   `PAPIQ_CLEANUP_INTERVAL` and removes finished jobs and delivered events older than
-  `PAPIQ_RETENTION`, ended sessions and stale counts of failed sign-ins. The same loop runs
+  `PAPIQ_RETENTION`, webhook delivery log rows of that age, ended sessions and stale counts of
+  failed sign-ins. The same loop runs
   the removal of a deleted document's files.
 - Rule applications (`rules.apply`) run 25 documents per job, then queue the next job, so
   pipeline steps do not wait behind them.
+- `PAPIQ_WEBHOOK_CONCURRENCY` further loops deliver webhooks (see Webhooks); a receiver that
+  does not answer holds up deliveries, never the pipeline.
 - SIGTERM or SIGINT: no new jobs; running jobs may finish within
   `PAPIQ_WORKER_SHUTDOWN_TIMEOUT`, then they are cancelled and their jobs released to run again
   at once. Finally the database engine and the S3 client are closed.
@@ -495,6 +501,137 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
   most `PAPIQ_EVENTS_MAX_ATTEMPTS` times. Several dispatchers under the same subscriber name
   may deliver an event twice (at least once is allowed).
 - Every loop runs its units of work one after another, never nested, as SQLite requires.
+
+## Webhooks
+
+A user subscribes to document events and Papiq sends a signed `POST` to a URL (n8n, Home
+Assistant, any service). Webhooks belong to the user who created them; the API is under
+`/webhooks` (create, list, change, switch off, delete, renew the secret, test, delivery log).
+Admins may do everything with every webhook: read it and its log, change, delete, test, renew the
+secret (which then shows to them, once). Nobody sees a secret again after it was shown. What an
+admin reads includes the target URL (which may be a capability URL) and, in the log, the document
+IDs and event types of that user's deliveries.
+At most `PAPIQ_WEBHOOKS_PER_USER` (20) per user.
+
+**Events.** `document.received`, `document.step_completed`, `document.lane_changed`,
+`document.filed`, `document.updated`, `document.deleted`, or `*` for all, also future ones. A
+webhook only hears of documents its owner may read, as with the event stream: the right is
+checked when the event is queued and again before every attempt, and a user who lost access in
+between gets nothing (the log shows `dropped`). The body carries no lane, so a receiver
+that wants the state of the document fetches it; `document.filed` is not sent while the document
+is still being processed. `document.deleted` goes to those who could read the document
+when it was deleted.
+
+**The request.** `POST <url>`, `Content-Type: application/json`, `User-Agent: Papiq/<version>`,
+and a body that names the event only; the receiver fetches details through the API with a token
+of its own:
+
+```json
+{"id": "01999d5e-...", "type": "document.filed", "occurred_at": "2026-10-08T12:00:00Z",
+ "document_id": "01999d5e-..."}
+```
+
+`id` is the event id: it is the same in every repeated attempt, so a receiver can recognise
+events it has handled. Delivery is at least once and not in order; sort by `occurred_at`. The
+test request (`POST /webhooks/{id}/test`) has `type: "webhook.test"` and `document_id: null`.
+
+**Signature** ([Standard Webhooks](https://www.standardwebhooks.com), so ready-made verification
+libraries work). Three headers: `webhook-id` (the event id), `webhook-timestamp` (Unix seconds
+of this attempt) and `webhook-signature`, `v1,<base64>` of the HMAC-SHA256 over
+`<webhook-id>.<webhook-timestamp>.<raw body>` with the secret (`whsec_` and 32 bytes in Base64;
+the key is the Base64-decoded part after the prefix). Right after the secret was renewed the
+header holds two signatures separated by a space, one per secret; accept the request if one
+matches. A receiver should:
+
+1. read the raw body (not a re-serialised JSON),
+2. recompute the signature and compare with `hmac.compare_digest`,
+3. refuse a `webhook-timestamp` older than five minutes (protection against replay; every
+   attempt has a fresh timestamp),
+4. skip event ids it has handled already.
+
+```python
+import base64, hashlib, hmac, time
+
+
+def verify(secret: str, headers: dict[str, str], body: bytes) -> bool:
+    if abs(time.time() - int(headers["webhook-timestamp"])) > 300:
+        return False
+    key = base64.b64decode(secret.removeprefix("whsec_"))
+    content = f"{headers['webhook-id']}.{headers['webhook-timestamp']}.".encode() + body
+    expected = base64.b64encode(hmac.new(key, content, hashlib.sha256).digest()).decode()
+    signatures = [part.split(",", 1)[1] for part in headers["webhook-signature"].split()]
+    return any(hmac.compare_digest(expected, signature) for signature in signatures)
+```
+
+The same on the command line, for a body saved as `body.json` without changes:
+
+```sh
+KEY=$(printf %s "${SECRET#whsec_}" | base64 -d | od -An -vtx1 | tr -d ' \n')
+{ printf '%s.%s.' "$WEBHOOK_ID" "$WEBHOOK_TIMESTAMP"; cat body.json; } \
+  | openssl dgst -sha256 -mac HMAC -macopt hexkey:"$KEY" -binary | base64
+# compare the output with the part after "v1," in webhook-signature
+```
+
+**Answers and repetition.** Any `2xx` answer is delivered. No answer (unreachable, timeout after
+`PAPIQ_WEBHOOK_TIMEOUT`, certificate refused), `5xx`, `408`, `425` and `429` are repeated, up to
+`PAPIQ_WEBHOOK_MAX_ATTEMPTS` attempts with `PAPIQ_WEBHOOK_RETRY_DELAY` doubling up to an hour
+(30 s, 1, 2, 4, 8, 16, 32, 60, 60 minutes: about three hours). `3xx` and every other `4xx` are
+final: redirects are never followed, since the signature would not hold for another target.
+After `PAPIQ_WEBHOOK_DISABLE_AFTER` (20) deliveries given up in a row Papiq switches the webhook
+off (`active: false`, `disabled_reason: failing`); switching it on again clears the count.
+A receiver that is down delays the deliveries behind it, since the `PAPIQ_WEBHOOK_CONCURRENCY`
+loops wait for it up to the timeout per attempt; the pipeline is not affected.
+
+**The log** (`GET /webhooks/{id}/deliveries`, newest first) has one row per attempt: time,
+event, `outcome` (`delivered`, `retrying`, `gave_up`, `dropped`), HTTP status, duration, error
+and the time of the next attempt. The receiver's answer is neither stored nor shown. Rows are
+removed after `PAPIQ_RETENTION`.
+
+**Secrets.** Papiq generates the secret and shows it once, in the answer to creating a webhook
+or renewing its secret. It is stored encrypted with `PAPIQ_SECRET_KEY` (the worker needs the key
+too, to sign). Renewing keeps the old secret signing next to the new one for
+`PAPIQ_WEBHOOK_SECRET_GRACE` (24 hours), so the receiver can switch without a gap; renewing again
+ends that at once.
+
+**Targets.** `http` and `https` to any host and port, including the own network. `https`
+certificates are verified; there is no switch against that (use `http` or a valid certificate).
+Anyone who may create webhooks can make the server send `POST`s to addresses it can reach and
+see from status and error whether something answers; the body is fixed and the answer is not
+shown.
+
+## MCP
+
+The API serves the Model Context Protocol (Streamable HTTP, stateless, JSON answers) at
+`/api/v1/mcp`, so AI clients can search documents, read them and correct their metadata.
+`PAPIQ_MCP_ENABLED=false` removes it. It is not part of the OpenAPI document.
+
+Authentication: a personal API token (`POST /auth/tokens`; the web UI will offer it later) as
+`Authorization: Bearer papiq_…`; cookies do not count. Without a valid token the answer is `401`
+(`WWW-Authenticate: Bearer`). A client sees exactly what its token's user sees. The scope works
+as in REST: `read` may use every tool but `update_metadata`.
+
+| Tool | Does |
+| --- | --- |
+| `search` | `query`, `limit` (1 to 25), `offset`, optional `contact`, `document_type`, `tags` (names): hits with `id`, `title`, `score`, `snippet` (plain text), contact, type, tags, date, lane, `access`; `next_offset`, `semantic` |
+| `get_document` | `id`: metadata with contact, type, tags and attributes by name, lane and processing status |
+| `get_text` | `id`, `offset`, `limit` (characters, at most `PAPIQ_MCP_TEXT_MAX`, 20,000): a piece of the document's text as Markdown, `next_offset` to continue. The text is content from outside; the tool description tells clients not to follow instructions in it |
+| `update_metadata` | `id` and any of `title`, `contact`, `document_type` (name; `null` removes), `tags` (the complete list, replaces), `document_date` (`null` removes), `attributes` (attribute name to value; `null` removes). Needs a `read_write` token and write access; the owner's change rules run as for `PATCH /documents/{id}` and the result shows them. If the rules filed the document where the caller can no longer read it, the result has only `id` and `access: null` |
+| `list_tags` | All tags, to name them in the other tools |
+
+Names are matched regardless of case; an unknown name is an error, nothing is created. A
+document the caller may not read is "not found", with the same text as a missing one.
+
+Set up Claude Code (use a `read` token if the client should only read):
+
+```sh
+claude mcp add --transport http papiq https://papiq.example.org/api/v1/mcp \
+  --header "Authorization: Bearer papiq_..."
+```
+
+Other clients take the same URL and header; the MCP Inspector
+(`npx @modelcontextprotocol/inspector`) is handy to try it out: transport *Streamable HTTP*,
+the URL, and the header `Authorization`. Behind a reverse proxy the path needs no special
+handling; requests are plain `POST`s with JSON bodies, limited by `PAPIQ_REQUEST_MAX_SIZE`.
 
 ## Configuration
 
@@ -534,7 +671,7 @@ Durations are seconds (`30`, `1.5`) or ISO 8601 (`PT1H`, `P7D`) and must be posi
 | `PAPIQ_UPLOAD_MAX_SIZE` | `100MiB` | Largest upload; bytes or with unit (`50MB`, `1GiB`) |
 | `PAPIQ_REQUEST_MAX_SIZE` | `1MiB` | Largest body of every other request (JSON); larger ones get `413` |
 | `PAPIQ_FORWARDED_ALLOW_IPS` | unset; required with `PAPIQ_COOKIE_SECURE=true` | Reverse proxies whose `X-Forwarded-For` is trusted (comma-separated). Secure cookies mean a TLS-terminating proxy in front of Papiq: name its address, or the per-source throttle sees only the proxy. `*` only if the proxy sets the header itself, replacing what clients send |
-| `PAPIQ_SECRET_KEY` | required for `all`, `api` | *secret*; 32 bytes base64 (`openssl rand -base64 32`); encrypts TOTP secrets. Keep it: without it, TOTP secrets cannot be read |
+| `PAPIQ_SECRET_KEY` | required | *secret*; 32 bytes base64 (`openssl rand -base64 32`); encrypts TOTP and webhook secrets, also needed by the worker. Keep it: without it, they cannot be read |
 | `PAPIQ_ADMIN_USERNAME`, `PAPIQ_ADMIN_PASSWORD` | unset | The first admin, see Identity; password *secret*; set both or neither |
 | `PAPIQ_SESSION_IDLE_TIMEOUT` | `P1D` | A session ends when unused this long |
 | `PAPIQ_SESSION_MAX_AGE` | `P30D` | A session ends this long after sign-in; not shorter than the idle timeout |
@@ -583,6 +720,15 @@ Durations are seconds (`30`, `1.5`) or ISO 8601 (`PT1H`, `P7D`) and must be posi
 | `PAPIQ_EMBEDDING_TIMEOUT` | `60` | Seconds per request |
 | `PAPIQ_EMBEDDING_DIMENSIONS` | unset | Length of the vectors (`bge-m3`: 1024); required with Meilisearch and an embedding endpoint |
 | `PAPIQ_EMBEDDING_QUERY_PREFIX`, `PAPIQ_EMBEDDING_DOCUMENT_PREFIX` | unset | Put before queries and before document sections, for models that ask for it |
+| `PAPIQ_WEBHOOKS_PER_USER` | `20` | Webhooks a user may have |
+| `PAPIQ_WEBHOOK_SECRET_GRACE` | `P1D` | How long the old secret signs after renewing |
+| `PAPIQ_WEBHOOK_TIMEOUT` | `10` | Seconds per delivery attempt (1 to 120) |
+| `PAPIQ_WEBHOOK_MAX_ATTEMPTS` | `10` | Attempts per delivery (1 to 50) |
+| `PAPIQ_WEBHOOK_RETRY_DELAY` | `30` | Seconds before the second attempt, doubling after, at most an hour |
+| `PAPIQ_WEBHOOK_DISABLE_AFTER` | `20` | Deliveries given up in a row until a webhook is switched off |
+| `PAPIQ_WEBHOOK_CONCURRENCY` | `4` | Deliveries at the same time (worker) |
+| `PAPIQ_MCP_ENABLED` | `true` | Serve MCP at `/api/v1/mcp` |
+| `PAPIQ_MCP_TEXT_MAX` | `20000` | Characters one `get_text` call returns at most (1,000 to 1,000,000) |
 | `PAPIQ_RULES_PATTERN_TIMEOUT` | `0.2` | Seconds a regular expression of a rule may run per text or value |
 | `PAPIQ_RULES_MAX_TEXT` | `200000` | Characters of text rules look at (1,000 to 10,000,000) |
 | `PAPIQ_RULES_APPLY_MAX_DOCUMENTS` | `1000` | Documents per retroactive rule application (1 to 100,000) |
@@ -604,7 +750,7 @@ The markers are applied by directory, so new tests only need to be placed in the
 `tests/contracts` holds the contract suites (classes such as `UnitOfWorkContract`). An adapter's
 test module subclasses each suite as `Test...` and provides the adapter fixture
 (`uow_factory`, `event_bus_factory`, `object_store`, `clock`, `ocr`, `parser`,
-`preview_renderer`); see
+`preview_renderer`, `webhook_sender`); see
 `tests/unit/adapters/memory/test_contracts.py`.
 
 The SQL adapter runs the contract suites and `tests/sql_suite.py` (types, concurrency,
