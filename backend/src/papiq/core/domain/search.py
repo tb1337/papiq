@@ -1,7 +1,7 @@
 """What the search index holds, and who may find it.
 
 The index is derived from the repository and the object store and can always be rebuilt from
-them. `Visibility.allows` is the read rule of `permissions.py` in the form of an index document:
+them. `Visibility.allows` is the reach rule of `permissions.py` in the form of an index document:
 a test keeps both in line, and every search needs a `Visibility`.
 """
 
@@ -95,13 +95,15 @@ class IndexState:
 class Visibility:
     """Who is searching and which drawers they can read from: the drawers they own and those
     shared with them. Own documents are visible in every lane; other users' documents only when
-    green and in one of `drawers`."""
+    green and in one of `drawers` (the user's reach, `permissions.in_reach`). `everything`: every
+    document, for an admin who asks for all users' documents."""
 
     user: UserId
     drawers: frozenset[DrawerId]
+    everything: bool = False
 
     def allows(self, document: IndexDocument) -> bool:
-        if document.owner_id == self.user:
+        if self.everything or document.owner_id == self.user:
             return True
         return document.lane is Lane.GREEN and document.drawer_id in self.drawers
 

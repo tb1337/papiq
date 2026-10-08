@@ -121,8 +121,8 @@ class DocumentRepository(Repository[DocumentId, Document], Protocol):
     async def find_by_sha256(self, owner: UserId, sha256: Sha256) -> Document | None: ...
 
     async def list_visible_to(self, user: UserId) -> list[Document]:
-        """Documents the user may read, by the rules of `papiq.core.domain.permissions`:
-        own documents, and green documents in drawers the user owns or that are shared with them.
+        """Documents within the user's reach (`papiq.core.domain.permissions.in_reach`): own
+        documents, and green documents in drawers the user owns or that are shared with them.
         """
         ...
 
@@ -148,6 +148,12 @@ class DocumentRepository(Repository[DocumentId, Document], Protocol):
     ) -> list[Document]:
         """Documents the user may read (as `list_visible_to`) that match `filter`, newest first
         (by id, descending), only those with an id below `before`, at most `limit`."""
+        ...
+
+    async def query(
+        self, filter: DocumentFilter, *, before: DocumentId | None = None, limit: int
+    ) -> list[Document]:
+        """As `query_visible`, over every document (for admins)."""
         ...
 
     async def remove(self, id: DocumentId) -> None:
