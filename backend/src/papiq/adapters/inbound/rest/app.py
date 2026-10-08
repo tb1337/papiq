@@ -1,4 +1,5 @@
-"""The FastAPI application. All routes live below `/api/v1`; `/` stays free for the web UI."""
+"""The FastAPI application. All routes of the API live below `/api/v1`; the web UI, if there is
+one, below `/ui`."""
 
 import asyncio
 import contextlib
@@ -35,6 +36,7 @@ from papiq.adapters.inbound.rest.context import ApiContext
 from papiq.adapters.inbound.rest.events import EventHub, dispatch_forever
 from papiq.adapters.inbound.rest.middleware import LimitRequestBody, NoStore
 from papiq.adapters.inbound.rest.schemas import EventMessage
+from papiq.adapters.inbound.rest.ui import ui_routes
 
 PREFIX = "/api/v1"
 
@@ -136,6 +138,9 @@ def create_app(context: ApiContext) -> FastAPI:
         app.include_router(router, prefix=PREFIX)
     if mcp is not None:
         app.router.routes.extend(mcp.routes)
+    # After the API: its paths never reach the UI.
+    if context.ui_directory is not None:
+        app.router.routes.extend(ui_routes(context.ui_directory))
 
     original_openapi = app.openapi
 
