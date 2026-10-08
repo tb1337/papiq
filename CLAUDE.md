@@ -9,7 +9,7 @@ Paperless-ngx. Python backend, hexagonal (ports and adapters); the REST API is t
 | --- | --- |
 | `backend/` | Python package `papiq`: `core` (domain, ports, services), `adapters` (inbound, outbound), `composition` |
 | `web/` | Web UI: SvelteKit single-page app below `/ui`, client generated from `web/openapi.json` (see `web/README.md`) |
-| `migration/` | Paperless-ngx migration client (not started) |
+| `migration/` | Paperless-ngx migration client: separate uv project `papiq_migration` (`plan`, `run`, `verify`; see `migration/README.md`) |
 | `deploy/` | Runtime image files (s6-overlay services, `image/rootfs`), example Compose stacks (SQLite, Postgres + Garage), `test-image.sh`, `README.md` (operation, backup) |
 | `.devcontainer/` | Devcontainer: Compose services (Postgres, Garage, Meilisearch) and dev credentials |
 | `Dockerfile` | Stages `base`, `deps`, `docling-models`, `app`, `s6`, `web` (UI build), `dev` (devcontainer) and `runtime` (production image) |
@@ -54,7 +54,15 @@ docker build --target runtime -t papiq:local .
 deploy/test-image.sh papiq:local     # starts it with SQLite: migration, health, user, roles, a PDF, stop
 ```
 
-Run all five checks before every commit; with changes in `web/` also the web UI's checks.
+Migration client, in `migration/` (`migration/README.md`):
+
+```sh
+uv sync
+uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest
+```
+
+Run all five checks before every commit; with changes in `web/` also the web UI's checks, with
+changes in `migration/` its checks.
 
 ## Architecture rules
 
