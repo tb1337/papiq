@@ -179,8 +179,8 @@ class UserService:
 
     async def delete_user(self, actor: UserId, id: UserId) -> None:
         """Admins only, and only for a user who owns no documents and whose drawers are empty.
-        Removes their drawers, the shares to them, their rules and all their sign-in data.
-        Other users' rules that file into the removed drawers are disabled."""
+        Removes their drawers, the shares to them, their rules and webhooks and all their sign-in
+        data. Other users' rules that file into the removed drawers are disabled."""
         async with self._uow() as uow:
             await _require_admin(uow, actor)
             user = await uow.users.get(id)
@@ -199,6 +199,7 @@ class UserService:
                     drawer.unshare(id)
                     await uow.drawers.update(drawer)
             await uow.rules.remove_for_owner(id)
+            await uow.webhooks.remove_for_owner(id)
             for drawer in removed:
                 await disable_rules(
                     uow,

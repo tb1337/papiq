@@ -20,6 +20,7 @@ from tests.contracts.identity import IdentityRepositoriesContract
 from tests.contracts.job_queue import JobQueueContract
 from tests.contracts.rules import RuleRepositoriesContract
 from tests.contracts.unit_of_work import UnitOfWorkContract
+from tests.contracts.webhooks import WebhookRepositoryContract
 from tests.sql_suite import MigrationSuite, SqlAdapterSuite
 
 
@@ -36,6 +37,10 @@ class TestPostgresJobQueue(JobQueueContract):
 
 
 class TestPostgresRuleRepositories(RuleRepositoriesContract):
+    pass
+
+
+class TestPostgresWebhookRepository(WebhookRepositoryContract):
     pass
 
 

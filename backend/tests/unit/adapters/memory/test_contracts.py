@@ -51,6 +51,7 @@ from tests.contracts.processing import OcrContract, ParserContract, PreviewRende
 from tests.contracts.rules import RuleRepositoriesContract
 from tests.contracts.search_index import DIMENSIONS, SearchIndexContract
 from tests.contracts.unit_of_work import UnitOfWorkContract
+from tests.contracts.webhooks import WebhookRepositoryContract
 
 
 @pytest.fixture
@@ -88,6 +89,10 @@ class TestMemoryUnitOfWork(UnitOfWorkContract):
 
 
 class TestMemoryRuleRepositories(RuleRepositoriesContract):
+    pass
+
+
+class TestMemoryWebhookRepository(WebhookRepositoryContract):
     pass
 
 

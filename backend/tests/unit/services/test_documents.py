@@ -7,6 +7,7 @@ from papiq.core.domain.attributes import AttributeType
 from papiq.core.domain.documents import Document, DocumentChanges
 from papiq.core.domain.drawers import Drawer, ShareLevel
 from papiq.core.domain.errors import (
+    ConflictError,
     NotFoundError,
     PermissionDeniedError,
     ValidationError,
@@ -18,7 +19,7 @@ from papiq.core.domain.users import Role, User
 from papiq.core.ports import DocumentFilter
 from papiq.core.services.documents import DocumentFile, FileInfo
 from papiq.core.services.inbox import PERSON_DRAWER
-from papiq.core.services.objects import archive_key, preview_key
+from papiq.core.services.objects import archive_key, markdown_key, preview_key
 from tests.builders import UNCERTAIN, incoming
 from tests.unit.services.conftest import Returns, World
 
@@ -192,6 +193,38 @@ async def test_only_the_owner_deletes(world: World, scene: Scene) -> None:
     assert event.document_id == scene.document.id
 
 
+async def test_the_deletion_records_who_could_read_the_document(world: World, scene: Scene) -> None:
+    await world.documents.delete(scene.owner.id, scene.document.id)
+    (event,) = world.events()
+    assert isinstance(event, DocumentDeleted)
+    assert set(event.readers) == {scene.owner.id, scene.reader.id, scene.writer.id}
+    assert scene.stranger.id not in event.readers
+
+
+async def test_a_deactivated_user_and_a_document_in_the_inbox_have_fewer_readers(
+    world: World, scene: Scene
+) -> None:
+    admin = await world.user(role=Role.ADMIN)
+    await world.users.set_active(admin.id, scene.reader.id, False)
+    await world.documents.delete(scene.owner.id, scene.document.id)
+    (event,) = world.events()
+    assert isinstance(event, DocumentDeleted)
+    assert set(event.readers) == {scene.owner.id, scene.writer.id}
+
+    world.database.outbox.clear()
+    received = await world.pipeline().receive(
+        scene.owner.id, incoming(b"%PDF-1.7 yellow"), filename="y.pdf", drawer=scene.shared.id
+    )
+    await world.drain(world.pipeline({Step.CLASSIFY: Returns(UNCERTAIN)}))
+    yellow = await world.documents.get(scene.owner.id, received.id)
+    assert yellow.lane is Lane.YELLOW
+    world.database.outbox.clear()
+    await world.documents.delete(scene.owner.id, yellow.id)
+    (event,) = world.events()
+    assert isinstance(event, DocumentDeleted)
+    assert event.readers == (scene.owner.id,)  # only the owner sees yellow documents
+
+
 async def test_only_the_owner_reads_the_processing_log(world: World, scene: Scene) -> None:
     entries = await world.documents.processing_log(scene.owner.id, scene.document.id)
     steps = [entry.step for entry in entries if entry.result.model_version != PERSON_DRAWER]
@@ -270,3 +303,41 @@ async def test_downloads_need_read_access(world: World, scene: Scene, tmp_path: 
     for file in DocumentFile:
         with pytest.raises(NotFoundError):
             await world.documents.download(scene.stranger.id, scene.document.id, file, target)
+
+
+async def test_the_text_is_read_in_pieces(world: World, scene: Scene) -> None:
+    text = "Strom März 84,20 €\n" * 5  # more than one piece, with non-ASCII characters
+    await world.object_store.put(
+        markdown_key(scene.document.id), text.encode(), content_type="text/markdown"
+    )
+    first = await world.documents.read_text(scene.reader.id, scene.document.id, limit=30)
+    assert (first.text, first.offset, first.total_length) == (text[:30], 0, len(text))
+    assert first.next_offset == 30
+    last = await world.documents.read_text(
+        scene.owner.id, scene.document.id, offset=len(text) - 10, limit=1000
+    )
+    assert (last.text, last.next_offset) == (text[-10:], None)
+    beyond = await world.documents.read_text(
+        scene.owner.id, scene.document.id, offset=len(text) + 5, limit=10
+    )
+    assert (beyond.text, beyond.next_offset) == ("", None)
+    with pytest.raises(ValidationError):
+        await world.documents.read_text(scene.owner.id, scene.document.id, offset=-1, limit=10)
+    with pytest.raises(ValidationError):
+        await world.documents.read_text(scene.owner.id, scene.document.id, limit=0)
+
+
+async def test_the_text_is_for_readers_only(world: World, scene: Scene) -> None:
+    await world.object_store.put(
+        markdown_key(scene.document.id), b"secret", content_type="text/markdown"
+    )
+    with pytest.raises(NotFoundError):
+        await world.documents.read_text(scene.stranger.id, scene.document.id, limit=10)
+    with pytest.raises(NotFoundError):
+        await world.documents.read_text(scene.owner.id, DocumentId(new_id()), limit=10)
+
+
+async def test_a_document_without_text_says_so(world: World, scene: Scene) -> None:
+    await world.object_store.delete(markdown_key(scene.document.id))
+    with pytest.raises(ConflictError, match="no text yet"):
+        await world.documents.read_text(scene.owner.id, scene.document.id, limit=10)

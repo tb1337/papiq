@@ -36,6 +36,8 @@ def make_app(
     poll: timedelta = timedelta(milliseconds=20),
     cookie_secure: bool = True,
     recheck: timedelta = timedelta(seconds=30),
+    mcp: bool = False,
+    mcp_text_max: int = 20_000,
 ) -> FastAPI:
     async def ok() -> None:
         pass
@@ -53,12 +55,16 @@ def make_app(
             documents=services.documents,
             rules=services.rules,
             rule_applications=services.rule_applications,
+            webhooks=services.webhooks,
+            webhook_delivery=services.webhook_delivery,
             event_bus=container.event_bus,
             health_checks={"database": ok, "object_store": ok},
             max_upload_size=max_upload,
             events_poll_interval=poll,
             cookie_secure=cookie_secure,
             stream_recheck_interval=recheck,
+            mcp_enabled=mcp,
+            mcp_text_max=mcp_text_max,
         )
     )
 

@@ -8,7 +8,12 @@ from pathlib import Path, PurePath
 from papiq.core.domain import media_types
 from papiq.core.domain.documents import Document, DocumentChanges
 from papiq.core.domain.drawers import Drawer, ShareLevel
-from papiq.core.domain.errors import NotFoundError, PermissionDeniedError
+from papiq.core.domain.errors import (
+    ConflictError,
+    NotFoundError,
+    PermissionDeniedError,
+    ValidationError,
+)
 from papiq.core.domain.ids import DocumentId, DrawerId, UserId
 from papiq.core.domain.permissions import (
     can_move_document,
@@ -28,7 +33,7 @@ from papiq.core.services._access import (
 )
 from papiq.core.services.inbox import InboxItem, Review, open_steps, step_reviews
 from papiq.core.services.maintenance import REMOVE_FILES_JOB
-from papiq.core.services.objects import archive_key, original_key, preview_key
+from papiq.core.services.objects import archive_key, markdown_key, original_key, preview_key
 from papiq.core.services.rules.changes import ChangeRules
 from papiq.core.services.rules.running import Prepared, RuleRun
 
@@ -56,6 +61,16 @@ class DocumentView:
 
     document: Document
     access: ShareLevel
+
+
+@dataclass(frozen=True)
+class DocumentText:
+    """A piece of the parsed text (Markdown): `offset` and lengths count characters."""
+
+    text: str
+    offset: int
+    total_length: int
+    next_offset: int | None  # where the next piece starts; None at the end
 
 
 class DocumentFile(StrEnum):
@@ -101,6 +116,30 @@ class DocumentService:
             access = document_access(user, document, drawer)
         assert access is not None  # readable
         return DocumentView(document, access)
+
+    async def read_text(
+        self, actor: UserId, id: DocumentId, *, offset: int = 0, limit: int
+    ) -> DocumentText:
+        """`limit` characters of the document's text from `offset`. NotFoundError if the
+        caller may not read the document; ValidationError for a negative offset or a limit
+        below 1; ConflictError while the document has no text yet (it is not parsed)."""
+        if offset < 0 or limit < 1:
+            raise ValidationError("offset must be 0 or more and limit 1 or more")
+        assert self._store is not None, "reading text needs the object store"
+        async with self._uow() as uow:
+            await readable_document(uow, await load_actor(uow, actor), id)
+        try:
+            data = await self._store.get(markdown_key(id))
+        except NotFoundError:
+            raise ConflictError("document has no text yet") from None
+        text = data.decode("utf-8", errors="replace")
+        end = offset + limit
+        return DocumentText(
+            text=text[offset:end],
+            offset=offset,
+            total_length=len(text),
+            next_offset=end if end < len(text) else None,
+        )
 
     async def query(
         self,
@@ -293,7 +332,7 @@ class DocumentService:
             document, _ = await readable_document(uow, user, id)
             if not is_document_owner(user, document):
                 raise PermissionDeniedError(f"only the owner deletes document {id}")
-            document.delete(self._clock.now())
+            document.delete(self._clock.now(), await _readers(uow, document))
             await uow.documents.remove(id)
             await uow.outbox.add(document.pull_events())
             await uow.jobs.enqueue(
@@ -302,6 +341,19 @@ class DocumentService:
                 run_at=self._clock.now(),
             )
             await uow.commit()
+
+
+async def _readers(uow: UnitOfWork, document: Document) -> list[UserId]:
+    """The users who may read the document now: its owner, and while it is green the owner of
+    its drawer and the users the drawer is shared with (if their accounts are active)."""
+    drawer = await uow.drawers.get(document.drawer_id)
+    candidates = {document.owner_id, drawer.owner_id, *drawer.shares}
+    readers = []
+    for candidate in candidates:
+        user = await uow.users.find(candidate)
+        if user is not None and can_read_document(user, document, drawer):
+            readers.append(candidate)
+    return sorted(readers)
 
 
 async def _save(uow: UnitOfWork, document: Document) -> None:

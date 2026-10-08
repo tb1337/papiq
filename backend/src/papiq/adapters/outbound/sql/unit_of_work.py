@@ -41,6 +41,7 @@ from papiq.adapters.outbound.sql.repositories import (
 )
 from papiq.adapters.outbound.sql.rules import SqlRuleApplicationRepository, SqlRuleRepository
 from papiq.adapters.outbound.sql.transaction import Transaction
+from papiq.adapters.outbound.sql.webhooks import SqlWebhookRepository
 from papiq.core.domain.events import DomainEvent
 
 # Key of the Postgres advisory lock that orders commits with events ("papiq:outbox").
@@ -96,6 +97,7 @@ class SqlUnitOfWork:
         self.processing_log = SqlProcessingLog(self._tx)
         self.rules = SqlRuleRepository(self._tx)
         self.rule_applications = SqlRuleApplicationRepository(self._tx)
+        self.webhooks = SqlWebhookRepository(self._tx)
         self.outbox = SqlOutbox(self._tx)
         self.jobs = SqlJobQueue(self._tx)
         self.credentials = SqlCredentialRepository(self._tx)

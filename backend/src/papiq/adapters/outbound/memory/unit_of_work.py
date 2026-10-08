@@ -29,6 +29,7 @@ from papiq.adapters.outbound.memory.database import (
     SESSIONS,
     TAGS,
     USERS,
+    WEBHOOKS,
     MemoryDatabase,
     Table,
 )
@@ -44,6 +45,7 @@ from papiq.adapters.outbound.memory.rules import (
     MemoryRuleApplicationRepository,
     MemoryRuleRepository,
 )
+from papiq.adapters.outbound.memory.webhooks import MemoryWebhookRepository
 from papiq.core.domain.attributes import AttributeDefinition
 from papiq.core.domain.documents import Document, Sha256
 from papiq.core.domain.drawers import Drawer
@@ -95,6 +97,7 @@ class MemoryUnitOfWork:
         self.processing_log = MemoryProcessingLog(self)
         self.rules = MemoryRuleRepository(self, RULES)
         self.rule_applications = MemoryRuleApplicationRepository(self, RULE_APPLICATIONS)
+        self.webhooks = MemoryWebhookRepository(self, WEBHOOKS)
         self.outbox = MemoryOutbox(self)
         self.jobs = MemoryJobQueue(self)
         self.credentials = MemoryCredentialRepository(self, CREDENTIALS)

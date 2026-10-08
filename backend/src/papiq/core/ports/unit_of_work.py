@@ -22,12 +22,13 @@ from papiq.core.ports.repository import (
     RuleRepository,
     TagRepository,
     UserRepository,
+    WebhookRepository,
 )
 
 
 class UnitOfWork(Protocol):
-    """One transaction over repositories (rules included), processing log, outbox, job queue and
-    identity.
+    """One transaction over repositories (rules and webhooks included), processing log, outbox,
+    job queue and identity.
 
     State change, events and jobs are committed together or not at all:
 
@@ -63,6 +64,8 @@ class UnitOfWork(Protocol):
     def rules(self) -> RuleRepository: ...
     @property
     def rule_applications(self) -> RuleApplicationRepository: ...
+    @property
+    def webhooks(self) -> WebhookRepository: ...
     @property
     def outbox(self) -> Outbox: ...
     @property

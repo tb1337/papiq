@@ -29,6 +29,7 @@ from papiq.adapters.outbound.memory import (
     FakePasswordHasher,
     FakePreviewRenderer,
     FakeTotp,
+    FakeWebhookSender,
     MemoryDatabase,
     MemoryEventBus,
     MemoryObjectStore,
@@ -43,6 +44,7 @@ from papiq.adapters.outbound.regex import RegexPatternMatcher
 from papiq.adapters.outbound.s3 import S3ObjectStore
 from papiq.adapters.outbound.sql import SqlEventBus, SqlUnitOfWorkFactory
 from papiq.adapters.outbound.system import SystemClock
+from papiq.adapters.outbound.webhooks import HttpWebhookSender
 from papiq.composition.database import open_database
 from papiq.composition.errors import AdapterNotAvailableError
 from papiq.composition.settings import Settings
@@ -65,6 +67,7 @@ from papiq.core.ports import (
     SecretCipher,
     Totp,
     UnitOfWorkFactory,
+    WebhookSender,
 )
 from papiq.core.services.auth import AuthService, SessionPolicy
 from papiq.core.services.classification.steps import (
@@ -86,6 +89,11 @@ from papiq.core.services.rules.steps import ApplyRulesStep, FileStep
 from papiq.core.services.search import SearchPolicy, SearchService
 from papiq.core.services.steps import OcrStep, ParseStep
 from papiq.core.services.users import UserService
+from papiq.core.services.webhooks import (
+    WebhookDeliveryService,
+    WebhookPolicy,
+    WebhookService,
+)
 
 type Factory[T] = Callable[[Settings], T]
 type Closer = Callable[[], Awaitable[None]]
@@ -273,6 +281,7 @@ class Container:
     previews: PreviewRenderer
     password_hasher: PasswordHasher
     cipher: SecretCipher
+    webhook_sender: WebhookSender
     totp: Totp
     patterns: PatternMatcher
     oidc: OidcProvider | None
@@ -317,6 +326,7 @@ def build_container(settings: Settings) -> Container:
         previews=_select("previews", "pdfium", PREVIEW_RENDERERS, settings),
         password_hasher=Argon2PasswordHasher(),
         cipher=secret_cipher(settings),
+        webhook_sender=HttpWebhookSender(user_agent=f"Papiq/{__version__}"),
         totp=PyotpTotp(),
         patterns=RegexPatternMatcher(settings.rules_pattern_timeout.total_seconds()),
         oidc=(
@@ -354,6 +364,7 @@ def build_memory_container(clock: Clock | None = None) -> Container:
         previews=FakePreviewRenderer(),
         password_hasher=FakePasswordHasher(),
         cipher=FakeCipher(),
+        webhook_sender=FakeWebhookSender(),
         totp=FakeTotp(),
         patterns=RegexPatternMatcher(DEFAULT_PATTERN_TIMEOUT),
         oidc=None,
@@ -374,6 +385,8 @@ class Services:
     master_data: MasterDataService
     rules: RuleService
     rule_applications: RuleApplicationService
+    webhooks: WebhookService
+    webhook_delivery: WebhookDeliveryService
     documents: DocumentService
     pipeline: PipelineService
     maintenance: MaintenanceService
@@ -392,6 +405,17 @@ def policy_of(settings: Settings) -> ClassificationPolicy:
         suggest_contact=settings.contact_suggest_threshold,
         input_budget=settings.llm_input_budget,
         max_tags=settings.llm_max_tags,
+    )
+
+
+def webhook_policy_of(settings: Settings) -> WebhookPolicy:
+    return WebhookPolicy(
+        per_user=settings.webhooks_per_user,
+        secret_grace=settings.webhook_secret_grace,
+        max_attempts=settings.webhook_max_attempts,
+        retry_delay=settings.webhook_retry_delay,
+        disable_after=settings.webhook_disable_after,
+        timeout=settings.webhook_timeout,
     )
 
 
@@ -472,6 +496,10 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
         drawers=DrawerService(uow, clock),
         master_data=MasterDataService(uow, clock, index_renames=index is not None),
         rules=RuleService(uow, clock),
+        webhooks=WebhookService(uow, clock, container.cipher, webhook_policy_of(settings)),
+        webhook_delivery=WebhookDeliveryService(
+            uow, clock, container.cipher, container.webhook_sender, webhook_policy_of(settings)
+        ),
         rule_applications=RuleApplicationService(
             uow,
             clock,

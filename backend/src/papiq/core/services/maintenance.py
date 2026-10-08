@@ -137,6 +137,7 @@ class MaintenanceService:
                 jobs = await uow.jobs.purge(before=before)
                 sessions = await uow.sessions.purge(now=now, idle_before=now - self._session_idle)
                 failures = await uow.login_failures.purge(before=now - _FAILURE_RETENTION)
+                deliveries = await uow.webhooks.purge_deliveries(before=before)
                 await uow.jobs.complete(job)
                 await uow.jobs.enqueue(CLEANUP_JOB, {}, run_at=next_run, dedup_key=CLEANUP_JOB)
                 await uow.commit()
@@ -156,5 +157,6 @@ class MaintenanceService:
                 "events_removed": events,
                 "sessions_removed": sessions,
                 "login_failures_removed": failures,
+                "webhook_deliveries_removed": deliveries,
             },
         )
