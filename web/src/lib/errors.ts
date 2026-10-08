@@ -24,3 +24,19 @@ export function describeError(error: unknown): string {
 export function reportError(error: unknown): void {
 	toast.error(describeError(error));
 }
+
+/**
+ * The messages of a 422 by field. The API writes the details as `field: message; field: message`
+ * (`attributes.<id>` for an attribute); anything else stays out of the result.
+ */
+export function fieldErrors(error: unknown): Record<string, string> {
+	const found: Record<string, string> = {};
+	if (!(error instanceof ApiError) || error.status !== 422) return found;
+	for (const part of (error.problem?.detail ?? '').split('; ')) {
+		const match = /^([\w-]+(?:\.[\w-]+)*): (.+)$/.exec(part);
+		if (!match) continue;
+		const name = match[1].replace(/^attributes\./, 'attribute:');
+		found[name] = match[2];
+	}
+	return found;
+}
