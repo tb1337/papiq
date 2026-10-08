@@ -7,6 +7,7 @@
 	import type { components } from '#lib/api/schema.ts';
 	import AttributeField from '#lib/components/AttributeField.svelte';
 	import NativeSelect from '#lib/components/NativeSelect.svelte';
+	import RuleEffects from '#lib/components/rules/RuleEffects.svelte';
 	import { Button } from '#lib/components/ui/button/index.ts';
 	import * as Dialog from '#lib/components/ui/dialog/index.ts';
 	import * as Field from '#lib/components/ui/field/index.ts';
@@ -262,19 +263,9 @@
 							{#each preview.rules as rule (rule.rule_id)}
 								<li class="rounded-xl border p-3">
 									<span class="font-medium">{rule.name}</span>
-									<ul class="mt-1 flex flex-col gap-0.5">
-										{#each rule.applied as effect (effect.field)}
-											<li>
-												{fieldLabel(effect.field, lookup)}:
-												{describeValue(effect.old, lookup)} → {describeValue(effect.new, lookup)}
-											</li>
-										{/each}
-										{#each rule.notes as note (note.field + note.kind)}
-											<li class="text-muted-foreground">
-												{fieldLabel(note.field, lookup)}: {note.reason}
-											</li>
-										{/each}
-									</ul>
+									<div class="mt-1">
+										<RuleEffects effects={rule.applied} notes={rule.notes} {lookup} />
+									</div>
 								</li>
 							{/each}
 						</ul>

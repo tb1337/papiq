@@ -6,12 +6,17 @@
   documents in processing are visible to their owner only.
 - Filing into a drawer needs write access to that drawer.
 - Moving a document to another drawer: its owner, into a drawer the owner may write to; or an
-  admin, any document into any drawer. Shares never allow moving.
-- Only admins manage users and master data. Apart from moving, admins have no extra rights on
-  documents or drawers.
-- Deleting, retrying and reprocessing a document is up to its owner; so is reading its
-  processing log, which may hold technical details of failed runs.
-- A deactivated user has no rights at all.
+  admin. Shares never allow moving.
+- Deleting, retrying and reprocessing a document, reading its processing log and deciding its
+  open fields is up to its owner; managing a drawer (rename, share, delete) is up to its owner.
+- Admins have every right and see everything (Tobi, 08.10.2026): they read and write every
+  document in every lane and in processing, control it as its owner does, file into and manage
+  every drawer, and manage users and master data. Only admins do the latter.
+- A deactivated user has no rights at all, a deactivated admin included.
+
+What a user reaches without the admin's rights (`reach_access`, `in_reach`) is what lists show by
+default and what webhooks report: own documents, and green documents in drawers the user owns or
+that are shared with them.
 """
 
 from papiq.core.domain.documents import Document
@@ -21,6 +26,13 @@ from papiq.core.domain.users import User
 
 
 def drawer_access(user: User, drawer: Drawer) -> ShareLevel | None:
+    if user.is_active_admin:
+        return ShareLevel.READ_WRITE
+    return reach_drawer_access(user, drawer)
+
+
+def reach_drawer_access(user: User, drawer: Drawer) -> ShareLevel | None:
+    """As `drawer_access`, without the rights of an admin."""
     if not user.active:
         return None
     if drawer.owner_id == user.id:
@@ -30,6 +42,14 @@ def drawer_access(user: User, drawer: Drawer) -> ShareLevel | None:
 
 def document_access(user: User, document: Document, drawer: Drawer) -> ShareLevel | None:
     """Access of `user` to `document`, which lies in `drawer`."""
+    access = reach_access(user, document, drawer)
+    if access is None and user.is_active_admin:
+        return ShareLevel.READ_WRITE
+    return access
+
+
+def reach_access(user: User, document: Document, drawer: Drawer) -> ShareLevel | None:
+    """As `document_access`, without the rights of an admin."""
     if document.drawer_id != drawer.id:
         raise ValueError(f"document {document.id} is not in drawer {drawer.id}")
     if not user.active:
@@ -38,11 +58,16 @@ def document_access(user: User, document: Document, drawer: Drawer) -> ShareLeve
         return ShareLevel.READ_WRITE
     if document.lane is not Lane.GREEN:
         return None
-    return drawer_access(user, drawer)
+    return reach_drawer_access(user, drawer)
 
 
 def can_read_document(user: User, document: Document, drawer: Drawer) -> bool:
     return document_access(user, document, drawer) is not None
+
+
+def in_reach(user: User, document: Document, drawer: Drawer) -> bool:
+    """`can_read_document` without the rights of an admin."""
+    return reach_access(user, document, drawer) is not None
 
 
 def can_write_document(user: User, document: Document, drawer: Drawer) -> bool:
@@ -62,13 +87,17 @@ def can_move_document(user: User, document: Document, target: Drawer) -> bool:
 
 
 def can_manage_drawer(user: User, drawer: Drawer) -> bool:
-    """Rename and share a drawer."""
-    return user.active and drawer.owner_id == user.id
+    """Rename, share and delete a drawer."""
+    return user.active and (drawer.owner_id == user.id or user.is_admin)
 
 
 def is_document_owner(user: User, document: Document) -> bool:
-    """Delete, retry and reprocess a document."""
     return user.active and document.owner_id == user.id
+
+
+def can_control_document(user: User, document: Document) -> bool:
+    """Delete, retry and reprocess a document, read its processing log, review and confirm it."""
+    return is_document_owner(user, document) or user.is_active_admin
 
 
 def can_manage_master_data(user: User) -> bool:

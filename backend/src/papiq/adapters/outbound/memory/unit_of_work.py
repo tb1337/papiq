@@ -311,17 +311,12 @@ class MemoryDocumentRepository(MemoryRepository[DocumentId, Document]):
         before: DocumentId | None = None,
         limit: int,
     ) -> list[Document]:
-        matching = [
-            document
-            for document in await self.list_visible_to(user)
-            if (before is None or document.id < before)
-            and (filter.contact is None or document.contact_id == filter.contact)
-            and (filter.document_type is None or document.document_type_id == filter.document_type)
-            and filter.tags <= document.tag_ids
-            and (filter.drawer is None or document.drawer_id == filter.drawer)
-            and (filter.lanes is None or document.lane in filter.lanes)
-        ]
-        return sorted(matching, key=lambda document: document.id, reverse=True)[:limit]
+        return _query(await self.list_visible_to(user), filter, before=before, limit=limit)
+
+    async def query(
+        self, filter: DocumentFilter, *, before: DocumentId | None = None, limit: int
+    ) -> list[Document]:
+        return _query([_copy(row) for row in self._all()], filter, before=before, limit=limit)
 
     async def exists(
         self,
@@ -506,3 +501,19 @@ class MemoryUnitOfWorkFactory:
 
     def __call__(self) -> MemoryUnitOfWork:
         return MemoryUnitOfWork(self._database)
+
+
+def _query(
+    documents: list[Document], filter: DocumentFilter, *, before: DocumentId | None, limit: int
+) -> list[Document]:
+    matching = [
+        document
+        for document in documents
+        if (before is None or document.id < before)
+        and (filter.contact is None or document.contact_id == filter.contact)
+        and (filter.document_type is None or document.document_type_id == filter.document_type)
+        and filter.tags <= document.tag_ids
+        and (filter.drawer is None or document.drawer_id == filter.drawer)
+        and (filter.lanes is None or document.lane in filter.lanes)
+    ]
+    return sorted(matching, key=lambda document: document.id, reverse=True)[:limit]

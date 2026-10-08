@@ -56,13 +56,14 @@ async def test_user_rules_are_their_owners_and_global_rules_the_admins(world: Wo
         with pytest.raises(NotFoundError):
             await action
 
-    # Admins read every rule, but change only their own and the global ones.
+    # Admins read and change every rule (Tobi, 08.10.2026); the owner stays.
     assert (await r.rules.get(r.admin.id, mine.id)).id == mine.id
     assert len(await r.rules.versions(r.admin.id, mine.id)) == 1
-    with pytest.raises(PermissionDeniedError):
-        await r.rules.change(r.admin.id, mine.id, title)
-    with pytest.raises(PermissionDeniedError):
-        await r.rules.set_enabled(r.admin.id, mine.id, False)
+    changed = await r.rules.change(r.admin.id, mine.id, title)
+    assert (changed.owner_id, changed.current.number) == (owner.id, 2)
+    assert changed.current.created_by == r.admin.id
+    assert not (await r.rules.set_enabled(r.admin.id, mine.id, False)).enabled
+    assert (await r.rules.set_enabled(r.admin.id, mine.id, True)).enabled
 
     # Listing: the caller's rules and the global ones; all users' for admins only.
     assert {rule.id for rule in await r.rules.list(owner.id)} == {mine.id, shared.id}

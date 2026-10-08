@@ -11,7 +11,6 @@
 	import { reportError } from '#lib/errors.ts';
 	import type { Drawer, UserName } from '#lib/masterdata.svelte.ts';
 	import { m } from '#lib/paraglide/messages.js';
-	import { session } from '#lib/session.svelte.ts';
 
 	type Level = components['schemas']['ShareLevel'];
 
@@ -36,7 +35,7 @@
 	const name = (id: string) => users.find((user) => user.id === id)?.username ?? id;
 	const candidates = $derived(
 		users.filter(
-			(user) => user.id !== session.user?.id && !shares.some((share) => share.user_id === user.id)
+			(user) => user.id !== drawer.owner_id && !shares.some((share) => share.user_id === user.id)
 		)
 	);
 	const levels = $derived([

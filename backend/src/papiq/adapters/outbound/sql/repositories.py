@@ -240,7 +240,7 @@ class SqlDrawerRepository(SqlRepository[DrawerId, Drawer]):
 
 
 def _visible_to(user: UserId) -> ColumnElement[bool]:
-    """The rule of `papiq.core.domain.permissions`: own documents, and green documents in
+    """The reach of `papiq.core.domain.permissions`: own documents, and green documents in
     drawers the user owns or that are shared with them."""
     documents = t.documents
     return or_(
@@ -406,8 +406,22 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
         before: DocumentId | None = None,
         limit: int,
     ) -> list[Document]:
+        return await self._query([_visible_to(user)], filter, before=before, limit=limit)
+
+    async def query(
+        self, filter: DocumentFilter, *, before: DocumentId | None = None, limit: int
+    ) -> list[Document]:
+        return await self._query([], filter, before=before, limit=limit)
+
+    async def _query(
+        self,
+        criteria: list[ColumnElement[bool]],
+        filter: DocumentFilter,
+        *,
+        before: DocumentId | None,
+        limit: int,
+    ) -> list[Document]:
         documents = t.documents
-        criteria = [_visible_to(user)]
         if before is not None:
             criteria.append(documents.c.id < before)
         if filter.contact is not None:

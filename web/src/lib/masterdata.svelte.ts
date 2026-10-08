@@ -5,6 +5,7 @@
 import { api } from '#lib/api/client.ts';
 import { unwrap } from '#lib/api/call.ts';
 import type { components } from '#lib/api/schema.ts';
+import { m } from '#lib/paraglide/messages.js';
 
 export type MasterData = components['schemas']['MasterDataOut'];
 export type Attribute = components['schemas']['AttributeOut'];
@@ -48,4 +49,15 @@ export function attributesFor(
 			attribute.document_type_ids === null ||
 			(documentTypeId !== null && attribute.document_type_ids.includes(documentTypeId))
 	);
+}
+
+/** A drawer's name, with its owner's for another user's drawer (admins see every drawer). */
+export function drawerLabel(
+	drawer: Pick<Drawer, 'name' | 'owner_id'>,
+	users: readonly UserName[],
+	me: string | undefined
+): string {
+	if (drawer.owner_id === me) return drawer.name;
+	const owner = users.find((user) => user.id === drawer.owner_id)?.username ?? drawer.owner_id;
+	return m.drawer_of({ name: drawer.name, owner });
 }

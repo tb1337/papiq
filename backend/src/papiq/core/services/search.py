@@ -15,9 +15,9 @@ from datetime import timedelta
 
 from papiq.core.domain.documents import Document
 from papiq.core.domain.drawers import Drawer, ShareLevel
-from papiq.core.domain.errors import EmbeddingsError, ValidationError
+from papiq.core.domain.errors import EmbeddingsError, PermissionDeniedError, ValidationError
 from papiq.core.domain.ids import DrawerId, UserId
-from papiq.core.domain.permissions import document_access
+from papiq.core.domain.permissions import document_access, reach_access
 from papiq.core.domain.search import Segment, Visibility
 from papiq.core.ports import (
     DocumentFilter,
@@ -82,11 +82,14 @@ class SearchService:
         offset: int = 0,
         limit: int = 20,
         semantic_ratio: float | None = None,
+        all_users: bool = False,
     ) -> SearchPage:
-        """Documents the caller may read that match `text` (and `filter`).
+        """Documents within the caller's reach that match `text` (and `filter`); with
+        `all_users` (admins only), any document.
 
         ValidationError for an empty text or a paging outside the limits, AuthenticationError
-        for a deactivated caller, SearchUnavailableError if the index cannot be reached.
+        for a deactivated caller, PermissionDeniedError for `all_users` without being an admin,
+        SearchUnavailableError if the index cannot be reached.
         """
         filter = filter or DocumentFilter()
         ratio = self._policy.semantic_ratio if semantic_ratio is None else semantic_ratio
@@ -98,6 +101,8 @@ class SearchService:
             raise ValidationError(f"offset must be 0 or more and limit between 1 and {MAX_LIMIT}")
         async with self._uow() as uow:
             user = await load_actor(uow, actor)
+            if all_users and not user.is_active_admin:
+                raise PermissionDeniedError("only admins search the documents of all users")
             drawers = await uow.drawers.list_accessible(actor)
         if offset >= MAX_HITS:
             return SearchPage([], 0, None, False)
@@ -107,7 +112,9 @@ class SearchService:
         result = await self._index.search(
             SearchQuery(
                 text=text,
-                visibility=Visibility(actor, frozenset(drawer.id for drawer in drawers)),
+                visibility=Visibility(
+                    actor, frozenset(drawer.id for drawer in drawers), everything=all_users
+                ),
                 filter=filter,
                 vector=vector,
                 semantic_ratio=ratio,
@@ -125,8 +132,10 @@ class SearchService:
                     continue  # deleted since the index was written
                 if document.drawer_id not in by_id:
                     by_id[document.drawer_id] = await uow.drawers.get(document.drawer_id)
-                access = document_access(user, document, by_id[document.drawer_id])
-                if access is None or not _matches(document, filter):
+                drawer = by_id[document.drawer_id]
+                allowed = all_users or reach_access(user, document, drawer) is not None
+                access = document_access(user, document, drawer)
+                if not allowed or access is None or not _matches(document, filter):
                     continue  # the index is behind: a share or a lane has changed
                 items.append(SearchItem(document, access, hit.score, hit.snippet))
         if len(items) < len(result.hits):

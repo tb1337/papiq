@@ -174,8 +174,8 @@ async def test_admin_moves_any_document_into_any_drawer(world: World, scene: Sce
     assert (await world.documents.get(scene.owner.id, scene.document.id)).drawer_id == (
         stranger_default.id
     )
-    with pytest.raises(NotFoundError):
-        await world.documents.get(admin.id, scene.document.id)  # moving grants no read access
+    # Admins read every document anyway (Tobi, 08.10.2026).
+    assert (await world.documents.get(admin.id, scene.document.id)).id == scene.document.id
     with pytest.raises(NotFoundError):
         await world.documents.move(admin.id, DocumentId(new_id()), stranger_default.id)
     with pytest.raises(NotFoundError):

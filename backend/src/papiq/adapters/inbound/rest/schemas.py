@@ -19,9 +19,9 @@ from papiq.core.domain.classification import FieldCheck
 from papiq.core.domain.documents import Channel, Document
 from papiq.core.domain.drawers import Drawer, ShareLevel
 from papiq.core.domain.identity import ApiToken, ExternalIdentity, LoginMethod, TokenScope
-from papiq.core.domain.ids import UserId
 from papiq.core.domain.json_value import JsonValue
 from papiq.core.domain.master_data import MasterData
+from papiq.core.domain.permissions import can_manage_drawer, drawer_access
 from papiq.core.domain.pipeline import (
     PIPELINE,
     Lane,
@@ -921,22 +921,26 @@ class DrawerOut(BaseModel):
     name: str = Field(examples=["Household"])
     owner_id: UUID
     is_default: bool
-    access: ShareLevel = Field(description="The caller's access: owner (read_write) or share.")
-    shares: list[ShareOut] | None = Field(description="Only for the owner.")
+    access: ShareLevel = Field(
+        description="The caller's access: owner and admins (read_write), or the share."
+    )
+    shares: list[ShareOut] | None = Field(description="Only for the owner and admins.")
     created_at: datetime
 
     @classmethod
-    def of(cls, drawer: Drawer, viewer: UserId) -> "DrawerOut":
-        """As `viewer` sees it, who owns it or has a share."""
-        owner = drawer.owner_id == viewer
+    def of(cls, drawer: Drawer, viewer: User) -> "DrawerOut":
+        """As `viewer` sees it, who owns it, has a share or is an admin."""
+        access = drawer_access(viewer, drawer)
+        assert access is not None  # the service returns visible drawers only
+        manager = can_manage_drawer(viewer, drawer)
         shares = sorted(drawer.shares.items())
         return cls(
             id=drawer.id,
             name=drawer.name,
             owner_id=drawer.owner_id,
             is_default=drawer.is_default,
-            access=ShareLevel.READ_WRITE if owner else drawer.shares[viewer],
-            shares=[ShareOut(user_id=u, level=level) for u, level in shares] if owner else None,
+            access=access,
+            shares=[ShareOut(user_id=u, level=level) for u, level in shares] if manager else None,
             created_at=drawer.created_at,
         )
 
@@ -1271,16 +1275,16 @@ class VisibilityOut(BaseModel):
     drawer_owner_id: UUID | None = Field(description="None unless the document is green.")
     shares: list[ShareOut] | None = Field(
         description=(
-            "The drawer's shares, if the document is green and the caller owns the drawer; "
-            "otherwise not shown."
+            "The drawer's shares, if the document is green and the caller owns the drawer or is "
+            "an admin; otherwise not shown."
         )
     )
 
     @classmethod
-    def of(cls, document: Document, drawer: Drawer, viewer: UserId) -> "VisibilityOut":
+    def of(cls, document: Document, drawer: Drawer, viewer: User) -> "VisibilityOut":
         green = document.lane is Lane.GREEN
         shares = None
-        if green and drawer.owner_id == viewer:
+        if green and can_manage_drawer(viewer, drawer):
             shares = [
                 ShareOut(user_id=u, level=level) for u, level in sorted(drawer.shares.items())
             ]
