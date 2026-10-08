@@ -1,15 +1,16 @@
 """Creating, changing and deleting webhooks, and reading their delivery log.
 
 Who may do what: a webhook belongs to its owner, who changes and deletes it, renews its secret
-and tests it. Admins read every webhook and its log (never the secret, which is shown once).
-Other users do not learn that someone else's webhook exists (NotFoundError).
+and tests it. Admins may do all of that to every webhook (Tobi, 08.10.2026); a secret they renew
+is shown to them, once. The secret is never shown again. Other users do not learn that someone
+else's webhook exists (NotFoundError).
 """
 
 import builtins
 from collections.abc import Collection
 from dataclasses import dataclass, field
 
-from papiq.core.domain.errors import ConflictError, NotFoundError, PermissionDeniedError
+from papiq.core.domain.errors import ConflictError, NotFoundError
 from papiq.core.domain.ids import DeliveryId, UserId, WebhookId
 from papiq.core.domain.users import User
 from papiq.core.domain.webhooks import Webhook, WebhookDelivery, new_secret
@@ -103,7 +104,7 @@ class WebhookService:
         active: bool | None = None,
     ) -> Webhook:
         async with self._uow() as uow:
-            webhook = await owned_webhook(uow, await load_actor(uow, actor), id)
+            webhook = await manageable_webhook(uow, await load_actor(uow, actor), id)
             webhook.change(
                 now=self._clock.now(), name=name, url=url, event_types=event_types, active=active
             )
@@ -114,14 +115,14 @@ class WebhookService:
     async def delete(self, actor: UserId, id: WebhookId) -> None:
         """The webhook and its log. Deliveries that are queued find it gone and stop."""
         async with self._uow() as uow:
-            webhook = await owned_webhook(uow, await load_actor(uow, actor), id)
+            webhook = await manageable_webhook(uow, await load_actor(uow, actor), id)
             await uow.webhooks.remove(webhook.id)
             await uow.commit()
 
     async def renew_secret(self, actor: UserId, id: WebhookId) -> CreatedWebhook:
         """A new secret, shown once. The old one signs next to it for the grace period."""
         async with self._uow() as uow:
-            webhook = await owned_webhook(uow, await load_actor(uow, actor), id)
+            webhook = await manageable_webhook(uow, await load_actor(uow, actor), id)
             secret = new_secret()
             webhook.renew_secret(
                 self._encrypt(webhook, secret),
@@ -152,8 +153,6 @@ async def visible_webhook(uow: UnitOfWork, user: User, id: WebhookId) -> Webhook
     return webhook
 
 
-async def owned_webhook(uow: UnitOfWork, user: User, id: WebhookId) -> Webhook:
-    webhook = await visible_webhook(uow, user, id)
-    if webhook.owner_id != user.id:
-        raise PermissionDeniedError(f"only the owner changes webhook {id}")
-    return webhook
+async def manageable_webhook(uow: UnitOfWork, user: User, id: WebhookId) -> Webhook:
+    """The caller's own webhook, or any webhook for an admin: whoever may see it may change it."""
+    return await visible_webhook(uow, user, id)

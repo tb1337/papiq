@@ -507,9 +507,10 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
 A user subscribes to document events and Papiq sends a signed `POST` to a URL (n8n, Home
 Assistant, any service). Webhooks belong to the user who created them; the API is under
 `/webhooks` (create, list, change, switch off, delete, renew the secret, test, delivery log).
-Admins read every webhook and its log, never the secret, and do not change other users' webhooks.
-What an admin reads includes the target URL (which may be a capability URL) and, in the log, the
-document IDs and event types of that user's deliveries.
+Admins may do everything with every webhook: read it and its log, change, delete, test, renew the
+secret (which then shows to them, once). Nobody sees a secret again after it was shown. What an
+admin reads includes the target URL (which may be a capability URL) and, in the log, the document
+IDs and event types of that user's deliveries.
 At most `PAPIQ_WEBHOOKS_PER_USER` (20) per user.
 
 **Events.** `document.received`, `document.step_completed`, `document.lane_changed`,
