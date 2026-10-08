@@ -672,6 +672,7 @@ Durations are seconds (`30`, `1.5`) or ISO 8601 (`PT1H`, `P7D`) and must be posi
 | `PAPIQ_S3_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY` | required for `s3` | *secret* |
 | `PAPIQ_API_HOST`, `PAPIQ_API_PORT` | `0.0.0.0`, `8000` | Where the API listens |
 | `PAPIQ_UPLOAD_MAX_SIZE` | `100MiB` | Largest upload; bytes or with unit (`50MB`, `1GiB`) |
+| `PAPIQ_UI_DIR` | unset; `/opt/papiq/ui` in the image | The built web UI (`web/build`), served below `/ui`; `/` leads there. Must contain `index.html` |
 | `PAPIQ_REQUEST_MAX_SIZE` | `1MiB` | Largest body of every other request (JSON); larger ones get `413` |
 | `PAPIQ_FORWARDED_ALLOW_IPS` | unset; required with `PAPIQ_COOKIE_SECURE=true` | Reverse proxies whose `X-Forwarded-For` is trusted (comma-separated). Secure cookies mean a TLS-terminating proxy in front of Papiq: name its address, or the per-source throttle sees only the proxy. `*` only if the proxy sets the header itself, replacing what clients send |
 | `PAPIQ_SECRET_KEY` | required | *secret*; 32 bytes base64 (`openssl rand -base64 32`); encrypts TOTP and webhook secrets, also needed by the worker. Keep it: without it, they cannot be read |

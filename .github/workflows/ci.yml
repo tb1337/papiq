@@ -35,7 +35,9 @@ jobs:
   # models) when the lock file changed, `devcontainer` (layers) when its inputs or the lock file
   # changed. Everything else was checked in the pull request, `image` too (it writes no cache).
   # `image` looks at what goes into the runtime image besides the code (Dockerfile, deploy/
-  # without the Markdown files, the lock file), not at the code: its tests cover that.
+  # without the Markdown files, the lock file, the web UI without its tests), not at the
+  # backend's code: its tests cover that. `web` runs for changes below web/; on main only when
+  # its lock file changed (to write the pnpm cache).
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -45,6 +47,7 @@ jobs:
       heavy: ${{ steps.diff.outputs.heavy }}
       devcontainer: ${{ steps.diff.outputs.devcontainer }}
       image: ${{ steps.diff.outputs.image }}
+      web: ${{ steps.diff.outputs.web }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -65,23 +68,30 @@ jobs:
           matches() { [ "$files" = ALL ] || echo "$files" | grep -qE "$1"; }
           ci='^\.github/(workflows/ci\.yml|compose\.ci\.yml)$'
           lock='^backend/(pyproject\.toml|uv\.lock)$'
-          code="^backend/|^\.devcontainer/(compose\.yml|dev\.env|garage)|$ci"
+          # web/openapi.json: a backend test compares it with the API.
+          code="^backend/|^web/openapi\.json$|^\.devcontainer/(compose\.yml|dev\.env|garage)|$ci"
+          web="^web/|^\.github/workflows/ci\.yml$"
           pipeline="^backend/src/papiq/adapters/outbound/(docling|ocrmypdf|pdfium)/"
           pipeline="$pipeline|^backend/src/papiq/core/(services/(pipeline|steps|objects)\.py|domain/pipeline)"
           pipeline="$pipeline|^backend/src/papiq/composition/|^backend/tests/(integration|samples|contracts)/"
           image="^(Dockerfile|\.dockerignore)$|^\.devcontainer/|$ci"
-          runtime="^(Dockerfile|\.dockerignore)$|^deploy/|^\.github/workflows/ci\.yml$"
-          # The runtime image's inputs; documentation in deploy/ does not change the image.
+          runtime="^(Dockerfile|\.dockerignore)$|^deploy/|^web/|^\.github/workflows/ci\.yml$"
+          # The runtime image's inputs. Documentation, the UI's tests and the API description (the
+          # web job builds the client; its types leave nothing in the build) do not change it.
+          not_in_image='^web/tests/|\.test\.ts$|^web/(openapi\.json|src/lib/api/schema\.ts|playwright\.config\.ts)$'
           runtime_changed() {
-            [ "$files" = ALL ] || echo "$files" | grep -v '\.md$' | grep -qE "$runtime|$lock"
+            [ "$files" = ALL ] || echo "$files" | grep -v '\.md$' \
+              | grep -vE "$not_in_image" | grep -qE "$runtime|$lock"
           }
           if [ "$EVENT" = push ]; then
             matches "$lock|$ci" && echo "backend=true" >> "$GITHUB_OUTPUT"
             matches "^backend/uv\.lock$|$ci" && echo "integration=true" >> "$GITHUB_OUTPUT"
             matches "^backend/uv\.lock$|$ci" && echo "heavy=true" >> "$GITHUB_OUTPUT"
             matches "$image|$lock" && echo "devcontainer=true" >> "$GITHUB_OUTPUT"
+            matches "^web/pnpm-lock\.yaml$|$ci" && echo "web=true" >> "$GITHUB_OUTPUT"
           else
             matches "$code" && echo "backend=true" >> "$GITHUB_OUTPUT"
+            matches "$web" && echo "web=true" >> "$GITHUB_OUTPUT"
             if [ "$DRAFT" != true ]; then
               matches "$code" && echo "integration=true" >> "$GITHUB_OUTPUT"
               matches "$pipeline|$lock|$ci" && echo "heavy=true" >> "$GITHUB_OUTPUT"
@@ -122,6 +132,46 @@ jobs:
           key: ${{ steps.mypy-cache.outputs.cache-primary-key }}
       - run: uv run lint-imports
       - run: uv run pytest -m unit -n logical
+
+  # The web UI: lint, format, types, unit tests (Vitest in jsdom), the generated API client
+  # against web/openapi.json, and the build. Playwright runs locally only (no browsers here).
+  # The pnpm store is cached per lock file, written from main only.
+  web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.21.0
+      - id: store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - id: pnpm-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ steps.store.outputs.path }}
+          key: pnpm-${{ hashFiles('web/pnpm-lock.yaml') }}
+      - run: pnpm install --frozen-lockfile
+      - if: env.WRITE_CACHE == 'true' && steps.pnpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ steps.store.outputs.path }}
+          key: ${{ steps.pnpm-cache.outputs.cache-primary-key }}
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: pnpm check
+      - run: pnpm test
+      - name: The API client matches openapi.json
+        run: pnpm gen:api && git diff --exit-code src/lib/api/schema.ts
+      - run: pnpm build
 
   # The integration tests against the devcontainer's services (Postgres, Garage, Meilisearch),
   # the OCR programs and the Docling models, on the runner. No test may skip.

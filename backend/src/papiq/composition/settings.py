@@ -100,6 +100,8 @@ class Settings(BaseSettings):
     upload_max_size: Annotated[ByteSize, Field(gt=0)] = ByteSize(100 * 1024 * 1024)
     # Every other request body (JSON).
     request_max_size: Annotated[ByteSize, Field(gt=0)] = ByteSize(1024 * 1024)
+    # The built web UI (`web/build`), served under `/ui`; unset: no UI. The image sets it.
+    ui_dir: Path | None = None
     # Addresses of reverse proxies whose X-Forwarded-For is trusted (comma-separated, `*` for
     # all); the client address counts failed sign-ins per source. Required with secure cookies.
     forwarded_allow_ips: str | None = None
@@ -260,6 +262,15 @@ class Settings(BaseSettings):
                 "secure cookies need a TLS-terminating proxy in front of Papiq; name its address "
                 "(`*` only if the proxy sets X-Forwarded-For itself, replacing what clients "
                 f"send). For development over plain HTTP set {_env('cookie_secure')}=false"
+            )
+        if (
+            self.role in ("all", "api")
+            and self.ui_dir is not None
+            and not (self.ui_dir / "index.html").is_file()
+        ):
+            problems.append(
+                f"{_env('ui_dir')}: no index.html in {self.ui_dir}; point it at the built web UI "
+                "or leave it unset to serve the API only"
             )
         if self.secret_key is None:
             # The API encrypts TOTP and webhook secrets, the worker decrypts the latter to sign.

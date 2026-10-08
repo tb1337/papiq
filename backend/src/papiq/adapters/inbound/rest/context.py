@@ -3,6 +3,7 @@
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, Request
@@ -54,6 +55,8 @@ class ApiContext:
     # The MCP endpoint (`/api/v1/mcp`) and the characters one `get_text` call returns at most.
     mcp_enabled: bool = False
     mcp_text_max: int = 20_000
+    # The built web UI, served below `/ui`; None: the API only.
+    ui_directory: Path | None = None
 
 
 def _context(request: Request) -> ApiContext:

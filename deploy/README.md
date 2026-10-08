@@ -7,7 +7,7 @@ processes inside it:
 | --- | --- | --- |
 | `init-papiq` | oneshot | check `PUID`/`PGID`, prepare the volume, validate the configuration |
 | `init-migrations` | oneshot | `PAPIQ_ROLE` `all`/`api`: migrate the database; `worker`: nothing |
-| `svc-api` | longrun | Uvicorn with FastAPI: REST, MCP, SSE (web UI files follow with M10) |
+| `svc-api` | longrun | Uvicorn with FastAPI: REST, MCP, SSE, and the web UI below `/ui` |
 | `svc-worker` | longrun | waits for the schema (role `worker`), then pipeline jobs, outbox dispatch, webhook delivery |
 
 Outside the Papiq container: Postgres (if used), Garage (if S3 is used), Meilisearch, the
@@ -15,12 +15,13 @@ language model, an identity provider. With SQLite and the file system, the datab
 live on one volume of the Papiq container.
 
 Image: Debian slim, Python 3.13, OCRmyPDF with Tesseract (German, English), Docling with the CPU
-build of PyTorch and its models (never downloaded at run time), s6-overlay 3.2.3.2. For `amd64` and
-`arm64`. About 3 GB (`docker image inspect`). Nothing secret is part of the image.
+build of PyTorch and its models (never downloaded at run time), s6-overlay 3.2.3.2, the built web
+UI in `/opt/papiq/ui` (static files; no Node.js in the image). For `amd64` and `arm64`. About 3 GB
+(`docker image inspect`). Nothing secret is part of the image.
 
 ```sh
 docker build --target runtime -t papiq:local .     # in the repository root
-deploy/test-image.sh papiq:local                   # a few minutes: starts, migrates, health, user, roles, stop
+deploy/test-image.sh papiq:local                   # a few minutes: starts, migrates, health, user, web UI, roles, stop
 ```
 
 Publishing the image comes with the release (M13); until then you build it yourself.
@@ -84,6 +85,7 @@ environment variable of a container (visible in `docker inspect` of Meilisearch,
 | `PAPIQ_EMBEDDING_BASE_URL`, `_MODEL`, `_DIMENSIONS`, `_QUERY_PREFIX` | – | with Meilisearch and embeddings the dimensions are required |
 | `PAPIQ_COOKIE_SECURE`, `PAPIQ_FORWARDED_ALLOW_IPS`, `PAPIQ_PUBLIC_URL` | `true`, –, – | behind a proxy, see below |
 | `PAPIQ_UPLOAD_MAX_SIZE` | 100 MiB | the proxy's body limit must allow it |
+| `PAPIQ_UI_DIR` | `/opt/papiq/ui` | the web UI's files; unset it to serve the API only |
 | `PAPIQ_WORKER_CONCURRENCY`, `PAPIQ_WORKER_SHUTDOWN_TIMEOUT` | 2, 30 s | see [Stopping](#stopping) |
 | `PAPIQ_MCP_ENABLED`, `PAPIQ_MCP_TEXT_MAX` | `true`, 20000 | the MCP endpoint and the characters one `get_text` returns |
 | `PAPIQ_WEBHOOKS_PER_USER` | 20 | webhooks per user |
@@ -177,6 +179,11 @@ session cookie is `Secure`). Then name the proxy: `PAPIQ_FORWARDED_ALLOW_IPS` ta
 (comma-separated, `*` only if the proxy sets `X-Forwarded-For` itself and replaces what clients
 send); Papiq counts failed sign-ins per client address from that header, and refuses to start
 with secure cookies and without it. With OIDC set `PAPIQ_PUBLIC_URL`.
+
+The web UI is at `/ui/` (`/` leads there). Papiq sets its cache headers: files below
+`/ui/_app/immutable/` carry a hash in their name and may be cached for a year, everything else
+(`no-cache`) is revalidated on every load, so an update shows at once. A proxy cache keeps these
+headers; it must not cache `/api/` (the API's answers are personal).
 
 Two paths must not be buffered or cut short by the proxy:
 

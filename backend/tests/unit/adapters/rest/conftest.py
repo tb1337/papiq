@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
+from pathlib import Path
 
 import httpx2
 import pytest
@@ -38,6 +39,7 @@ def make_app(
     recheck: timedelta = timedelta(seconds=30),
     mcp: bool = False,
     mcp_text_max: int = 20_000,
+    ui_directory: Path | None = None,
 ) -> FastAPI:
     async def ok() -> None:
         pass
@@ -65,6 +67,7 @@ def make_app(
             stream_recheck_interval=recheck,
             mcp_enabled=mcp,
             mcp_text_max=mcp_text_max,
+            ui_directory=ui_directory,
         )
     )
 

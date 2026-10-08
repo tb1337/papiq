@@ -14,7 +14,7 @@
   },
   // API, Vite, and the services of the compose network (Meilisearch, Garage S3).
   "forwardPorts": [8000, 5173, "meilisearch:7700", "garage:3900"],
-  "postCreateCommand": "uv sync --project backend",
+  "postCreateCommand": "uv sync --project backend && cd web && pnpm install",
   "customizations": {
     "vscode": {
       "extensions": [
@@ -22,7 +22,12 @@
         "charliermarsh.ruff",
         "ms-python.mypy-type-checker",
         "editorconfig.editorconfig",
-        "Anthropic.claude-code"
+        "Anthropic.claude-code",
+        "svelte.svelte-vscode",
+        "bradlc.vscode-tailwindcss",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "inlang.vs-code-extension"
       ],
       "settings": {
         "python.defaultInterpreterPath": "/home/vscode/.venv/bin/python",

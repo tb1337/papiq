@@ -74,6 +74,7 @@ def build_app(
             events_poll_interval=settings.events_poll_interval,
             mcp_enabled=settings.mcp_enabled,
             mcp_text_max=settings.mcp_text_max,
+            ui_directory=settings.ui_dir,
         )
     )
 
