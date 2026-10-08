@@ -8,6 +8,7 @@ import {
 	canManageDrawer,
 	canManageWebhook,
 	canMove,
+	drawersFor,
 	drawersWritableBy,
 	writableDrawers
 } from './permissions.ts';
@@ -123,5 +124,20 @@ describe('drawersWritableBy', () => {
 	it('keeps every drawer for an admin and none for nobody', () => {
 		expect(drawersWritableBy(drawers, { id: 'u1', role: 'admin' })).toHaveLength(4);
 		expect(drawersWritableBy(drawers, null)).toEqual([]);
+	});
+});
+
+describe('drawersFor', () => {
+	const drawers = [
+		{ id: 'a', owner_id: 'u1', access: 'read_write', shares: null },
+		{ id: 'b', owner_id: 'u2', access: 'read', shares: [] },
+		{ id: 'c', owner_id: 'u3', access: 'read', shares: null }
+	];
+
+	it("offers the caller their own choice, and an admin acting for a user that user's", () => {
+		expect(drawersFor(drawers, owner, owner).map((drawer) => drawer.id)).toEqual(['a']);
+		expect(drawersFor(drawers, admin, admin)).toHaveLength(3);
+		expect(drawersFor(drawers, other, admin).map((drawer) => drawer.id)).toEqual(['b']);
+		expect(drawersFor(drawers, null, admin)).toEqual([]);
 	});
 });
