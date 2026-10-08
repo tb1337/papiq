@@ -61,7 +61,11 @@ class MemoryRuleRepository(MemoryRepository[RuleId, Rule]):
 
     async def versions(self, id: RuleId) -> list[RuleVersion]:
         await self.get(id)
-        found = [row.item for row in self._versions._all() if row.item.rule_id == id]
+        found = [
+            self._versions._copy(row).item
+            for row in self._versions._all()
+            if row.item.rule_id == id
+        ]
         return sorted(found, key=lambda version: version.number)
 
     async def get_version(self, id: RuleId, number: int) -> RuleVersion:

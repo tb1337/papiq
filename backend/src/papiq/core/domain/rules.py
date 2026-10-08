@@ -108,6 +108,7 @@ _FIELD_OPERATORS: dict[ConditionField, frozenset[Operator]] = {
         {Operator.IS, Operator.GT, Operator.LT, Operator.PRESENT, Operator.MISSING}
     ),
 }
+_ID_FIELDS = frozenset({ConditionField.CONTACT, ConditionField.DOCUMENT_TYPE, ConditionField.TAGS})
 _ORDERED = frozenset({Operator.IS, Operator.GT, Operator.LT, Operator.PRESENT, Operator.MISSING})
 ATTRIBUTE_OPERATORS: dict[AttributeType, frozenset[Operator]] = {
     AttributeType.TEXT: frozenset(
@@ -179,13 +180,19 @@ class Condition:
             items = [self.value]
         for item in items:
             self._check_value(item)
+        if self.field in _ID_FIELDS:
+            # One spelling of every id, so conditions compare ids as text.
+            ids = [str(_uuid(item, self.field.value)) for item in items]
+            object.__setattr__(self, "value", ids if self.op is Operator.IN else ids[0])
 
     def _check_value(self, value: JsonValue) -> None:
         match self.field:
             case ConditionField.CONTACT | ConditionField.DOCUMENT_TYPE | ConditionField.TAGS:
                 _uuid(value, self.field.value)
             case ConditionField.CHANNEL:
-                if value not in {channel.value for channel in Channel}:
+                if not isinstance(value, str) or value not in {
+                    channel.value for channel in Channel
+                }:
                     raise ValidationError(f"unknown channel {value!r}")
             case ConditionField.TEXT:
                 _text(value, MAX_PATTERN if self.op is Operator.MATCHES else MAX_TEXT)
