@@ -17,6 +17,7 @@ from papiq.core.domain.pipeline import Lane, Step
 from papiq.core.domain.users import Role, User
 from papiq.core.ports import DocumentFilter
 from papiq.core.services.documents import DocumentFile, FileInfo
+from papiq.core.services.inbox import PERSON_DRAWER
 from papiq.core.services.objects import archive_key, preview_key
 from tests.builders import UNCERTAIN, incoming
 from tests.unit.services.conftest import Returns, World
@@ -193,7 +194,8 @@ async def test_only_the_owner_deletes(world: World, scene: Scene) -> None:
 
 async def test_only_the_owner_reads_the_processing_log(world: World, scene: Scene) -> None:
     entries = await world.documents.processing_log(scene.owner.id, scene.document.id)
-    assert [entry.step for entry in entries] == list(Step)
+    steps = [entry.step for entry in entries if entry.result.model_version != PERSON_DRAWER]
+    assert steps == list(Step)
     for user in (scene.reader, scene.writer):
         with pytest.raises(PermissionDeniedError, match="only the owner"):
             await world.documents.processing_log(user.id, scene.document.id)

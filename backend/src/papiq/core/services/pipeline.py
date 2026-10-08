@@ -17,6 +17,7 @@ from papiq.core.domain.errors import (
     ConflictError,
     DuplicateDocumentError,
     NotFoundError,
+    OpenFieldsError,
     PermissionDeniedError,
     UnprocessableDocumentError,
     UnsupportedMediaTypeError,
@@ -25,7 +26,7 @@ from papiq.core.domain.errors import (
 from papiq.core.domain.ids import DocumentId, DrawerId, JobId, TagId, UserId
 from papiq.core.domain.jobs import Job, JobStatus
 from papiq.core.domain.json_value import JsonObject
-from papiq.core.domain.permissions import can_file_into, can_move_document, is_document_owner
+from papiq.core.domain.permissions import can_file_into, is_document_owner
 from papiq.core.domain.pipeline import PIPELINE, Outcome, Step, StepResult, StepRun
 from papiq.core.domain.rule_engine import DRAWER, changed_fields
 from papiq.core.domain.users import User
@@ -38,7 +39,7 @@ from papiq.core.services._access import (
 )
 from papiq.core.services.inbox import confirmation, decide, open_steps
 from papiq.core.services.objects import original_key
-from papiq.core.services.rules.running import person_record
+from papiq.core.services.rules.running import drawer_choice, person_record
 
 log = logging.getLogger(__name__)
 
@@ -201,7 +202,16 @@ class PipelineService:
         )
         try:
             return await self._create(
-                actor, target, sha256, file.path, filename, media_type, channel, result, started
+                actor,
+                target,
+                sha256,
+                file.path,
+                filename,
+                media_type,
+                channel,
+                result,
+                started,
+                chosen=drawer is not None,
             )
         except ConflictError:
             # The same file arrived twice at the same moment; the other upload won.
@@ -222,7 +232,10 @@ class PipelineService:
         channel: Channel,
         result: StepResult,
         started: datetime,
+        *,
+        chosen: bool,
     ) -> Document:
+        """`chosen`: the person chose the drawer; rules leave it."""
         now = self._clock.now()
         key = original_key(sha256)
         async with self._uow() as uow:
@@ -245,6 +258,17 @@ class PipelineService:
             )
             await uow.documents.add(document)
             await self._log(uow, document.id, Step.RECEIVE, 1, result, started, now)
+            if chosen:
+                await uow.processing_log.append(
+                    drawer_choice(
+                        document,
+                        step=Step.RECEIVE,
+                        actor=actor,
+                        trigger="upload",
+                        version=self._version,
+                        now=now,
+                    )
+                )
             await _enqueue_step(uow, document, now)
             await uow.outbox.add(document.pull_events())
             await uow.commit()
@@ -312,8 +336,13 @@ class PipelineService:
                 or (item.step is Step.APPLY_RULES and resume_at is Step.APPLY_RULES)
             ]
             target = None if drawer is None else await visible_drawer(uow, user, drawer)
-            if target is not None and not can_move_document(user, document, target):
+            if target is not None and not can_file_into(user, target):
                 raise PermissionDeniedError(f"no write access to drawer '{target.name}'")
+            if target is None and not can_file_into(
+                user, await uow.drawers.get(document.drawer_id)
+            ):
+                # Filing would stop again: the owner has to choose another drawer.
+                raise OpenFieldsError((DRAWER,))
             now = self._clock.now()
             tags_before = frozenset(document.tag_ids)
             overruled = document.confirm(resume_at, now)

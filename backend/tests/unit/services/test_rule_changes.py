@@ -291,7 +291,12 @@ async def test_a_dry_run_stores_nothing_and_shows_the_caller_only_their_own(
     await r.user_rule(
         editor, definition("Editor", contact_is(acme.id), add_tags(editors.id), triggers=CHANGE)
     )
-    document = await r.arrive(owner, drawer=shared.id)
+    # A rule files it into the shared drawer (a drawer the owner chose would stay).
+    await r.user_rule(
+        owner, definition("Shared", channel_api(), SetDrawer(shared.id), triggers=(Trigger.INGEST,))
+    )
+    document = await r.arrive(owner)
+    assert document.drawer_id == shared.id
     log, events = await r.log(document), world.event_types()
     acme_now = DocumentChanges(contact_id=acme.id)
 

@@ -39,7 +39,10 @@ rules it set off)."""
 RULES_APPLY = "rules:apply"
 """`model_version` of the `apply_rules` log entry of a rule applied to an existing document on
 request."""
-OUTSIDE_PIPELINE = frozenset({RULES_CHANGE, RULES_APPLY})
+PERSON_DRAWER = "person:drawer"
+"""`model_version` of a log entry in which a person chose the drawer outside the inbox (an
+upload into a given drawer, a move); rules leave the drawer then."""
+OUTSIDE_PIPELINE = frozenset({RULES_CHANGE, RULES_APPLY, PERSON_DRAWER})
 """Log entries written outside processing; they say nothing about a step's state."""
 ALWAYS_SET = frozenset({"drawer", "title", "review"})
 """Open fields of the rules that always have a value: confirming keeps it."""

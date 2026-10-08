@@ -7,6 +7,7 @@ import pytest
 from papiq.core.domain.attributes import AttributeType
 from papiq.core.domain.documents import DocumentChanges
 from papiq.core.domain.drawers import ShareLevel
+from papiq.core.domain.errors import OpenFieldsError
 from papiq.core.domain.pipeline import Lane, Outcome, ProcessingStatus, Step
 from papiq.core.domain.rules import (
     ForceReview,
@@ -14,8 +15,10 @@ from papiq.core.domain.rules import (
     SetContact,
     SetDrawer,
     SetTitle,
+    Trigger,
 )
 from papiq.core.services.inbox import PERSON, RULES
+from papiq.core.services.rules.running import PatternBudget, prepare
 from tests.unit.services.conftest import World
 from tests.unit.services.rules_support import (
     Classifies,
@@ -30,6 +33,8 @@ from tests.unit.services.rules_support import (
     rule_world,
     text_matches,
 )
+
+CHANGE = (Trigger.CHANGE,)
 
 
 async def test_rules_act_on_arrival_and_the_log_names_rule_and_version(world: World) -> None:
@@ -235,7 +240,7 @@ async def test_a_withdrawn_share_stops_the_rule_from_filing(world: World) -> Non
     (open,) = (await r.documents.review(owner.id, document.id)).open
     (check,) = open.fields
     assert check.field == "drawer"
-    assert check.reason == "rule 'Office': no write access to drawer 'Office' (any more)"
+    assert check.reason == f"rule 'Office': no write access to drawer {office.id} (any more)"
 
     # Keeping the drawer: the rule is refused again, but the document is filed.
     await r.pipeline().confirm(owner.id, document.id, DocumentChanges())
@@ -261,6 +266,11 @@ async def test_filing_checks_the_owners_write_access_once_more(world: World) -> 
     assert "document.filed" not in world.event_types()
     (open,) = (await r.documents.review(owner.id, document.id)).open
     assert (open.step, [check.field for check in open.fields]) == (Step.FILE, ["drawer"])
+
+    # Keeping the drawer would stop filing again: the owner has to choose one.
+    with pytest.raises(OpenFieldsError) as error:
+        await pipeline.confirm(owner.id, document.id, DocumentChanges())
+    assert error.value.fields == ("drawer",)
 
     default = await world.default_drawer(owner)
     await pipeline.confirm(owner.id, document.id, DocumentChanges(), drawer=default.id)
@@ -343,3 +353,25 @@ async def test_rules_do_not_set_each_other_off_on_arrival(world: World) -> None:
     document = await r.arrive(owner)
 
     assert document.tag_ids == {first.id}
+
+
+async def test_patterns_stop_when_their_time_is_used_up(world: World) -> None:
+    r = await rule_world(world)
+    owner = await world.user()
+    rule = await r.user_rule(
+        owner, definition("Bill", text_matches("Rech"), SetTitle("Bill"), triggers=CHANGE)
+    )
+    document = await r.arrive(owner, text="# Rechnung")
+
+    prepared = await prepare(
+        world.object_store,
+        r.matcher,
+        [rule],
+        document,
+        max_text=1000,
+        budget=PatternBudget(0),
+    )
+
+    assert prepared.patterns == {}
+    assert prepared.problems == ("pattern 'Rech' skipped: the time for patterns is used up",)
+    assert r.matcher.searched == []

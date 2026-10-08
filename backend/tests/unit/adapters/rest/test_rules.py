@@ -258,3 +258,44 @@ async def test_a_dry_run_shows_what_a_change_would_do(api: Api) -> None:
     assert preview["visibility"]["shares"] == []
     stored = (await api.client.get(f"{PREFIX}/documents/{id}", headers=auth(owner))).json()
     assert stored["contact_id"] is None
+
+
+async def test_an_editor_whose_change_files_the_document_away_learns_nothing_more(
+    api: Api,
+) -> None:
+    admin, owner, editor = await api.admin(), await api.user(), await api.user()
+    o = auth(owner)
+    acme = await post(api, "/contacts", {"name": "ACME"}, auth(admin))
+    shared = await post(api, "/drawers", {"name": "Shared"}, o)
+    private = await post(api, "/drawers", {"name": "Private"}, o)
+    response = await api.client.put(
+        f"{PREFIX}/drawers/{shared['id']}/shares/{editor.id}",
+        json={"level": "read_write"},
+        headers=o,
+    )
+    assert response.status_code < 300, response.text
+    for name, triggers, condition, drawer in (
+        ("Shared", ["ingest"], {"field": "channel", "op": "is", "value": "api"}, shared),
+        ("Private", ["change"], {"field": "contact", "op": "is", "value": acme["id"]}, private),
+    ):
+        await post(
+            api,
+            "/rules",
+            {
+                "name": name,
+                "triggers": triggers,
+                "conditions": {"all": [condition]},
+                "actions": [{"type": "set_drawer", "drawer_id": drawer["id"]}],
+            },
+            o,
+        )
+    id = await upload(api, o)
+    url = f"{PREFIX}/documents/{id}"
+    assert (await api.client.get(url, headers=o)).json()["drawer_id"] == shared["id"]
+
+    response = await api.client.patch(url, json={"contact_id": acme["id"]}, headers=auth(editor))
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"id": id, "access": None}
+    assert (await api.client.get(url, headers=auth(editor))).status_code == 404
+    assert (await api.client.get(url, headers=o)).json()["drawer_id"] == private["id"]

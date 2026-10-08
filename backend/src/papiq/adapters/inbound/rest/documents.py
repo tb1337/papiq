@@ -29,6 +29,7 @@ from papiq.adapters.inbound.rest.schemas import (
     DocumentAccepted,
     DocumentChanged,
     DocumentDetails,
+    DocumentOutOfReach,
     DocumentPage,
     DocumentPatch,
     DocumentPreviewOut,
@@ -238,14 +239,16 @@ async def get_document(id: UUID, user: CurrentUser, context: Context) -> Documen
         "and attributes must exist; attribute values must fit their type and apply to the "
         "document type. On a filed document, the change sets off the owner's rules and the "
         "global ones with trigger `change` that hold after it and did not before; fields set "
-        "in the change stay as they are. The owner sees what the rules did in `rules`."
+        "in the change stay as they are. The owner sees what the rules did in `rules`. If the "
+        "rules filed the document where the caller can no longer read it, the answer has only "
+        "its `id` and `access: null`."
     ),
-    response_model=DocumentChanged,
+    response_model=DocumentChanged | DocumentOutOfReach,
     responses=problem_responses(401, 403, 404, 409, 422),
 )
 async def update_document(
     id: UUID, body: DocumentPatch, user: CurrentUser, context: Context
-) -> DocumentChanged:
+) -> DocumentChanged | DocumentOutOfReach:
     changes = await _changes(body, user, context)
     change = await context.documents.change_metadata(user, DocumentId(id), changes)
     return _changed(change)
@@ -484,10 +487,10 @@ def _differences(before: Document, after: Document) -> list[str]:
     return [name for name, (old, new) in fields.items() if old != new]
 
 
-def _changed(change: MetadataChange) -> DocumentChanged:
-    """After a change: the caller just wrote the document; if the owner's rules filed it where
-    the caller cannot see it, this is the last answer they get about it."""
-    details = DocumentDetails.of(change.document, change.access or ShareLevel.READ_WRITE)
+def _changed(change: MetadataChange) -> DocumentChanged | DocumentOutOfReach:
+    if change.access is None:
+        return DocumentOutOfReach(id=change.document.id)
+    details = DocumentDetails.of(change.document, change.access)
     rules = None
     if change.rules is not None:
         rules = [RuleReportOut.of(report) for report in change.rules.plan.reports]
