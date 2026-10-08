@@ -46,6 +46,7 @@ from papiq.core.ports.search_index import (
     SearchResult,
 )
 from papiq.core.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
+from papiq.core.ports.webhook_sender import WebhookRequest, WebhookResponse, WebhookSender
 
 __all__ = [
     "ApiTokenRepository",
@@ -97,4 +98,7 @@ __all__ = [
     "UnitOfWorkFactory",
     "UserRepository",
     "WebhookRepository",
+    "WebhookRequest",
+    "WebhookResponse",
+    "WebhookSender",
 ]
