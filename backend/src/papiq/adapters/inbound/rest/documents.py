@@ -10,8 +10,6 @@ import base64
 import binascii
 import os
 import tempfile
-from datetime import date
-from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any
@@ -43,7 +41,7 @@ from papiq.adapters.inbound.rest.schemas import (
     VisibilityOut,
 )
 from papiq.adapters.inbound.rest.upload import FILE_FIELD, read_upload
-from papiq.core.domain.attributes import AttributeDefinition, AttributeType, Money, Url
+from papiq.adapters.inbound.values import attribute_value
 from papiq.core.domain.documents import UNSET, Channel, Document, DocumentChanges
 from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import ValidationError
@@ -510,7 +508,7 @@ async def _changes(body: DocumentPatch, user: UserId, context: Context) -> Docum
         for attribute_id, value in body.attributes.items():
             definition = definitions.get(AttributeId(attribute_id))
             attributes[AttributeId(attribute_id)] = (
-                value if definition is None else _attribute_value(definition, value)
+                value if definition is None else attribute_value(definition, value)
             )
     if "title" in given and body.title is None:
         raise ValidationError("title: must not be null")
@@ -543,33 +541,6 @@ def _decode_cursor(cursor: str | None) -> DocumentId | None:
         return DocumentId(UUID(bytes=base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))))
     except (ValueError, binascii.Error):
         raise ValidationError("cursor: invalid") from None
-
-
-def _attribute_value(definition: AttributeDefinition, value: Any) -> object:
-    """The JSON form of an attribute value as the domain type; None removes the value."""
-    if value is None:
-        return None
-    invalid = ValidationError(
-        f"attribute '{definition.name}' ({definition.data_type}) does not accept {value!r:.100}"
-    )
-    try:
-        match definition.data_type:
-            case AttributeType.NUMBER if isinstance(value, int | float | str) and not isinstance(
-                value, bool
-            ):
-                return Decimal(str(value))
-            case AttributeType.AMOUNT if isinstance(value, dict) and set(value) == {
-                "amount",
-                "currency",
-            }:
-                return Money(Decimal(str(value["amount"])), value["currency"])
-            case AttributeType.DATE if isinstance(value, str):
-                return date.fromisoformat(value)
-            case AttributeType.LINK if isinstance(value, str):
-                return Url(value)
-    except (InvalidOperation, ValueError, TypeError):
-        raise invalid from None
-    return value  # text, choice, boolean: checked by the domain
 
 
 def _drawer(value: str | None) -> DrawerId | None:

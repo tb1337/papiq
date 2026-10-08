@@ -51,6 +51,9 @@ class ApiContext:
     cookie_secure: bool = True
     # Event streams check every so often that their session or token is still valid.
     stream_recheck_interval: timedelta = timedelta(seconds=30)
+    # The MCP endpoint (`/api/v1/mcp`) and the characters one `get_text` call returns at most.
+    mcp_enabled: bool = False
+    mcp_text_max: int = 20_000
 
 
 def _context(request: Request) -> ApiContext:

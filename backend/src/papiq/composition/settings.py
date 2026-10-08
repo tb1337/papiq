@@ -140,6 +140,11 @@ class Settings(BaseSettings):
     webhook_disable_after: Annotated[int, Field(ge=1, le=10_000)] = 20
     webhook_concurrency: Annotated[int, Field(ge=1, le=64)] = 4
 
+    # MCP: the endpoint `/api/v1/mcp` of the API (tools for AI clients, API tokens as bearer),
+    # and the most characters one `get_text` call returns.
+    mcp_enabled: bool = True
+    mcp_text_max: Annotated[int, Field(ge=1000, le=1_000_000)] = 20_000
+
     # Worker: background jobs, event delivery and cleanup.
     worker_concurrency: Annotated[int, Field(ge=1, le=64)] = 2
     worker_poll_interval: Seconds = timedelta(seconds=1)

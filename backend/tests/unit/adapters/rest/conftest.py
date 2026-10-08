@@ -36,6 +36,8 @@ def make_app(
     poll: timedelta = timedelta(milliseconds=20),
     cookie_secure: bool = True,
     recheck: timedelta = timedelta(seconds=30),
+    mcp: bool = False,
+    mcp_text_max: int = 20_000,
 ) -> FastAPI:
     async def ok() -> None:
         pass
@@ -61,6 +63,8 @@ def make_app(
             events_poll_interval=poll,
             cookie_secure=cookie_secure,
             stream_recheck_interval=recheck,
+            mcp_enabled=mcp,
+            mcp_text_max=mcp_text_max,
         )
     )
 

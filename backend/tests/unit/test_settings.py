@@ -348,6 +348,12 @@ def test_webhook_defaults() -> None:
     assert settings.webhook_concurrency == 4
 
 
+def test_mcp_defaults() -> None:
+    settings = load_settings()
+    assert settings.mcp_enabled is True
+    assert settings.mcp_text_max == 20_000
+
+
 def test_worker_and_processing_defaults() -> None:
     settings = load_settings()
     assert settings.worker_concurrency == 2
