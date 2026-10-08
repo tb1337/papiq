@@ -21,6 +21,7 @@ from papiq.adapters.inbound.rest import (
     search,
     streams,
     users,
+    webhooks,
 )
 from papiq.adapters.inbound.rest.auth import (
     SECURITY,
@@ -115,6 +116,7 @@ def create_app(context: ApiContext) -> FastAPI:
         documents.router,
         documents.inbox,
         streams.router,
+        webhooks.router,
         health.router,
     ):
         app.include_router(router, prefix=PREFIX)
