@@ -263,5 +263,9 @@
 	"user_oidc_removed": "Link removed.",
 	"user_delete": "Delete user",
 	"user_delete_confirm": "Only a user without documents and with empty drawers can be deleted. Their sign-in data goes for good.",
-	"user_deleted": "User deleted."
+	"user_deleted": "User deleted.",
+	"oidc_error_denied": "The identity provider did not sign you in.",
+	"oidc_error_failed": "The sign-in expired, did not match, or no account here is linked to it.",
+	"oidc_error_conflict": "This account at the identity provider is linked to another user.",
+	"oidc_error_provider": "The identity provider cannot be reached right now."
 }
