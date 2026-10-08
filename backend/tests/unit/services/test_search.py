@@ -11,6 +11,7 @@ from papiq.core.domain.documents import Document, DocumentChanges
 from papiq.core.domain.drawers import Drawer, ShareLevel
 from papiq.core.domain.errors import (
     AuthenticationError,
+    PermissionDeniedError,
     SearchUnavailableError,
     ValidationError,
 )
@@ -330,3 +331,26 @@ async def test_the_index_never_sees_a_query_without_the_callers_rights(scene: Sc
 def test_policy_ratio_is_checked() -> None:
     with pytest.raises(ValueError):
         SearchPolicy(semantic_ratio=2)
+
+
+async def test_admins_search_their_reach_or_everything(scene: Scene) -> None:
+    """Tobi, 08.10.2026: admins see everything; by default their search is their reach, as for
+    every user, and `all_users` widens it to every document. Nobody else may ask for it."""
+    admin = await scene.setup.world.user("admin", role=Role.ADMIN)
+    search = scene.search(embeddings=None)
+    assert (await search.search(admin.id, "Stromrechnung")).items == []
+    for text, document in (
+        ("Stromrechnung", scene.shared_document),
+        ("Mietvertrag", scene.private_document),
+    ):
+        everything = await search.search(admin.id, text, all_users=True)
+        assert [(item.document.id, item.access) for item in everything.items] == [
+            (document.id, ShareLevel.READ_WRITE)
+        ]
+    for user in (scene.owner, scene.reader, scene.stranger):
+        with pytest.raises(PermissionDeniedError):
+            await search.search(user.id, "Stromrechnung", all_users=True)
+    other = await scene.setup.world.user("other admin", role=Role.ADMIN)
+    await scene.setup.world.users.set_active(other.id, admin.id, False)
+    with pytest.raises(AuthenticationError):
+        await search.search(admin.id, "Stromrechnung", all_users=True)

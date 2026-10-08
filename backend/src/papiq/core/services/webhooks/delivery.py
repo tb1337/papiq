@@ -3,8 +3,10 @@
 Two steps, both idempotent and safe to repeat (events arrive at least once):
 
 1. **Fan-out** (`on_event`, the event bus subscriber `webhooks.fanout`): for an event, queue one
-   `webhooks.deliver` job for each active webhook that wants its type and whose owner may read
-   the document. The job's dedup key is `<webhook>:<event>`, so a repeated event adds no second
+   `webhooks.deliver` job for each active webhook that wants its type and whose owner has the
+   document within their reach (`permissions.in_reach`: an admin's webhooks report what the
+   admin reaches as a user, not every document; Tobi, 08.10.2026). The job's dedup key is
+   `<webhook>:<event>`, so a repeated event adds no second
    job while the first is queued or running. `document.deleted` uses the readers stored in the
    event (the document is gone); `document.filed` is skipped while the document has no lane
    (the pipeline's last `filed` comes after the lane is set).
@@ -37,7 +39,7 @@ from papiq.core.domain.events import DocumentDeleted, DocumentEvent, DocumentFil
 from papiq.core.domain.ids import DocumentId, EventId, UserId, WebhookId, new_id
 from papiq.core.domain.jobs import Job
 from papiq.core.domain.json_value import JsonObject
-from papiq.core.domain.permissions import can_read_document
+from papiq.core.domain.permissions import in_reach
 from papiq.core.domain.users import User
 from papiq.core.domain.webhooks import (
     TEST_EVENT,
@@ -396,7 +398,7 @@ async def _owners_who_may_read(
     allowed: set[UserId] = set()
     for owner in owners:
         user = await uow.users.find(owner)
-        if user is not None and can_read_document(user, document, drawer):
+        if user is not None and in_reach(user, document, drawer):
             allowed.add(owner)
     return allowed
 
@@ -428,7 +430,7 @@ async def _may_read(uow: UnitOfWork, user: User, document: Document) -> bool:
         drawer = await uow.drawers.get(document.drawer_id)
     except NotFoundError:
         return False
-    return can_read_document(user, document, drawer)
+    return in_reach(user, document, drawer)
 
 
 # --- answers ------------------------------------------------------------------------------------

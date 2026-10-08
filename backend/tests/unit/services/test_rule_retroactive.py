@@ -4,7 +4,7 @@ import pytest
 
 from papiq.core.domain.documents import DocumentChanges
 from papiq.core.domain.drawers import ShareLevel
-from papiq.core.domain.errors import NotFoundError, PermissionDeniedError, ValidationError
+from papiq.core.domain.errors import NotFoundError, ValidationError
 from papiq.core.domain.ids import DocumentId, new_id
 from papiq.core.domain.pipeline import Lane
 from papiq.core.domain.rules import ApplicationStatus, ForceReview, SetDrawer, SetTitle
@@ -163,16 +163,22 @@ async def test_a_user_rule_is_applied_by_its_owner_to_their_own_documents(world:
     assert (done.applied, done.skipped) == (1, [(theirs.id, "not available")])
     assert (await r.stored(theirs)).tag_ids == set()
 
-    # Nobody else applies it or reads the application, admins included.
+    # Nobody else applies it or reads the application, but admins do (Tobi, 08.10.2026):
+    # on the documents of the rule's owner only.
     with pytest.raises(NotFoundError):
         await r.applications.preview(colleague.id, rule.id)
-    with pytest.raises(PermissionDeniedError):
-        await r.applications.preview(r.admin.id, rule.id)
-    with pytest.raises(PermissionDeniedError):
-        await r.applications.start(r.admin.id, rule.id, version=1, documents=[mine.id])
-    for stranger in (colleague, r.admin):
-        with pytest.raises(NotFoundError):
-            await r.applications.get(stranger.id, application.id)
+    with pytest.raises(NotFoundError):
+        await r.applications.get(colleague.id, application.id)
+    assert (await r.applications.get(r.admin.id, application.id)).id == application.id
+    assert [
+        item.document.id for item in (await r.applications.preview(r.admin.id, rule.id)).items
+    ] == []
+    by_admin = await r.applications.start(
+        r.admin.id, rule.id, version=1, documents=[theirs.id, mine.id]
+    )
+    await run_jobs(r)
+    done = await r.applications.get(r.admin.id, by_admin.id)
+    assert (done.applied, done.unchanged, done.skipped) == (0, 1, [(theirs.id, "not available")])
 
     with pytest.raises(NotFoundError):
         await r.applications.start(owner.id, rule.id, version=2, documents=[mine.id])

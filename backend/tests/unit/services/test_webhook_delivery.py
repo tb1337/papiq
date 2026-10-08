@@ -114,6 +114,39 @@ async def test_only_those_who_may_read_the_document_are_told(world: World) -> No
     assert len(deliveries(world)) == 4
 
 
+async def test_an_admins_webhooks_report_their_reach_only(world: World) -> None:
+    """Tobi, 08.10.2026: admins read everything, but their webhooks report only what they reach
+    as a user: their own documents and green ones in their drawers and shares."""
+    admin, user = await world.user(role=Role.ADMIN), await world.user()
+    shared = builders.drawer(user, "shared")
+    shared.share(admin.id, ShareLevel.READ)
+    async with world.uow() as uow:
+        await uow.drawers.add(shared)
+        await uow.commit()
+    foreign = await seed(world, user)
+    in_share = await seed(world, user, shared)
+    unfinished = await seed(world, user, shared, green=False)
+    own = await seed(world, admin)
+    webhook, _ = await hook(world, admin)
+    service = world.webhook_delivery()
+    for document in (foreign, in_share, unfinished, own):
+        await service.on_event(lane_changed(document))
+    queued = {job.payload["document_id"] for job in deliveries(world)}
+    assert queued == {str(in_share.id), str(own.id)}
+
+    # A deletion is reported to the readers named in the event only: no admin was named.
+    await service.on_event(DocumentDeleted(occurred_at=NOW, document_id=foreign.id, readers=()))
+    assert len(deliveries(world)) == 2
+
+    # The rights are checked again when sending: still the reach, although the admin may
+    # read the document.
+    await world.drawers.unshare(user.id, shared.id, admin.id)
+    assert await run_all(service) == 2
+    rows = await log(world, webhook)
+    dropped = [row.document_id for row in rows if row.outcome is DeliveryOutcome.DROPPED]
+    assert dropped == [in_share.id]
+
+
 async def test_a_deactivated_owner_is_not_told(world: World) -> None:
     admin, user = await world.user(role=Role.ADMIN), await world.user()
     document = await seed(world, user)
