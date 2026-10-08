@@ -44,6 +44,13 @@ describe('retryAfterSeconds', () => {
 });
 
 describe('apiError', () => {
+	it('takes the body the client already read', async () => {
+		const response = new Response(null, { status: 503 });
+		const body = { type: 'about:blank', title: 'Service Unavailable', status: 503, detail: 'db' };
+		expect((await apiError(response, body)).problem?.detail).toBe('db');
+		expect((await apiError(response, 'not a problem')).problem).toBeNull();
+	});
+
 	it('carries status, problem and the wait', async () => {
 		const response = new Response(
 			JSON.stringify({ type: 'about:blank', title: 'Too Many Requests', status: 429 }),
