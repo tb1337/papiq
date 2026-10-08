@@ -1,0 +1,11 @@
+#!/command/with-contenv sh
+# Pipeline jobs, outbox dispatch and webhook delivery. Only with PAPIQ_ROLE all or worker.
+role=$(printf %s "${PAPIQ_ROLE:-all}" | tr '[:upper:]' '[:lower:]')
+case "$role" in
+  all | worker) ;;
+  *)
+    echo "svc-worker: not started with PAPIQ_ROLE=$role"
+    exec s6-svc -Od .
+    ;;
+esac
+exec papiq-run python -m papiq.composition worker

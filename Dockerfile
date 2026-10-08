@@ -1,14 +1,28 @@
 # syntax=docker/dockerfile:1
 
 # Papiq image, one Dockerfile for development and operation so both use the same system packages.
-#   docling-models  Docling's layout and table models, downloaded at build time
+#   base            Python and the system packages OCRmyPDF and Docling need
+#   deps            the locked dependencies (Docling, PyTorch CPU) in /opt/papiq/venv, no dev group
+#   docling-models  Docling's layout and table models, downloaded at build time (from deps)
+#   app             deps + the Papiq package
+#   s6              s6-overlay, unpacked (version and checksums pinned below)
 #   dev             devcontainer: base + uv, Node.js, pnpm, Git, Docling models
-#   runtime         production image (placeholder, built in M9)
-# All stages build for linux/amd64 and linux/arm64; docling-models runs on the build machine.
+#   runtime         the production image: base + s6-overlay + app + models + deploy/image/rootfs
+# All stages build for linux/amd64 and linux/arm64, each natively on its own machine (CI uses an
+# arm64 runner; building the other architecture locally runs under emulation and is slow).
+#
+#   docker build --target runtime -t papiq:local .
+#
+# The runtime image runs s6-overlay as PID 1 (see deploy/README.md): `init-papiq` and
+# `init-migrations` once, then `svc-api` and `svc-worker` as PAPIQ_ROLE says. The Papiq
+# processes run as PUID:PGID (default 1000:1000), never as root. No secret is part of the
+# image or of its build arguments: configuration is read from the environment at run time.
 
 FROM node:24.21.0-trixie-slim AS node
 FROM ghcr.io/astral-sh/uv:0.11.33 AS uv
-FROM --platform=$BUILDPLATFORM ghcr.io/astral-sh/uv:0.11.33 AS uv-build
+
+# Set by BuildKit; declared here so that `FROM s6-${TARGETARCH}` can use it.
+ARG TARGETARCH
 
 # --- base: Python and the system packages OCRmyPDF and Docling need -----------------------------
 # libgl1 and libglib2.0-0t64: OpenCV, which Docling loads.
@@ -34,31 +48,65 @@ RUN apt-get update \
         unpaper \
     && rm -rf /var/lib/apt/lists/*
 
-# --- docling-models: the models Docling needs, never downloaded at run time ---------------------
-# Installs the locked dependencies (Docling, PyTorch CPU) in a throwaway environment and downloads
-# the models of exactly that Docling version. Rebuilt only when the lock file changes. The model
-# files are the same on every platform, so this stage runs natively on the build machine (no
-# emulation for arm64) and the target images copy the result.
-FROM --platform=$BUILDPLATFORM python:3.13.13-slim-trixie AS docling-models
+# --- deps: the locked dependencies, without the dev group and without Papiq itself --------------
+# One layer for PyTorch and Docling that only a change of the lock file rebuilds; `docling-models`
+# and `app` build on it. The environment's Python is the image's own (same path in `runtime`).
+FROM base AS deps
 
-# Only for the build: keeps debconf from warning about a missing terminal.
-ARG DEBIAN_FRONTEND=noninteractive
-# OpenCV, which Docling loads.
-RUN apt-get update \
-    && apt-get install --no-install-recommends -y libgl1 libglib2.0-0t64 \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY --from=uv-build /uv /usr/local/bin/
+COPY --from=uv /uv /usr/local/bin/
 ENV UV_PYTHON_DOWNLOADS=never \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    UV_NO_CACHE=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_PROJECT_ENVIRONMENT=/opt/papiq/venv
 WORKDIR /build
 COPY backend/pyproject.toml backend/uv.lock ./
+RUN uv sync --frozen --no-install-project --no-dev
+
+# --- docling-models: the models Docling needs, never downloaded at run time ---------------------
+# Downloads the models of exactly the locked Docling version. The target images copy the result.
+FROM deps AS docling-models
+
 # Optional build secret `hf_token` (a Hugging Face token) avoids Hugging Face's rate limit; it
 # does not end up in the image.
 RUN --mount=type=secret,id=hf_token,env=HF_TOKEN \
-    uv sync --frozen --no-install-project --no-dev \
-    && .venv/bin/docling-tools models download layout tableformer -o /opt/docling-models \
-    && rm -rf /build /root/.cache
+    /opt/papiq/venv/bin/docling-tools models download layout tableformer -o /opt/docling-models
+
+# --- app: Papiq itself, installed (not editable) into the environment ---------------------------
+FROM deps AS app
+
+COPY backend/README.md ./
+COPY backend/src ./src
+RUN uv sync --frozen --no-dev --no-editable
+
+# --- s6-overlay: process supervision, PID 1 of the runtime image --------------------------------
+# Pinned version; each archive is checked against its SHA-256 (from the release's .sha256 files).
+FROM scratch AS s6-noarch
+ADD --checksum=sha256:5379750ed30a84bbd2e2dd74847ba6b5bd29cd0b2e3ea2ec58049b57eb2eda12 \
+    https://github.com/just-containers/s6-overlay/releases/download/v3.2.3.2/s6-overlay-noarch.tar.xz \
+    /s6-overlay-noarch.tar.xz
+
+FROM scratch AS s6-amd64
+ADD --checksum=sha256:e6befcc96a437a3831386ecfc51808c5d3e939dc5fe3c02ae9284599e8aa2408 \
+    https://github.com/just-containers/s6-overlay/releases/download/v3.2.3.2/s6-overlay-x86_64.tar.xz \
+    /s6-overlay-arch.tar.xz
+
+FROM scratch AS s6-arm64
+ADD --checksum=sha256:b17f17a82e7a515c682a91edaf2ffdabb73f891981b6c1fd712115693a2f8b4c \
+    https://github.com/just-containers/s6-overlay/releases/download/v3.2.3.2/s6-overlay-aarch64.tar.xz \
+    /s6-overlay-arch.tar.xz
+
+FROM s6-${TARGETARCH} AS s6-arch
+
+FROM base AS s6
+# Only to unpack the archives; xz-utils does not end up in the image.
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=s6-noarch / /archives/
+COPY --from=s6-arch / /archives/
+RUN mkdir /s6 && for archive in /archives/*.tar.xz; do tar -C /s6 -Jxpf "$archive"; done
 
 # --- dev: devcontainer ---------------------------------------------------------------------------
 FROM base AS dev
@@ -113,6 +161,38 @@ ENV CLAUDE_CONFIG_DIR=/home/vscode/.claude
 
 WORKDIR /workspaces/papiq
 
-# --- runtime: production image (M9) --------------------------------------------------------------
-# s6-overlay, the application and Docling follow in M9.
+# --- runtime: production image ------------------------------------------------------------------
 FROM base AS runtime
+
+COPY --from=s6 /s6/ /
+COPY --from=app /opt/papiq/venv /opt/papiq/venv
+COPY --from=docling-models /opt/docling-models /opt/docling-models
+# The s6 services and scripts.
+COPY deploy/image/rootfs/ /
+
+# /command holds the s6 programs (`docker exec` shells need it in PATH).
+# s6-overlay: a failing init service stops the container (exit code 1, reason in the log).
+# Shutdown on `docker stop`: the worker gets PAPIQ_WORKER_SHUTDOWN_TIMEOUT (30 s) to finish
+# its jobs, so s6 waits 40 s for the services; Compose `stop_grace_period` is 60 s. s6 sits out the
+# whole S6_KILL_GRACETIME before it ends, so that stays short (1 s). Raise the first two together.
+# The database and the objects live on the volume /data (the defaults of settings.py are
+# relative paths). PUID and PGID are not Papiq settings: the user of the Papiq processes.
+ENV PATH="/command:/opt/papiq/venv/bin:$PATH" \
+    S6_BEHAVIOUR_IF_STAGE2_FAILS=2 \
+    S6_SERVICES_GRACETIME=40000 \
+    S6_KILL_GRACETIME=1000 \
+    PAPIQ_DB_SQLITE_PATH=/data/papiq.db \
+    PAPIQ_STORAGE_PATH=/data/objects \
+    PUID=1000 \
+    PGID=1000
+
+LABEL org.opencontainers.image.title="Papiq" \
+      org.opencontainers.image.description="Self-hosted, headless document management system" \
+      org.opencontainers.image.source="https://github.com/tb1337/papiq" \
+      org.opencontainers.image.licenses="GPL-3.0-only"
+
+VOLUME /data
+EXPOSE 8000
+HEALTHCHECK --start-period=120s --interval=30s --timeout=10s --retries=3 \
+    CMD ["/usr/local/bin/papiq-healthcheck"]
+ENTRYPOINT ["/init"]
