@@ -1,0 +1,36 @@
+#!/bin/sh
+# Health of the container, for Docker's HEALTHCHECK. The API answers GET /api/v1/health; the
+# worker has no endpoint, so its service must be up and not in a crash loop (up for 10 seconds).
+set -eu
+
+role=$(printf %s "${PAPIQ_ROLE:-all}" | tr '[:upper:]' '[:lower:]')
+
+case "$role" in
+  all | api)
+    python3 - <<'PYTHON'
+import os
+import sys
+import urllib.request
+
+port = os.environ.get("PAPIQ_API_PORT", "8000")
+# No proxy for the check, whatever the environment says.
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+try:
+    with opener.open(f"http://127.0.0.1:{port}/api/v1/health", timeout=5) as response:
+        sys.exit(0 if response.status == 200 else 1)
+except Exception as error:
+    print(f"API not healthy: {error}", file=sys.stderr)
+    sys.exit(1)
+PYTHON
+    ;;
+esac
+
+case "$role" in
+  all | worker)
+    status=$(/command/s6-svstat -o up,updownfor /run/service/svc-worker)
+    case "$status" in
+      "true "*) [ "${status#true }" -ge 10 ] || { echo "worker restarted $status s ago" >&2; exit 1; } ;;
+      *) echo "worker is not running" >&2; exit 1 ;;
+    esac
+    ;;
+esac

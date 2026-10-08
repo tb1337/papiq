@@ -1,0 +1,11 @@
+#!/command/with-contenv sh
+# The database schema must be right before API and worker start. `all` and `api` migrate;
+# a `worker` never does and waits for the API container to (ten minutes, then the container
+# stops with the reason in its log).
+set -eu
+
+role=$(printf %s "${PAPIQ_ROLE:-all}" | tr '[:upper:]' '[:lower:]')
+if [ "$role" = worker ]; then
+  exec papiq-run python -m papiq.composition check-schema --wait 600
+fi
+exec papiq-run python -m papiq.composition migrate
