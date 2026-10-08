@@ -34,3 +34,7 @@ data/
 # Secrets of the example stacks (deploy/create-secrets.sh)
 deploy/secrets/
 deploy/backup/
+
+# Migration client: local state and reports of a run
+migration-state.sqlite*
+migration-reports/
