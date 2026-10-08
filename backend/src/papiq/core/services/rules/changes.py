@@ -35,6 +35,7 @@ from papiq.core.services.rules.running import (
     apply_plan,
     attribute_patterns,
     checked_rules,
+    drawer_choice,
     person_record,
     prepare,
     provenance,
@@ -68,6 +69,17 @@ class ChangeRules:
     async def prepare(self, rules: Sequence[Rule], document: Document) -> Prepared:
         """Outside a transaction: the text and its patterns, if a rule needs them."""
         return await prepare(self._store, self._matcher, rules, document, max_text=self._max_text)
+
+    def drawer_chosen(self, document: Document, *, actor: User, now: datetime) -> StepRun:
+        """The log entry of a person moving the document: rules leave the drawer then."""
+        return drawer_choice(
+            document,
+            step=Step.APPLY_RULES,
+            actor=actor.id,
+            trigger="move",
+            version=self._version,
+            now=now,
+        )
 
     async def after_change(
         self,
@@ -110,7 +122,7 @@ class ChangeRules:
                     if name not in changed
                 },
                 model_tags=frozenset() if TAGS in changed else origin.model_tags,
-                tags_added=(origin.tags_added - before.tag_ids)
+                tags_added=(origin.tags_added & document.tag_ids)
                 | (document.tag_ids - before.tag_ids),
                 tags_removed=(origin.tags_removed - document.tag_ids)
                 | (before.tag_ids - document.tag_ids),

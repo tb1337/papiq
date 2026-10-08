@@ -699,16 +699,22 @@ def test_unconfirmed_contact_on_change_is_reported_only() -> None:
     assert not result.uncertain
 
 
-def test_retroactive_application_trusts_the_persons_selection() -> None:
+def test_retroactive_filing_on_unconfirmed_values_is_a_conflict() -> None:
+    """Applied to existing documents, filing into a shared drawer on an unconfirmed contact is
+    a conflict: it acts only where the person accepted it."""
     document = doc(contact_id=ACME)
+    rules = [rule(SetDrawer(SHARED), when=FROM_ACME)]
 
-    result = run(
-        [rule(SetDrawer(SHARED), when=FROM_ACME)],
-        situation(document, Mode.RETROACTIVE),
+    refused = run(rules, situation(document, Mode.RETROACTIVE), facts=distrusted(document))
+    accepted = run(
+        rules,
+        situation(document, Mode.RETROACTIVE, accept_conflicts=True),
         facts=distrusted(document),
     )
 
-    assert result.drawer == SHARED
+    assert refused.drawer is None
+    assert notes(refused) == [("drawer", "conflict")]
+    assert accepted.drawer == SHARED
 
 
 def test_no_write_access_to_the_drawer() -> None:
@@ -831,12 +837,14 @@ def test_forced_review_on_arrival() -> None:
     assert result.reasons == ["review: rule 'Bank': check the IBAN", "rule 'Bank': check the IBAN"]
 
 
-def test_forced_review_after_a_person_confirmed() -> None:
-    result = run([rule(ForceReview("check"))], situation(doc(), review_confirmed=True))
+def test_forced_review_after_a_person_confirmed_it() -> None:
+    confirmed, other = rule(ForceReview("check")), rule(ForceReview("new"))
 
-    assert result.reviews == []
-    assert notes(result) == [("review", "overruled")]
-    assert not result.uncertain
+    result = run([confirmed, other], situation(doc(), reviewed=frozenset({confirmed.id})))
+
+    assert result.reviews == [f"rule '{other.definition.name}': new"]
+    assert notes(result) == [("review", "overruled"), ("review", "review")]
+    assert result.uncertain
 
 
 @pytest.mark.parametrize("mode", [Mode.CHANGE, Mode.RETROACTIVE])

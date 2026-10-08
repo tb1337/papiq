@@ -1222,8 +1222,8 @@ class RuleNoteOut(BaseModel):
         description=(
             "`overruled`: a person decided the field; `refused`: not allowed (rights, scope, "
             "unconfirmed values); `conflict`: rules or values disagree; `skipped`: something "
-            "it refers to is gone or does not apply; `review`: reviews are forced on arrival "
-            "only."
+            "it refers to is gone or does not apply; `review`: the rule holds the document for "
+            "a review."
         )
     )
     reason: str
@@ -1252,6 +1252,14 @@ class DocumentChanged(DocumentDetails):
             "and what they did. Nothing turns yellow; what could not be applied is listed."
         ),
     )
+
+
+class DocumentOutOfReach(BaseModel):
+    """After a change by an editor: the owner's rules filed the document where the editor can
+    no longer read it. The change is stored; nothing else about the document is shown."""
+
+    id: UUID
+    access: None = Field(default=None, description="The caller can no longer read the document.")
 
 
 class VisibilityOut(BaseModel):

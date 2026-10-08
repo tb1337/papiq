@@ -7,6 +7,7 @@ values (short) run inside it, on the state that is stored.
 """
 
 import logging
+import time
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -23,11 +24,20 @@ from papiq.core.domain.classification import (
 from papiq.core.domain.documents import Document
 from papiq.core.domain.errors import NotFoundError, PatternTimeoutError, ValidationError
 from papiq.core.domain.evidence import DocumentText
-from papiq.core.domain.ids import AttributeId, ContactId, DocumentTypeId, DrawerId, TagId
+from papiq.core.domain.ids import (
+    AttributeId,
+    ContactId,
+    DocumentTypeId,
+    DrawerId,
+    RuleId,
+    TagId,
+    UserId,
+)
 from papiq.core.domain.json_value import JsonObject, JsonValue
 from papiq.core.domain.permissions import can_file_into
-from papiq.core.domain.pipeline import Outcome, Step, StepRun
+from papiq.core.domain.pipeline import Outcome, Step, StepResult, StepRun
 from papiq.core.domain.rule_engine import (
+    DRAWER,
     TEXT_TARGET,
     DrawerTarget,
     Facts,
@@ -45,6 +55,8 @@ from papiq.core.ports import ObjectStore, PatternMatcher, UnitOfWork
 from papiq.core.services.inbox import (
     MODEL_STEPS,
     PERSON,
+    PERSON_DRAWER,
+    RULES,
     RULES_CHANGE,
     field_checks,
     latest_entries,
@@ -75,6 +87,22 @@ async def active_rules(uow: UnitOfWork, owner: User | None, trigger: Trigger | N
 # --- text and patterns ------------------------------------------------------------------------
 
 
+PATTERN_BUDGET = 2.0
+"""Seconds the patterns of one rule run may take together on one document; the patterns left
+then do not match (each pattern also has its own time limit)."""
+
+
+class PatternBudget:
+    """Time left for running patterns."""
+
+    def __init__(self, seconds: float = PATTERN_BUDGET) -> None:
+        self._end = time.monotonic() + seconds
+
+    @property
+    def exhausted(self) -> bool:
+        return time.monotonic() >= self._end
+
+
 @dataclass(frozen=True)
 class Prepared:
     """The document text as conditions see it, and the results of the regular expressions on
@@ -92,6 +120,7 @@ async def prepare(
     document: Document,
     *,
     max_text: int,
+    budget: PatternBudget | None = None,
 ) -> Prepared:
     """Load the text if a rule looks at it and run the rules' patterns on it."""
     if not any(rule.definition.uses_text for rule in rules):
@@ -104,7 +133,7 @@ async def prepare(
         return Prepared()
     text = pattern_text(markdown, max_text)
     keys = {key for rule in rules for key in rule.definition.patterns() if key[0] == TEXT_TARGET}
-    results, problems = await _search(matcher, {key: text for key in keys})
+    results, problems = await _search(matcher, {key: text for key in keys}, budget)
     return Prepared(DocumentText(text), results, problems)
 
 
@@ -112,16 +141,21 @@ async def attribute_patterns(
     matcher: PatternMatcher, rules: Sequence[Rule], document: Document
 ) -> tuple[dict[PatternKey, bool], tuple[str, ...]]:
     """The rules' patterns on the document's attribute values."""
-    return await _search(matcher, pattern_subjects(rules, document, None))
+    return await _search(matcher, pattern_subjects(rules, document, None), None)
 
 
 async def _search(
-    matcher: PatternMatcher, subjects: Mapping[PatternKey, str]
+    matcher: PatternMatcher, subjects: Mapping[PatternKey, str], budget: PatternBudget | None
 ) -> tuple[dict[PatternKey, bool], tuple[str, ...]]:
+    budget = budget or PatternBudget()
     results: dict[PatternKey, bool] = {}
     problems: list[str] = []
     for key, subject in subjects.items():
         _, pattern, case_sensitive = key
+        if budget.exhausted:
+            problems.append(f"pattern {pattern!r} skipped: the time for patterns is used up")
+            log.warning("rule pattern skipped", extra={"pattern": pattern, "error": "no time"})
+            continue
         try:
             results[key] = await matcher.search(pattern, subject, case_sensitive=case_sensitive)
         except (PatternTimeoutError, ValidationError) as error:
@@ -133,6 +167,7 @@ async def _search(
 # --- where values came from -------------------------------------------------------------------
 
 _DECISIONS = ("accepted", "entered", "kept", "changed")
+_PERSON_ENTRIES = (PERSON, RULES_CHANGE, PERSON_DRAWER)
 
 
 @dataclass(frozen=True)
@@ -144,13 +179,13 @@ class Provenance:
     - `model_tags`: tags the model set that no person has decided on since.
     - `person`: fields a person decided (confirming in the inbox, or changing the document)
       since the model's latest run; `tags_added` and `tags_removed` by a person likewise.
-    - `confirmed_now`: a person confirmed the document in the current processing run.
+    - `reviewed`: rules whose forced review a person confirmed in the current processing run.
     """
 
     model_values: Mapping[str, JsonValue]
     model_tags: frozenset[TagId]
     person: frozenset[str]
-    confirmed_now: bool
+    reviewed: frozenset[RuleId]
     tags_added: frozenset[TagId] = frozenset()
     tags_removed: frozenset[TagId] = frozenset()
 
@@ -166,7 +201,7 @@ def provenance(log: Sequence[StepRun], document: Document) -> Provenance:
     added: set[TagId] = set()
     removed: set[TagId] = set()
     for entry in log:
-        if entry.run < model_run or entry.result.model_version not in (PERSON, RULES_CHANGE):
+        if entry.run < model_run or entry.result.model_version not in _PERSON_ENTRIES:
             continue
         record = {**entry.result.input, **entry.result.output}
         for key in _DECISIONS:
@@ -191,15 +226,37 @@ def provenance(log: Sequence[StepRun], document: Document) -> Provenance:
         elif name in current and repr(current[name]) == repr(check.value):
             model_values[name] = check.value
     run = document.processing.run
-    confirmed_now = any(entry.run == run and entry.result.model_version == PERSON for entry in log)
+    reviewed: set[RuleId] = set()
+    open_reviews: set[RuleId] = set()
+    for entry in log:  # a confirmation answers the `apply_rules` entry before it
+        if entry.result.model_version == RULES:
+            open_reviews = _reviewing(entry.result.output)
+        elif entry.result.model_version == PERSON and entry.run == run:
+            reviewed |= open_reviews
     return Provenance(
         model_values,
         model_tags,
         frozenset(person),
-        confirmed_now,
+        frozenset(reviewed),
         frozenset(added),
         frozenset(removed),
     )
+
+
+def _reviewing(output: JsonValue) -> set[RuleId]:
+    """The rules that forced a review in an `apply_rules` entry."""
+    found: set[RuleId] = set()
+    reports = output.get("rules") if isinstance(output, dict) else None
+    for report in reports if isinstance(reports, list) else []:
+        if not isinstance(report, dict):
+            continue
+        notes = report.get("notes")
+        if any(
+            isinstance(note, dict) and note.get("kind") == "review"
+            for note in (notes if isinstance(notes, list) else [])
+        ):
+            found.add(RuleId(UUID(str(report["rule_id"]))))
+    return found
 
 
 def _strings(value: JsonValue) -> list[str]:
@@ -221,6 +278,28 @@ def person_record(
         "tags_added": list[JsonValue](added),
         "tags_removed": list[JsonValue](removed),
     }
+
+
+def drawer_choice(
+    document: Document, *, step: Step, actor: UserId, trigger: str, version: str, now: datetime
+) -> StepRun:
+    """The log entry of a person choosing the document's drawer outside the inbox."""
+    return StepRun(
+        document_id=document.id,
+        step=step,
+        run=document.processing.run,
+        result=StepResult(
+            outcome=Outcome.OK,
+            model_version=PERSON_DRAWER,
+            input={"trigger": trigger, "actor": str(actor)},
+            output=person_record(
+                changed=[DRAWER], tags_before=document.tag_ids, tags_after=document.tag_ids
+            ),
+        ),
+        pipeline_version=version,
+        started_at=now,
+        duration=now - now,
+    )
 
 
 def _current_values(document: Document) -> dict[str, JsonValue]:
@@ -318,7 +397,7 @@ async def situation(
         locked=frozenset(locked),
         person_added_tags=person_added_tags,
         person_removed_tags=person_removed_tags,
-        review_confirmed=origin.confirmed_now,
+        reviewed=origin.reviewed,
         accept_conflicts=accept_conflicts,
     )
 

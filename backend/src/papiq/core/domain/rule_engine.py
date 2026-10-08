@@ -380,7 +380,7 @@ class Situation:
     - `model_values`: single fields that hold the value the model set, unconfirmed, as JSON.
     - `locked`: single fields a person decided; `person_added_tags` and `person_removed_tags`
       likewise for tags.
-    - `review_confirmed`: a person confirmed the document in this processing run.
+    - `reviewed`: rules whose forced review a person confirmed in this processing run.
     - `accept_conflicts` (retroactive): the person accepted the rule's values over others.
     """
 
@@ -395,7 +395,7 @@ class Situation:
     locked: frozenset[str] = frozenset()
     person_added_tags: frozenset[TagId] = frozenset()
     person_removed_tags: frozenset[TagId] = frozenset()
-    review_confirmed: bool = False
+    reviewed: frozenset[RuleId] = frozenset()
     accept_conflicts: bool = False
 
 
@@ -409,7 +409,7 @@ class Effect:
 @dataclass(frozen=True)
 class Note:
     """An action that was not applied, and why (`kind`: skipped, overruled, refused,
-    conflict, review)."""
+    conflict), or a review the rule forces (`review`)."""
 
     field: str
     kind: str
@@ -612,11 +612,24 @@ class _Planner:
         elif target is None:
             report.notes.append(Note(DRAWER, "skipped", f"drawer {drawer} no longer exists"))
         elif not target.writable:
-            reason = f"no write access to drawer '{target.name}' (any more)"
+            reason = f"no write access to drawer {drawer} (any more)"
             report.notes.append(Note(DRAWER, "refused", reason))
             if s.mode is Mode.INGEST and DRAWER not in s.locked:
                 self._uncertain(DRAWER, f"rule '{report.name}': {reason}", suggestion=None)
-        elif target.shared and not match.trusted and s.mode is not Mode.RETROACTIVE:
+        elif target.shared and not match.trusted and s.mode is Mode.RETROACTIVE:
+            # The person sees the move in the preview and may accept it, as any conflict.
+            fields = ", ".join(match.distrusted)
+            if s.accept_conflicts:
+                self._candidates.setdefault(DRAWER, []).append(
+                    _Candidate(report, str(drawer), match)
+                )
+            else:
+                reason = (
+                    f"files into the shared drawer '{target.name}' with an unconfirmed "
+                    f"{fields}; not accepted"
+                )
+                report.notes.append(Note(DRAWER, "conflict", reason))
+        elif target.shared and not match.trusted:
             fields = ", ".join(match.distrusted)
             reason = f"files into the shared drawer '{target.name}' only with a confirmed {fields}"
             report.notes.append(Note(DRAWER, "refused", reason))
@@ -634,9 +647,10 @@ class _Planner:
         s = self._s
         if s.mode is not Mode.INGEST:
             report.notes.append(Note(REVIEW, "skipped", "reviews are forced on arrival only"))
-        elif s.review_confirmed:
-            report.notes.append(Note(REVIEW, "overruled", "a person confirmed the document"))
+        elif report.rule_id in s.reviewed:
+            report.notes.append(Note(REVIEW, "overruled", "a person confirmed the review"))
         else:
+            report.notes.append(Note(REVIEW, "review", reason))
             self._reviews.append(f"rule '{report.name}': {reason}")
             self._uncertain(REVIEW, f"rule '{report.name}': {reason}", suggestion=None)
 

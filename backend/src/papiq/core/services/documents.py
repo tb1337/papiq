@@ -276,7 +276,12 @@ class DocumentService:
                 target = await visible_drawer(uow, user, drawer)
             if not can_move_document(user, document, target):
                 raise PermissionDeniedError(f"no write access to drawer {drawer}")
-            document.move_to(target.id, self._clock.now())
+            now = self._clock.now()
+            document.move_to(target.id, now)
+            if self._rules is not None:
+                await uow.processing_log.append(
+                    self._rules.drawer_chosen(document, actor=user, now=now)
+                )
             await _save(uow, document)
             await uow.commit()
 
