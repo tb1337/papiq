@@ -1,0 +1,181 @@
+# Papiq with Postgres and Garage (S3): the container needs no volume. Meilisearch as well.
+# The language model and the embeddings are outside (Ollama or a cloud endpoint).
+#
+#   ./create-secrets.sh                              # once: the secrets in ./secrets
+#   docker compose -f compose.postgres.yml up -d --build
+#
+# Then open http://localhost:8000/api/v1/docs; sign in as `admin` (password in secrets/admin_password).
+# See README.md for the settings, the reverse proxy and the backup.
+name: papiq-postgres
+
+services:
+  papiq:
+    image: papiq:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: runtime
+    restart: unless-stopped
+    # The worker gets 30 s to finish its jobs, s6 waits up to 40 s: see README.md.
+    stop_grace_period: 60s
+    ports:
+      # Only this machine; a reverse proxy in front brings it to the network (see README.md).
+      - 127.0.0.1:${PAPIQ_HTTP_PORT:-8000}:8000
+    environment:
+      PUID: 1000
+      PGID: 1000
+      # all: API and worker in this container. To run them apart, start this service twice
+      # (PAPIQ_ROLE: api and PAPIQ_ROLE: worker); only `all` and `api` migrate the database.
+      PAPIQ_ROLE: all
+
+      PAPIQ_SECRET_KEY_FILE: /run/secrets/papiq_secret_key
+      PAPIQ_ADMIN_USERNAME: admin
+      PAPIQ_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+      # Plain HTTP on localhost. Behind a TLS proxy delete this line and set
+      # PAPIQ_FORWARDED_ALLOW_IPS (see README.md).
+      PAPIQ_COOKIE_SECURE: "false"
+
+      PAPIQ_DB_TYPE: postgres
+      PAPIQ_DB_HOST: postgres
+      PAPIQ_DB_NAME: papiq
+      PAPIQ_DB_USER: papiq
+      PAPIQ_DB_PASSWORD_FILE: /run/secrets/postgres_password
+
+      PAPIQ_STORAGE_TYPE: s3
+      PAPIQ_S3_ENDPOINT_URL: http://garage:3900
+      PAPIQ_S3_REGION: garage
+      PAPIQ_S3_BUCKET: papiq
+      PAPIQ_S3_ACCESS_KEY_ID_FILE: /run/secrets/s3_access_key_id
+      PAPIQ_S3_SECRET_ACCESS_KEY_FILE: /run/secrets/s3_secret_access_key
+
+      PAPIQ_MEILISEARCH_URL: http://meilisearch:7700
+      PAPIQ_MEILISEARCH_API_KEY_FILE: /run/secrets/meilisearch_key
+
+      # Language model and embeddings: Ollama, here on the host; change the address or set the
+      # variables in your shell (set empty for none). Papiq sends document content there.
+      PAPIQ_LLM_BASE_URL: ${PAPIQ_LLM_BASE_URL-http://host.docker.internal:11434/v1}
+      PAPIQ_LLM_MODEL: ${PAPIQ_LLM_MODEL-qwen3:8b}
+      # On a CPU a document takes minutes.
+      PAPIQ_LLM_TIMEOUT: "600"
+      PAPIQ_EMBEDDING_BASE_URL: ${PAPIQ_EMBEDDING_BASE_URL-http://host.docker.internal:11434/v1}
+      PAPIQ_EMBEDDING_MODEL: ${PAPIQ_EMBEDDING_MODEL-snowflake-arctic-embed2}
+      PAPIQ_EMBEDDING_QUERY_PREFIX: "query:"
+      PAPIQ_EMBEDDING_DIMENSIONS: 1024
+
+      # Further settings, shown with their defaults (README.md lists the ones that matter):
+      # PAPIQ_LOG_LEVEL: INFO
+      # PAPIQ_WORKER_CONCURRENCY: 2
+      # PAPIQ_WORKER_SHUTDOWN_TIMEOUT: 30     # then S6_SERVICES_GRACETIME and stop_grace_period too
+      # PAPIQ_MCP_ENABLED: "true"             # the MCP endpoint /api/v1/mcp
+      # PAPIQ_MCP_TEXT_MAX: 20000             # characters per get_text call
+      # PAPIQ_WEBHOOKS_PER_USER: 20
+      # PAPIQ_WEBHOOK_TIMEOUT: 10             # seconds per delivery attempt
+      # PAPIQ_WEBHOOK_MAX_ATTEMPTS: 10
+      # PAPIQ_WEBHOOK_RETRY_DELAY: 30         # seconds, doubling up to an hour
+      # PAPIQ_WEBHOOK_DISABLE_AFTER: 20       # given-up deliveries in a row
+      # PAPIQ_WEBHOOK_CONCURRENCY: 4
+      # PAPIQ_WEBHOOK_SECRET_GRACE: 86400     # seconds a renewed secret's predecessor still signs
+    extra_hosts:
+      # Reaches an Ollama on the host on Linux, too (built in on Docker Desktop and OrbStack).
+      - host.docker.internal:host-gateway
+    secrets:
+      - papiq_secret_key
+      - admin_password
+      - postgres_password
+      - s3_access_key_id
+      - s3_secret_access_key
+      - meilisearch_key
+    depends_on:
+      postgres:
+        condition: service_healthy
+      garage-init:
+        condition: service_completed_successfully
+      meilisearch:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17.11-trixie
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: papiq
+      POSTGRES_DB: papiq
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    secrets:
+      - postgres_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U papiq -d papiq"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+  garage:
+    image: dxflrs/garage:v2.4.1
+    restart: unless-stopped
+    environment:
+      GARAGE_RPC_SECRET_FILE: /run/secrets/garage_rpc_secret
+      GARAGE_ADMIN_TOKEN_FILE: /run/secrets/garage_admin_token
+    volumes:
+      - ./garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+    secrets:
+      - garage_rpc_secret
+      - garage_admin_token
+
+  # Creates layout, access key and bucket; safe to run on every start.
+  garage-init:
+    build: garage-init
+    restart: "no"
+    environment:
+      GARAGE_ADMIN_URL: http://garage:3903
+      GARAGE_ADMIN_TOKEN_FILE: /run/secrets/garage_admin_token
+      PAPIQ_S3_ACCESS_KEY_ID_FILE: /run/secrets/s3_access_key_id
+      PAPIQ_S3_SECRET_ACCESS_KEY_FILE: /run/secrets/s3_secret_access_key
+      PAPIQ_S3_BUCKET: papiq
+    secrets:
+      - garage_admin_token
+      - s3_access_key_id
+      - s3_secret_access_key
+    depends_on:
+      - garage
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.54.3
+    restart: unless-stopped
+    env_file: secrets/meilisearch.env # MEILI_MASTER_KEY
+    environment:
+      MEILI_ENV: production
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - meilisearch-data:/meili_data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:7700/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+secrets:
+  papiq_secret_key:
+    file: secrets/papiq_secret_key
+  admin_password:
+    file: secrets/admin_password
+  postgres_password:
+    file: secrets/postgres_password
+  s3_access_key_id:
+    file: secrets/s3_access_key_id
+  s3_secret_access_key:
+    file: secrets/s3_secret_access_key
+  meilisearch_key:
+    file: secrets/meilisearch_key
+  garage_rpc_secret:
+    file: secrets/garage_rpc_secret
+  garage_admin_token:
+    file: secrets/garage_admin_token
+
+volumes:
+  postgres-data:
+  garage-meta:
+  garage-data:
+  meilisearch-data:
