@@ -1,0 +1,135 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+/* Fonts are part of the build (no CDN): Geist and Geist Mono, SIL Open Font License 1.1. */
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Design tokens of p:api:q, direction "Papier" (chosen 08.10.2026): warm paper white, petrol as the
+ * one accent, round shapes, airy spacing. Every colour pair used for text meets WCAG AA (4.5:1) in
+ * light and dark. Lanes are never told apart by colour alone: the badge carries an icon and text.
+ */
+:root {
+	--radius: 0.75rem;
+
+	--background: #fafaf8;
+	--foreground: #1b1a17;
+	--card: #ffffff;
+	--card-foreground: #1b1a17;
+	--popover: #ffffff;
+	--popover-foreground: #1b1a17;
+	--primary: #0d6b6b;
+	--primary-foreground: #ffffff;
+	--secondary: #efeeea;
+	--secondary-foreground: #1b1a17;
+	--muted: #efeeea;
+	--muted-foreground: #5f5c55;
+	--accent: #efeeea;
+	--accent-foreground: #1b1a17;
+	--destructive: #a11d17;
+	--border: #e3e0da;
+	--input: #dedbd5;
+	/* Focus outline: petrol, 6:1 on paper (WCAG 1.4.11 asks 3:1). */
+	--ring: #0d6b6b;
+
+	/* The petrol as text and the tinted panel of the sign-in page. */
+	--brand: #0d6b6b;
+	--panel: #e6f1ef;
+
+	--lane-green: #e1f2e6;
+	--lane-green-foreground: #17652f;
+	--lane-yellow: #fcefc9;
+	--lane-yellow-foreground: #6f4b00;
+	--lane-red: #fbe3e2;
+	--lane-red-foreground: #a11d17;
+	--lane-running: #efeeea;
+	--lane-running-foreground: #5f5c55;
+}
+
+.dark {
+	--background: #111413;
+	--foreground: #ebeae6;
+	--card: #181c1b;
+	--card-foreground: #ebeae6;
+	--popover: #181c1b;
+	--popover-foreground: #ebeae6;
+	--primary: #3fb5ab;
+	--primary-foreground: #06201d;
+	--secondary: #232826;
+	--secondary-foreground: #ebeae6;
+	--muted: #232826;
+	--muted-foreground: #a2a8a5;
+	--accent: #232826;
+	--accent-foreground: #ebeae6;
+	--destructive: #ff9089;
+	--border: #2e3532;
+	--input: #2e3532;
+	--ring: #3fb5ab;
+
+	--brand: #5fd0c6;
+	--panel: #132826;
+
+	--lane-green: #12291c;
+	--lane-green-foreground: #74d396;
+	--lane-yellow: #2e2611;
+	--lane-yellow-foreground: #f0c75a;
+	--lane-red: #331718;
+	--lane-red-foreground: #ff9089;
+	--lane-running: #232826;
+	--lane-running-foreground: #a2a8a5;
+}
+
+@theme inline {
+	--font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+	--font-mono: 'Geist Mono Variable', ui-monospace, monospace;
+
+	--radius-sm: calc(var(--radius) - 4px);
+	--radius-md: calc(var(--radius) - 2px);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) + 4px);
+
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-card: var(--card);
+	--color-card-foreground: var(--card-foreground);
+	--color-popover: var(--popover);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-secondary: var(--secondary);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-muted: var(--muted);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-accent: var(--accent);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-destructive: var(--destructive);
+	--color-border: var(--border);
+	--color-input: var(--input);
+	--color-ring: var(--ring);
+	--color-brand: var(--brand);
+	--color-panel: var(--panel);
+
+	--color-lane-green: var(--lane-green);
+	--color-lane-green-foreground: var(--lane-green-foreground);
+	--color-lane-yellow: var(--lane-yellow);
+	--color-lane-yellow-foreground: var(--lane-yellow-foreground);
+	--color-lane-red: var(--lane-red);
+	--color-lane-red-foreground: var(--lane-red-foreground);
+	--color-lane-running: var(--lane-running);
+	--color-lane-running-foreground: var(--lane-running-foreground);
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+	}
+	html {
+		@apply bg-background font-sans text-foreground antialiased;
+	}
+	/* A visible focus everywhere the keyboard lands. */
+	:focus-visible {
+		@apply outline-2 outline-offset-2 outline-ring;
+	}
+}

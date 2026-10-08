@@ -6,8 +6,10 @@
 #   docling-models  Docling's layout and table models, downloaded at build time (from deps)
 #   app             deps + the Papiq package
 #   s6              s6-overlay, unpacked (version and checksums pinned below)
+#   web             the web UI (web/), built once on the build machine: static files only
 #   dev             devcontainer: base + uv, Node.js, pnpm, Git, Docling models
-#   runtime         the production image: base + s6-overlay + app + models + deploy/image/rootfs
+#   runtime         the production image: base + s6-overlay + app + models + web UI +
+#                   deploy/image/rootfs (no Node.js)
 # All stages build for linux/amd64 and linux/arm64, each natively on its own machine (CI uses an
 # arm64 runner; building the other architecture locally runs under emulation and is slow).
 #
@@ -108,6 +110,17 @@ COPY --from=s6-noarch / /archives/
 COPY --from=s6-arch / /archives/
 RUN mkdir /s6 && for archive in /archives/*.tar.xz; do tar -C /s6 -Jxpf "$archive"; done
 
+# --- web: the web UI, built on the build machine's platform -----------------------------------
+# The result is static files, the same for every target platform: no emulation for arm64.
+# Dependencies first, so that a change of the code alone keeps the install layer.
+FROM --platform=$BUILDPLATFORM node:24.21.0-trixie-slim AS web
+RUN npm install --global pnpm@12.9.1
+WORKDIR /web
+COPY web/package.json web/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY web/ ./
+RUN pnpm build
+
 # --- dev: devcontainer ---------------------------------------------------------------------------
 FROM base AS dev
 
@@ -167,6 +180,7 @@ FROM base AS runtime
 COPY --from=s6 /s6/ /
 COPY --from=app /opt/papiq/venv /opt/papiq/venv
 COPY --from=docling-models /opt/docling-models /opt/docling-models
+COPY --from=web /web/build /opt/papiq/ui
 # The s6 services and scripts.
 COPY deploy/image/rootfs/ /
 
@@ -176,13 +190,15 @@ COPY deploy/image/rootfs/ /
 # its jobs, so s6 waits 40 s for the services; Compose `stop_grace_period` is 60 s. s6 sits out the
 # whole S6_KILL_GRACETIME before it ends, so that stays short (1 s). Raise the first two together.
 # The database and the objects live on the volume /data (the defaults of settings.py are
-# relative paths). PUID and PGID are not Papiq settings: the user of the Papiq processes.
+# relative paths). The API serves the web UI below /ui. PUID and PGID are not Papiq settings:
+# the user of the Papiq processes.
 ENV PATH="/command:/opt/papiq/venv/bin:$PATH" \
     S6_BEHAVIOUR_IF_STAGE2_FAILS=2 \
     S6_SERVICES_GRACETIME=40000 \
     S6_KILL_GRACETIME=1000 \
     PAPIQ_DB_SQLITE_PATH=/data/papiq.db \
     PAPIQ_STORAGE_PATH=/data/objects \
+    PAPIQ_UI_DIR=/opt/papiq/ui \
     PUID=1000 \
     PGID=1000
 

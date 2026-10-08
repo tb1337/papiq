@@ -1,0 +1,6 @@
+node_modules/
+/build/
+/.svelte-kit/
+/src/lib/paraglide/
+/test-results/
+/playwright-report/

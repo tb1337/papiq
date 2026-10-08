@@ -7,5 +7,18 @@
 !backend/src/
 # The s6 services and scripts of the runtime image.
 !deploy/image/
+# The web UI's sources (build stage `web`), without what the build makes or does not need.
+!web/
+web/node_modules/
+web/build/
+web/.svelte-kit/
+web/src/lib/paraglide/
+web/tests/
+web/**/*.test.ts
+web/**/*.md
+web/openapi.json
+web/playwright.config.ts
+web/test-results/
+web/playwright-report/
 # Bytecode caches of the host.
 **/__pycache__/
