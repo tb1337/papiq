@@ -10,9 +10,9 @@ Paperless-ngx. Python backend, hexagonal (ports and adapters); the REST API is t
 | `backend/` | Python package `papiq`: `core` (domain, ports, services), `adapters` (inbound, outbound), `composition` |
 | `web/` | Web UI (SvelteKit, not started) |
 | `migration/` | Paperless-ngx migration client (not started) |
-| `deploy/` | Production image and Compose stacks (M9) |
+| `deploy/` | Runtime image files (s6-overlay services, `image/rootfs`), example Compose stacks (SQLite, Postgres + Garage), `test-image.sh`, `README.md` (operation, backup) |
 | `.devcontainer/` | Devcontainer: Compose services (Postgres, Garage, Meilisearch) and dev credentials |
-| `Dockerfile` | Stages `dev` (devcontainer) and `runtime` (placeholder) |
+| `Dockerfile` | Stages `base`, `deps`, `docling-models`, `app`, `dev` (devcontainer) and `runtime` (production image) |
 | `.idea/` | Design documents in German: `architektur.md` (binding), `umsetzungsplan.md` |
 
 ## Commands
@@ -34,6 +34,13 @@ uv run python -m papiq.composition migrate   # bring the configured database to 
 uv run python -m papiq.composition check-schema   # exit 0 if the schema is at the newest revision
 uv run python -m papiq.composition api       # serve the REST API until SIGTERM
 uv run python -m papiq.composition worker    # run the worker until SIGTERM
+```
+
+Image (in the repository root; s6-overlay, `PAPIQ_ROLE`, `PUID`/`PGID`; see `deploy/README.md`):
+
+```sh
+docker build --target runtime -t papiq:local .
+deploy/test-image.sh papiq:local     # starts it with SQLite: migration, health, user, roles, a PDF, stop
 ```
 
 Run all five checks before every commit.
