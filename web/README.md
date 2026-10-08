@@ -43,8 +43,8 @@ For `pnpm dev`, start the API in `backend/` with `uv run python -m papiq.composi
 
 The viewer uses the legacy build of `pdfjs-dist` (the normal one needs `Map.getOrInsertComputed`,
 missing in older browsers). The worker is bundled; the plugin `vite-pdfjs.js` serves and emits
-wasm, standard fonts and CMaps under `/ui/pdfjs/`. The API's Content-Security-Policy therefore
-allows `worker-src 'self'` and `style-src-attr 'unsafe-inline'` (pdf.js sets style attributes);
+wasm, standard fonts and CMaps under `/ui/pdfjs/`.
+The Content-Security-Policy (`vite.config.ts`) allows `worker-src 'self'` and `style-src-attr 'unsafe-inline'` (pdf.js sets style attributes);
 scripts and style elements stay `'self'` only.
 
 ## API client
