@@ -76,6 +76,13 @@ async def test_hashed_files_are_cached_for_good(client: httpx2.AsyncClient) -> N
     assert_secured(response)
 
 
+async def test_empty_segments_change_nothing(client: httpx2.AsyncClient) -> None:
+    hashed = await client.get(f"/ui//{SCRIPT_PATH}")
+    assert hashed.headers["cache-control"] == IMMUTABLE
+    missing = await client.get("/ui//_app/missing")
+    assert missing.status_code == 404
+
+
 @pytest.mark.parametrize("path", ["/ui/favicon.svg", "/ui/_app/version.json"])
 async def test_other_files_are_revalidated(client: httpx2.AsyncClient, path: str) -> None:
     response = await client.get(path)
@@ -140,6 +147,7 @@ async def test_only_reading_is_allowed(client: httpx2.AsyncClient, path: str) ->
     response = await client.post(path)
     assert response.status_code == 405
     assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["title"] == "Method Not Allowed"
 
 
 async def test_an_unchanged_file_is_not_sent_again(client: httpx2.AsyncClient) -> None:
