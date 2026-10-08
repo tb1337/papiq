@@ -48,6 +48,7 @@ from tests.contracts.job_queue import JobQueueContract
 from tests.contracts.language_model import EmbeddingsContract, LanguageModelContract
 from tests.contracts.object_store import ObjectStoreContract
 from tests.contracts.processing import OcrContract, ParserContract, PreviewRendererContract
+from tests.contracts.rules import RuleRepositoriesContract
 from tests.contracts.search_index import DIMENSIONS, SearchIndexContract
 from tests.contracts.unit_of_work import UnitOfWorkContract
 
@@ -83,6 +84,10 @@ def clock() -> Clock:
 
 
 class TestMemoryUnitOfWork(UnitOfWorkContract):
+    pass
+
+
+class TestMemoryRuleRepositories(RuleRepositoriesContract):
     pass
 
 

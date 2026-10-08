@@ -15,6 +15,7 @@ from tests.builders import NOW
 from tests.contracts.event_bus import EventBusContract
 from tests.contracts.identity import IdentityRepositoriesContract
 from tests.contracts.job_queue import JobQueueContract
+from tests.contracts.rules import RuleRepositoriesContract
 from tests.contracts.unit_of_work import UnitOfWorkContract, owner_with_drawer
 from tests.sql_suite import MigrationSuite, SqlAdapterSuite
 
@@ -24,6 +25,10 @@ class TestSqliteUnitOfWork(UnitOfWorkContract):
 
 
 class TestSqliteJobQueue(JobQueueContract):
+    pass
+
+
+class TestSqliteRuleRepositories(RuleRepositoriesContract):
     pass
 
 
