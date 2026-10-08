@@ -124,6 +124,7 @@ describe('drawersWritableBy', () => {
 	it('keeps every drawer for an admin and none for nobody', () => {
 		expect(drawersWritableBy(drawers, { id: 'u1', role: 'admin' })).toHaveLength(4);
 		expect(drawersWritableBy(drawers, null)).toEqual([]);
+		expect(drawersWritableBy(drawers, { id: 'u1', role: 'admin', active: false })).toEqual([]);
 	});
 });
 
