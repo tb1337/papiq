@@ -327,7 +327,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Create a user
-		 * @description Admins only. Creates the user's private default drawer, too. Changes sign-in data, so it needs a session; API tokens are refused (403), as for `/auth/*`.
+		 * @description Admins only. Creates the user's private default drawer, too. A user with the role `user` and no password can be created with an admin's API token (`read_write`), e.g. by a migration; a password or the role `admin` needs a session, as for `/auth/*`.
 		 */
 		post: operations['create_user_api_v1_users_post'];
 		delete?: never;
@@ -623,7 +623,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Create a drawer
-		 * @description Names are unique per owner regardless of case.
+		 * @description Names are unique per owner regardless of case. The caller owns the drawer; admins may give `owner_id` to create one for another active user (others: 403, an unknown or deactivated user: 404).
 		 */
 		post: operations['create_drawer_api_v1_drawers_post'];
 		delete?: never;
@@ -1782,6 +1782,7 @@ export interface components {
 		 *         "run": 1,
 		 *         "status": "completed"
 		 *       },
+		 *       "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
 		 *       "tag_ids": [],
 		 *       "title": "Electricity bill March",
 		 *       "updated_at": "2026-04-02T08:16:10Z"
@@ -1804,6 +1805,12 @@ export interface components {
 			media_type: string;
 			/** @description How the document arrived: `web` (web UI), `api`, `migration`. */
 			channel: components['schemas']['Channel'];
+			/**
+			 * Sha256
+			 * @description SHA-256 of the original file, in lower-case hex.
+			 * @example 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+			 */
+			sha256: string;
 			/**
 			 * Owner Id
 			 * Format: uuid
@@ -1879,6 +1886,7 @@ export interface components {
 		 *         "run": 1,
 		 *         "status": "completed"
 		 *       },
+		 *       "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
 		 *       "tag_ids": [],
 		 *       "title": "Electricity bill March",
 		 *       "updated_at": "2026-04-02T08:16:10Z"
@@ -1901,6 +1909,12 @@ export interface components {
 			media_type: string;
 			/** @description How the document arrived: `web` (web UI), `api`, `migration`. */
 			channel: components['schemas']['Channel'];
+			/**
+			 * Sha256
+			 * @description SHA-256 of the original file, in lower-case hex.
+			 * @example 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+			 */
+			sha256: string;
 			/**
 			 * Owner Id
 			 * Format: uuid
@@ -2025,6 +2039,24 @@ export interface components {
 			rules: components['schemas']['RuleReportOut'][] | null;
 			/** @description Who would see the document; null if the caller could not read it then. */
 			visibility: components['schemas']['VisibilityOut'] | null;
+		};
+		/**
+		 * DrawerCreate
+		 * @example {
+		 *       "name": "Household"
+		 *     }
+		 */
+		DrawerCreate: {
+			/**
+			 * Name
+			 * @example ACME Energy
+			 */
+			name: string;
+			/**
+			 * Owner Id
+			 * @description Admins only: the user who will own the drawer. Default: the caller.
+			 */
+			owner_id?: string | null;
 		};
 		/** DrawerOut */
 		DrawerOut: {
@@ -8275,7 +8307,7 @@ export interface operations {
 		};
 		requestBody: {
 			content: {
-				'application/json': components['schemas']['NameIn'];
+				'application/json': components['schemas']['DrawerCreate'];
 			};
 		};
 		responses: {
@@ -8317,6 +8349,23 @@ export interface operations {
 					 *       "title": "Forbidden",
 					 *       "status": 403,
 					 *       "detail": "only the owner controls processing of this document"
+					 *     }
+					 */
+					'application/problem+json': components['schemas']['Problem'];
+				};
+			};
+			/** @description Not Found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					/**
+					 * @example {
+					 *       "type": "about:blank",
+					 *       "title": "Not Found",
+					 *       "status": 404,
+					 *       "detail": "document 01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b not found"
 					 *     }
 					 */
 					'application/problem+json': components['schemas']['Problem'];
@@ -10563,6 +10612,13 @@ export interface operations {
 					 * @enum {string}
 					 */
 					channel?: 'migration';
+					/**
+					 * Format: uuid
+					 * @description Admins only: the active user who owns the document. Default: the caller. The duplicate check, the default drawer and the write access to `drawer_id` are the owner's.
+					 */
+					owner?: string;
+					/** @description Admins only, with `channel=migration`: JSON of the metadata the document comes with (up to 48 KiB), as `ImportedMetadataIn`. Classification and attribute extraction apply it instead of asking the language model; the other steps and the rules run as usual. */
+					metadata?: string;
 				};
 			};
 		};

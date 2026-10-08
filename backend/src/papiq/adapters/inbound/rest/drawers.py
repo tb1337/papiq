@@ -8,7 +8,7 @@ from fastapi import APIRouter
 from papiq.adapters.inbound.rest.auth import PROTECTED, Authenticated
 from papiq.adapters.inbound.rest.context import Context
 from papiq.adapters.inbound.rest.problems import problem_responses
-from papiq.adapters.inbound.rest.schemas import DrawerOut, NameIn, ShareIn
+from papiq.adapters.inbound.rest.schemas import DrawerCreate, DrawerOut, NameIn, ShareIn
 from papiq.core.domain.ids import DrawerId, UserId
 
 router = APIRouter(prefix="/drawers", tags=["drawers"], dependencies=PROTECTED)
@@ -36,12 +36,20 @@ async def list_drawers(principal: Authenticated, context: Context) -> list[Drawe
     "",
     status_code=201,
     summary="Create a drawer",
-    description="Names are unique per owner regardless of case.",
+    description=(
+        "Names are unique per owner regardless of case. The caller owns the drawer; admins may "
+        "give `owner_id` to create one for another active user (others: 403, an unknown or "
+        "deactivated user: 404)."
+    ),
     response_model=DrawerOut,
-    responses=problem_responses(401, 409, 422),
+    responses=problem_responses(401, 403, 404, 409, 422),
 )
-async def create_drawer(body: NameIn, principal: Authenticated, context: Context) -> DrawerOut:
-    return DrawerOut.of(await context.drawers.create(principal.id, body.name), principal.user)
+async def create_drawer(
+    body: DrawerCreate, principal: Authenticated, context: Context
+) -> DrawerOut:
+    owner = None if body.owner_id is None else UserId(body.owner_id)
+    drawer = await context.drawers.create(principal.id, body.name, owner=owner)
+    return DrawerOut.of(drawer, principal.user)
 
 
 @router.get(
