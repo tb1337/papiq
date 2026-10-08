@@ -32,10 +32,10 @@ jobs:
   # (OCR, Docling: marker `docling`) run only if the change touches what they exercise
   # (`heavy`). A push to main runs
   # the checks again only where they write a cache: `backend` (mypy) and `integration` (Docling
-  # models) when the lock file changed, `devcontainer` and `image` (layers) when their inputs or
-  # the lock file changed. Everything else was checked in the pull request. `image` looks at
-  # what goes into the runtime image besides the code (Dockerfile, deploy/ without the Markdown
-  # files, the lock file), not at the code: its tests cover that.
+  # models) when the lock file changed, `devcontainer` (layers) when its inputs or the lock file
+  # changed. Everything else was checked in the pull request, `image` too (it writes no cache).
+  # `image` looks at what goes into the runtime image besides the code (Dockerfile, deploy/
+  # without the Markdown files, the lock file), not at the code: its tests cover that.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -80,7 +80,6 @@ jobs:
             matches "^backend/uv\.lock$|$ci" && echo "integration=true" >> "$GITHUB_OUTPUT"
             matches "^backend/uv\.lock$|$ci" && echo "heavy=true" >> "$GITHUB_OUTPUT"
             matches "$image|$lock" && echo "devcontainer=true" >> "$GITHUB_OUTPUT"
-            runtime_changed && echo "image=true" >> "$GITHUB_OUTPUT"
           else
             matches "$code" && echo "backend=true" >> "$GITHUB_OUTPUT"
             if [ "$DRAFT" != true ]; then
@@ -253,8 +252,9 @@ jobs:
   # arm64 side by side; the arm64 runner replaces the emulation that was slow and filled the
   # disk). Builds the image without pushing it, then `deploy/test-image.sh` starts it with
   # SQLite: migration, health, user (never root), roles, a PDF through OCR and Docling, stop.
-  # Layer cache as for `devcontainer`: one scope per architecture, written only from main;
-  # amd64 also reads the dev image's scope for the layers both share (base, deps, models).
+  # No layer cache: measured, a cold build takes 2.5 minutes, while restoring the cache takes
+  # about one minute and writing it two more, and it would take space from the 10 GB of the
+  # repository's caches.
   image:
     needs: changes
     if: needs.changes.outputs.image == 'true'
@@ -264,13 +264,8 @@ jobs:
         include:
           - arch: amd64
             runner: ubuntu-latest
-            cache-from: |
-              type=gha,scope=runtime-amd64
-              type=gha,scope=dev-image
           - arch: arm64
             runner: ubuntu-24.04-arm
-            cache-from: |
-              type=gha,scope=runtime-arm64
     name: image (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
@@ -286,8 +281,6 @@ jobs:
           target: runtime
           load: true
           tags: papiq:ci
-          cache-from: ${{ matrix.cache-from }}
-          cache-to: ${{ env.WRITE_CACHE == 'true' && format('type=gha,scope=runtime-{0},mode=max', matrix.arch) || '' }}
           secrets: hf_token=${{ secrets.HF_TOKEN }}
       - name: Size of the image
         run: docker image inspect papiq:ci --format 'image size {{.Size}} bytes' | tee -a "$GITHUB_STEP_SUMMARY"
