@@ -29,6 +29,7 @@ test('every area opens, and the dialogs create things', async ({ page }) => {
 		['/ui/documents', 'Documents'],
 		['/ui/inbox', 'Inbox'],
 		['/ui/search', 'Search'],
+		['/ui/rules', 'Rules'],
 		['/ui/drawers', 'Drawers'],
 		['/ui/webhooks', 'Webhooks'],
 		['/ui/admin/users', 'Users'],
