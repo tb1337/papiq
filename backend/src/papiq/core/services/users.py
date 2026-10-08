@@ -17,6 +17,7 @@ from papiq.core.domain.permissions import can_manage_users
 from papiq.core.domain.users import Role, User
 from papiq.core.ports import Clock, PasswordHasher, UnitOfWork, UnitOfWorkFactory
 from papiq.core.services._access import load_actor
+from papiq.core.services.rules.references import disable_rules, refers_to
 
 log = logging.getLogger(__name__)
 
@@ -178,7 +179,8 @@ class UserService:
 
     async def delete_user(self, actor: UserId, id: UserId) -> None:
         """Admins only, and only for a user who owns no documents and whose drawers are empty.
-        Removes their drawers, the shares to them and all their sign-in data."""
+        Removes their drawers, the shares to them, their rules and all their sign-in data.
+        Other users' rules that file into the removed drawers are disabled."""
         async with self._uow() as uow:
             await _require_admin(uow, actor)
             user = await uow.users.get(id)
@@ -186,14 +188,24 @@ class UserService:
                 await _keep_an_admin(uow, user)
             if await uow.documents.exists(owner=id):
                 raise ConflictError("the user owns documents; delete or move them first")
+            removed: list[Drawer] = []
             for drawer in await uow.drawers.list_accessible(id):
                 if drawer.owner_id == id:
                     if await uow.documents.exists(drawer=drawer.id):
                         raise ConflictError(f"the user's drawer '{drawer.name}' is not empty")
                     await uow.drawers.remove(drawer.id)
+                    removed.append(drawer)
                 else:
                     drawer.unshare(id)
                     await uow.drawers.update(drawer)
+            await uow.rules.remove_for_owner(id)
+            for drawer in removed:
+                await disable_rules(
+                    uow,
+                    self._clock.now(),
+                    f"drawer '{drawer.name}' was deleted",
+                    refers_to(lambda refs: refs.drawers, drawer.id),
+                )
             await uow.sessions.remove_for_user(id)
             await uow.api_tokens.remove_for_user(id)
             await uow.external_identities.remove_for_user(id)

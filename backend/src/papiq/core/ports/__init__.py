@@ -20,6 +20,7 @@ from papiq.core.ports.llm import LanguageModel, StructuredAnswer, StructuredRequ
 from papiq.core.ports.object_store import ObjectStore
 from papiq.core.ports.ocr import Ocr, OcrResult
 from papiq.core.ports.parser import DocumentParser, ParseResult
+from papiq.core.ports.patterns import PatternMatcher
 from papiq.core.ports.preview import PreviewRenderer
 from papiq.core.ports.repository import (
     AttributeDefinitionRepository,
@@ -31,6 +32,8 @@ from papiq.core.ports.repository import (
     NamedRepository,
     ProcessingLog,
     Repository,
+    RuleApplicationRepository,
+    RuleRepository,
     TagRepository,
     UserRepository,
 )
@@ -73,9 +76,12 @@ __all__ = [
     "Outbox",
     "ParseResult",
     "PasswordHasher",
+    "PatternMatcher",
     "PreviewRenderer",
     "ProcessingLog",
     "Repository",
+    "RuleApplicationRepository",
+    "RuleRepository",
     "SearchHit",
     "SearchIndex",
     "SearchQuery",

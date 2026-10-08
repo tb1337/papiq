@@ -198,6 +198,12 @@ class Settings(BaseSettings):
     confidence_threshold: Annotated[float, Field(gt=0, le=1)] = 0.9
     contact_suggest_threshold: Annotated[float, Field(gt=0, le=1)] = 0.75
 
+    # Rules: the time limit of one regular expression, the characters of document text that
+    # text conditions see, and the documents one retroactive application may cover.
+    rules_pattern_timeout: Seconds = timedelta(milliseconds=200)
+    rules_max_text: Annotated[int, Field(ge=1000, le=10_000_000)] = 200_000
+    rules_apply_max_documents: Annotated[int, Field(ge=1, le=100_000)] = 1000
+
     @model_validator(mode="before")
     @classmethod
     def _normalise(cls, data: Any) -> Any:

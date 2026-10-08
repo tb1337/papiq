@@ -24,6 +24,7 @@ dependencies = [
     "pyotp>=2.10.0",
     "pypdfium2>=5.14.0",
     "python-multipart>=0.0.32",
+    "regex>=2026.9.29",
     "sqlalchemy[asyncio]>=2.1.3",
     "structlog>=26.1.0",
     "torch>=2.14.1",
@@ -123,6 +124,7 @@ forbidden_modules = [
     "pyotp",
     "pypdfium2",
     "python_multipart",
+    "regex",
     "sqlalchemy",
     "starlette",
     "structlog",
@@ -132,7 +134,7 @@ forbidden_modules = [
 
 # Libraries without type information.
 [[tool.mypy.overrides]]
-module = ["aioboto3.*", "aiobotocore.*", "authlib.*", "botocore.*", "pypdfium2.*"]
+module = ["aioboto3.*", "aiobotocore.*", "authlib.*", "botocore.*", "pypdfium2.*", "regex.*"]
 ignore_missing_imports = true
 
 # PyTorch (pulled in by Docling) in its CPU variant only, on Linux (devcontainer, image).

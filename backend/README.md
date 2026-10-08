@@ -35,10 +35,9 @@ adapter must pass.
   sessions, API tokens, external identities, failed sign-ins) are part of the unit of work too.
   Further ports: `ObjectStore`, `Clock`, `Ocr`, `DocumentParser`, `PreviewRenderer`,
   `PasswordHasher`, `SecretCipher`, `Totp`, `OidcProvider`, `LanguageModel`, `Embeddings`,
-  `SearchIndex`.
+  `SearchIndex`, `PatternMatcher`.
 - `core/services`: use cases (users, drawers, master data, documents, pipeline, inbox,
-  classification, indexing, search, maintenance). Each runs in one unit of work and checks the caller's rights.
-  Rules and filing are placeholders until M7.
+  classification, rules, indexing, search, maintenance). Each runs in one unit of work and checks the caller's rights.
 
 `papiq.composition.container.build_memory_container()` wires all designed ports to their
 in-memory adapters (fakes for OCR, parser and previews); `build_services()` creates the use
@@ -150,7 +149,7 @@ small objects; files of any size go through `upload`/`download`, which work on l
 ## Processing
 
 Receive → OCR → parse → classify → extract attributes → apply rules → file run as jobs
-(`pipeline.step`); applying rules and filing are placeholders until M7.
+(`pipeline.step`).
 
 | Step | Input | Derivatives (object store) | Outcome |
 | --- | --- | --- | --- |
@@ -158,6 +157,8 @@ Receive → OCR → parse → classify → extract attributes → apply rules �
 | Parse (`ParseStep`) | the archive PDF | `documents/<id>/content.md`, `documents/<id>/content.json` (Docling) | failed if no text was recognised |
 | Classify (`ClassifyStep`) | `content.md`, master data | contact, document type, tags, document date (applied if checked) | see below |
 | Extract attributes (`ExtractAttributesStep`) | `content.md`, the attributes of the type | attribute values (applied if checked) | see below |
+| Apply rules (`ApplyRulesStep`) | `content.md` (only if a rule looks at the text), the rules | drawer, contact, type, title, tags, attributes | uncertain on conflicts, refused actions and forced reviews; see Rules |
+| File (`FileStep`) | the drawer | - | uncertain if the owner may no longer file into the drawer (field `drawer`) |
 
 - A step that raises is retried (`PAPIQ_STEP_MAX_ATTEMPTS`, delay `PAPIQ_STEP_RETRY_DELAY`,
   doubling); after the last attempt the document goes red. A damaged or encrypted file
@@ -219,7 +220,7 @@ passes is applied (the same way as a change by the owner):
 
 The quoted passage must appear in the text as well. Every check and the raw answer are in the
 processing log (`fields`, `answer`), so the proposal stays traceable after a correction; the
-rules (M7) read them with `core.services.inbox.field_checks`.
+rules read them with `core.services.inbox.field_checks`.
 
 The document text is sent between markers derived from its hash, and the model is told to treat
 it as data. It can only answer with the fixed schema: there is no field for drawers, owners,
@@ -240,6 +241,99 @@ with `OLLAMA_CONTEXT_LENGTH=8192` or more. Local models on a CPU are slow:
 
 **Evaluation.** `python -m papiq.composition evaluate [--fake]` runs the synthetic documents in
 `evaluation/` through both steps and writes a report; see [evaluation/README.md](evaluation/README.md).
+
+## Rules
+
+Rules are data, not code (`core/domain/rules.py`, `core/domain/rule_engine.py`,
+`core/services/rules`). A rule has a name, a priority (0 to 1000, default 100, higher first),
+triggers, a tree of conditions and actions. Changing its content makes a new version; old
+versions stay readable, so the processing log can refer to them. Enabling and disabling make no
+version; deleting is a soft delete.
+
+```json
+{
+  "name": "Telekom to household",
+  "priority": 100,
+  "triggers": ["ingest", "change"],
+  "conditions": {"all": [
+    {"field": "contact", "op": "is", "value": "<contact id>"},
+    {"any": [{"field": "text", "op": "contains", "value": "Rechnung"},
+             {"field": "text", "op": "matches", "value": "Kd\\.?-Nr"}], "not": true}
+  ]},
+  "actions": [
+    {"type": "set_drawer", "drawer_id": "<drawer id>"},
+    {"type": "add_tags", "tag_ids": ["<tag id>"]},
+    {"type": "set_title", "template": "{contact} {document_date}"}
+  ]
+}
+```
+
+- **Scope.** A user rule (any user) acts on its owner's documents with all actions and files
+  only into drawers its owner may write to. A global rule (admins) acts on every document, but
+  only with `add_tags`, `remove_tags`, `set_attribute` and `force_review`: nothing that changes
+  who sees a document. Everyone reads the global rules; user rules are read by their owner and
+  admins (`all_users=true`).
+- **Triggers.** `ingest`: the pipeline step `apply_rules`, when a document arrives. `change`:
+  a person changed the metadata of a document whose processing is complete.
+- **Conditions.** Groups `all` or `any`, each may be negated with `"not": true`; at most 5 deep
+  and 50 conditions. Fields and operators:
+
+  | Field | Operators |
+  | --- | --- |
+  | `contact`, `document_type` | `is`, `in`, `present`, `missing` |
+  | `tags` | `contains` (has this tag), `in` (has one of), `present`, `missing` |
+  | `channel` (Eingangskanal: `web`, `api`, `migration`) | `is`, `in` |
+  | `text` | `contains` (normalised like the classification checks), `matches` (regular expression) |
+  | `document_date` | `is`, `gt`, `lt`, `present`, `missing` |
+  | `attribute` (with `attribute_id`) | by data type: text and link `is`, `in`, `contains`, `matches`; number, amount, date `is`, `gt`, `lt`; yes/no `is`; choice `is`, `in`; all `present`, `missing` |
+
+  `matches` takes `case_sensitive` (default false). Patterns run with the `regex` package
+  (`adapters/outbound/regex`) in a thread with a time limit (`PAPIQ_RULES_PATTERN_TIMEOUT`); a
+  pattern that times out does not match and is logged. All patterns of one run on one
+  document get two seconds together, a preview page twenty; the patterns left do not match. The text is the parsed Markdown without
+  markup, at most `PAPIQ_RULES_MAX_TEXT` characters; it is loaded only if a rule looks at it.
+- **Actions.** `set_drawer`, `set_contact`, `set_document_type`, `set_title` (placeholders
+  `{contact}`, `{document_type}`, `{document_date}`, `{filename}`), `add_tags`, `remove_tags`,
+  `set_attribute`, `force_review` (with a reason).
+- **Evaluation.** All conditions see the state before any rule acts; a rule's action never makes
+  another rule match in the same run. Contact, type and tags the model set and no person
+  confirmed are distrusted: a rule that matches only because of them does not file into a
+  drawer that others see (shared or another user's); it is reported instead. Retroactively
+  such a move is a conflict: it acts only where the person accepts it.
+- **Combining.** A field set by one rule, or by several to the same value, is set. Different
+  values are a conflict and nothing is set; priority never decides. A value a person decided
+  in the current processing run is never replaced (the rule is logged as overruled): in the
+  inbox, by a change, or the drawer chosen on upload or by moving the document; a value the model set and no person
+  confirmed is not replaced either (conflict). Tags of all rules are combined; added by one and
+  removed by another is a conflict.
+- **On arrival** conflicts, refused actions and forced reviews make `apply_rules` uncertain: the
+  document waits in the inbox. Confirming it there (`POST /documents/{id}/confirm`, optionally
+  with `drawer_id`) decides the open fields and continues to filing; a forced review the owner
+  saw counts as answered. Filing checks once more that the owner may file into the drawer; if
+  not, confirming needs a `drawer_id` (`422` with `open_fields: ["drawer"]`).
+- **On a change** (`PATCH /documents/{id}`) rules are edge-triggered: a rule acts only if it
+  holds after the change and did not hold before. Fields the person set in this change, or
+  decided before in this processing run, are not touched. Nothing turns yellow: what cannot be applied is only reported, in the `rules`
+  block of the answer (to the owner). If the rules file the document where an editor who made
+  the change can no longer read it, the editor's answer is only `{"id": …, "access": null}`.
+  `POST /documents/{id}/dry-run` shows the same without storing anything.
+- **Retroactively.** `POST /rules/{id}/apply/preview` lists the documents the current version
+  would change, newest first, with changes and conflicts (a page looks at 200 documents at
+  most). `POST /rules/{id}/apply` pins a version and applies it to the selected documents (at
+  most `PAPIQ_RULES_APPLY_MAX_DOCUMENTS`) in the background, job `rules.apply`, 25 documents per
+  job; conflicts only where accepted (`accept_conflicts`), forced reviews do not act. A user rule
+  is applied by its owner to their documents, a global rule by anyone to the documents they may
+  write to; rights are checked again per document. Progress: `GET /rule-applications/{id}`.
+- **References.** Contacts, types, tags, attributes and drawers a rule names must exist (`404`),
+  drawers must be writable for the owner (`403`). Deleting one of them, or removing a choice a
+  rule uses, disables the rules that use it with a reason; enabling checks again. Deleting a user
+  removes their rules.
+- **Log.** Every run is a processing log entry of step `apply_rules` with the rules and versions
+  checked, matches, effects and notes. `model_version`: `rules` (the pipeline step),
+  `rules:change` (after a change; it also records what the person changed), `rules:apply`
+  (retroactive), `person` (a confirmation), `person:drawer` (a drawer chosen on upload or by
+  moving). Later runs read from the log which values a person
+  decided and which the model set.
 
 ## Search
 
@@ -333,8 +427,9 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
 | `GET /documents/search` | Search: `q`, the filters of `GET /documents`, `limit`, `offset`, `semantic_ratio`; hits with snippet, `estimated_total`, `next_offset`, `semantic` |
 | `POST /search/reindex` | Rebuild the search index in the background (admins); `202` |
 | `GET /documents` | Readable documents, newest first; filters `contact_id`, `document_type_id`, `tag_id`, `drawer_id`, `lane`; `limit`, `cursor` |
-| `POST /documents` | Upload (multipart: `file`, optional `drawer_id`); `202` with `id`, `status_url` |
-| `GET/PATCH/DELETE /documents/{id}` | Metadata and state with the caller's access; change (write access); delete (owner) |
+| `POST /documents` | Upload (multipart: `file`, optional `drawer_id`, optional `channel=migration`; otherwise the channel is `web` with a session, `api` with a token); `202` with `id`, `status_url` |
+| `GET/PATCH/DELETE /documents/{id}` | Metadata and state with the caller's access, `channel`; change (write access; the answer has the change rules' `rules` report for the owner); delete (owner) |
+| `POST /documents/{id}/dry-run` | A change as with `PATCH`, with the change rules, nothing stored: the result and the differences |
 | `POST /documents/{id}/move` | Into another drawer (owner, or an admin without read access) |
 | `GET /documents/{id}/original`, `/archive`, `/preview` | Files (read access) |
 | `GET /documents/{id}/log` | Processing log (owner) |
@@ -342,7 +437,9 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
 | `POST /documents/{id}/reprocess` | `{"from_step": "ocr"}`: process again from a step (owner) |
 | `GET /inbox` | The caller's yellow and red documents, newest first, with their open steps and fields; `limit`, `cursor` |
 | `GET /documents/{id}/review` | What the model proposed and how each field was checked (owner) |
-| `POST /documents/{id}/confirm` | Decide the open fields (`changes` as with `PATCH`, `accept_suggestions`), then continue from `resume_at` (`apply_rules`, or `extract_attributes` after a type change) up to filing (owner); undecided fields: `422` with `open_fields` |
+| `POST /documents/{id}/confirm` | Decide the open fields (`changes` as with `PATCH`, `accept_suggestions`, `drawer_id`), then continue from `resume_at` (`apply_rules`, or `extract_attributes` after a type change) up to filing (owner); undecided fields: `422` with `open_fields` |
+| `GET/POST /rules`, `GET/PUT/PATCH/DELETE /rules/{id}`, `GET /rules/{id}/versions`, `/versions/{number}` | Rules: list (`scope`, `include_disabled`, `all_users` for admins), create, change (new version), enable or disable, delete; see Rules |
+| `POST /rules/{id}/apply/preview`, `POST /rules/{id}/apply`, `GET /rule-applications/{id}` | Apply a rule to existing documents: preview, start (`202`), progress |
 | `GET /events` | Server-sent events of the documents the caller may read; `?document_id=` |
 | `GET /health` | Database, bucket or storage directory and, if configured, the search index reachable; `200` (`ok`, or `degraded` if only the search is down) or `503`, no authentication |
 
@@ -389,6 +486,8 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
   `PAPIQ_CLEANUP_INTERVAL` and removes finished jobs and delivered events older than
   `PAPIQ_RETENTION`, ended sessions and stale counts of failed sign-ins. The same loop runs
   the removal of a deleted document's files.
+- Rule applications (`rules.apply`) run 25 documents per job, then queue the next job, so
+  pipeline steps do not wait behind them.
 - SIGTERM or SIGINT: no new jobs; running jobs may finish within
   `PAPIQ_WORKER_SHUTDOWN_TIMEOUT`, then they are cancelled and their jobs released to run again
   at once. Finally the database engine and the S3 client are closed.
@@ -484,6 +583,9 @@ Durations are seconds (`30`, `1.5`) or ISO 8601 (`PT1H`, `P7D`) and must be posi
 | `PAPIQ_EMBEDDING_TIMEOUT` | `60` | Seconds per request |
 | `PAPIQ_EMBEDDING_DIMENSIONS` | unset | Length of the vectors (`bge-m3`: 1024); required with Meilisearch and an embedding endpoint |
 | `PAPIQ_EMBEDDING_QUERY_PREFIX`, `PAPIQ_EMBEDDING_DOCUMENT_PREFIX` | unset | Put before queries and before document sections, for models that ask for it |
+| `PAPIQ_RULES_PATTERN_TIMEOUT` | `0.2` | Seconds a regular expression of a rule may run per text or value |
+| `PAPIQ_RULES_MAX_TEXT` | `200000` | Characters of text rules look at (1,000 to 10,000,000) |
+| `PAPIQ_RULES_APPLY_MAX_DOCUMENTS` | `1000` | Documents per retroactive rule application (1 to 100,000) |
 
 ## Tests
 

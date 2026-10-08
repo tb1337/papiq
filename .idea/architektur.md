@@ -231,10 +231,10 @@ Regeln sind Daten in der Datenbank, keine Code-Änderung; sie werden in der Web-
 | Teil | Inhalt |
 | --- | --- |
 | Auslöser | Eingang eines Dokuments, jede Dokumentänderung |
-| Bedingungen | Baum aus UND/ODER-Gruppen; jede Bedingung = Feld + Operator + Wert |
-| Felder | Kontakt, Dokumenttyp, Tags, Quelle, Text, Attribute, Dokumentdatum |
+| Bedingungen | Baum aus UND/ODER-Gruppen, jede Gruppe negierbar; jede Bedingung = Feld + Operator + Wert |
+| Felder | Kontakt, Dokumenttyp, Tags, Eingangskanal (Web, API, Migration; später weitere wie E-Mail), Text, Attribute, Dokumentdatum |
 | Operatoren (je nach Datentyp) | ist, ist eines von, enthält, Muster (Regex), größer/kleiner, vorhanden/fehlt |
-| Aktionen | Schublade setzen, Kontakt setzen, Typ setzen, Tags hinzufügen/entfernen, Attribut setzen, Prüfung erzwingen (→ Posteingang) |
+| Aktionen | Schublade setzen, Kontakt setzen, Typ setzen, Titel setzen (mit Platzhaltern), Tags hinzufügen/entfernen, Attribut setzen, Prüfung erzwingen (→ Posteingang) |
 
 Gespeichert als JSON, geprüft mit Pydantic; die UI bietet einen Baukasten.
 
@@ -244,8 +244,13 @@ Gespeichert als JSON, geprüft mit Pydantic; die UI bietet einen Baukasten.
 - **Reihenfolge:** Alle zutreffenden Regeln laufen, sortiert nach Priorität; Tags werden vereinigt.
 - **Konflikte → Gelb:** Setzen zwei Regeln unterschiedliche Werte für ein Einzelfeld (Schublade, Kontakt, Typ, Attribut), oder widerspricht eine Regel dem LLM-Ergebnis, geht das Dokument auf Gelb. Regeln überschreiben das LLM nicht stillschweigend.
 - **Schleifenschutz:** Regeln laufen pro Änderung einmal; eine Regel-Aktion löst keine weiteren Regeln aus.
+- **Misstrauen (M7):** Kontakt, Typ und Tags, die das Modell gesetzt und niemand bestätigt hat, gelten als unsicher. Trifft eine Regel nur deshalb zu, legt sie nicht in eine geteilte oder fremde Schublade ab.
+- **Gelb nur in der Pipeline (M7):** Konflikte und „Prüfung erzwingen" machen ein Dokument nur beim Eingang gelb. Bei einer Änderung durch eine Person bleibt es grün; nicht Anwendbares wird nur gemeldet (ein abgelegtes Dokument verschwände sonst für andere).
+- **Änderungs-Regeln flankengesteuert (M7):** Eine Regel mit Auslöser Änderung wirkt nur, wenn sie nach der Änderung zutrifft und vorher nicht. Was die Person in dieser Änderung oder vorher im selben Verarbeitungslauf entschieden hat, ändert keine Regel (die Person gewinnt).
 - **Probelauf:** Vor dem Speichern einer Dokumentänderung zeigt die UI die Folgen, z. B. „Dokument wandert in Schublade Z – sichtbar für User B“.
 - **Nachvollziehbarkeit:** Regeln sind versioniert; das Verarbeitungsprotokoll hält fest, welche Regel in welcher Version was geändert hat.
+
+**Sichtbarkeit (M7):** Admins lesen alle Regeln; ändern dürfen sie nur globale Regeln. Nutzer-Regeln liest und ändert nur ihr Besitzer.
 
 **Rückwirkendes Anwenden (erster Wurf)**
 

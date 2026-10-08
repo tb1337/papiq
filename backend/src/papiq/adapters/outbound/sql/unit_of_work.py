@@ -39,6 +39,7 @@ from papiq.adapters.outbound.sql.repositories import (
     SqlTagRepository,
     SqlUserRepository,
 )
+from papiq.adapters.outbound.sql.rules import SqlRuleApplicationRepository, SqlRuleRepository
 from papiq.adapters.outbound.sql.transaction import Transaction
 from papiq.core.domain.events import DomainEvent
 
@@ -93,6 +94,8 @@ class SqlUnitOfWork:
         self.attributes = SqlAttributeRepository(self._tx)
         self.documents = SqlDocumentRepository(self._tx)
         self.processing_log = SqlProcessingLog(self._tx)
+        self.rules = SqlRuleRepository(self._tx)
+        self.rule_applications = SqlRuleApplicationRepository(self._tx)
         self.outbox = SqlOutbox(self._tx)
         self.jobs = SqlJobQueue(self._tx)
         self.credentials = SqlCredentialRepository(self._tx)

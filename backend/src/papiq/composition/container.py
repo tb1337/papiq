@@ -39,6 +39,7 @@ from papiq.adapters.outbound.ocrmypdf import OcrmypdfEngine
 from papiq.adapters.outbound.oidc import AuthlibOidcProvider
 from papiq.adapters.outbound.openai_compat import OpenAiCompatEmbeddings, OpenAiCompatLanguageModel
 from papiq.adapters.outbound.pdfium import PdfiumPreviewRenderer
+from papiq.adapters.outbound.regex import RegexPatternMatcher
 from papiq.adapters.outbound.s3 import S3ObjectStore
 from papiq.adapters.outbound.sql import SqlEventBus, SqlUnitOfWorkFactory
 from papiq.adapters.outbound.system import SystemClock
@@ -58,6 +59,7 @@ from papiq.core.ports import (
     Ocr,
     OidcProvider,
     PasswordHasher,
+    PatternMatcher,
     PreviewRenderer,
     SearchIndex,
     SecretCipher,
@@ -77,6 +79,10 @@ from papiq.core.services.maintenance import MaintenanceService
 from papiq.core.services.master_data import MasterDataService
 from papiq.core.services.oidc import OidcService
 from papiq.core.services.pipeline import PipelineService, PlaceholderStep, RetryPolicy, StepExecutor
+from papiq.core.services.rules import RuleService
+from papiq.core.services.rules.changes import ChangeRules
+from papiq.core.services.rules.retroactive import RuleApplicationService
+from papiq.core.services.rules.steps import ApplyRulesStep, FileStep
 from papiq.core.services.search import SearchPolicy, SearchService
 from papiq.core.services.steps import OcrStep, ParseStep
 from papiq.core.services.users import UserService
@@ -268,6 +274,7 @@ class Container:
     password_hasher: PasswordHasher
     cipher: SecretCipher
     totp: Totp
+    patterns: PatternMatcher
     oidc: OidcProvider | None
     search_index: SearchIndex | None
     language_model: LanguageModel | None
@@ -311,6 +318,7 @@ def build_container(settings: Settings) -> Container:
         password_hasher=Argon2PasswordHasher(),
         cipher=secret_cipher(settings),
         totp=PyotpTotp(),
+        patterns=RegexPatternMatcher(settings.rules_pattern_timeout.total_seconds()),
         oidc=(
             _select("oidc", "authlib", OIDC_PROVIDERS, settings) if settings.oidc_enabled else None
         ),
@@ -329,6 +337,10 @@ def build_container(settings: Settings) -> Container:
     )
 
 
+# Seconds; as `PAPIQ_RULES_PATTERN_TIMEOUT` by default.
+DEFAULT_PATTERN_TIMEOUT = 0.2
+
+
 def build_memory_container(clock: Clock | None = None) -> Container:
     """All ports on in-memory adapters, for tests and local experiments. Nothing persists."""
     database = MemoryDatabase()
@@ -343,6 +355,7 @@ def build_memory_container(clock: Clock | None = None) -> Container:
         password_hasher=FakePasswordHasher(),
         cipher=FakeCipher(),
         totp=FakeTotp(),
+        patterns=RegexPatternMatcher(DEFAULT_PATTERN_TIMEOUT),
         oidc=None,
         search_index=MemorySearchIndex(),
         language_model=None,
@@ -359,6 +372,8 @@ class Services:
     users: UserService
     drawers: DrawerService
     master_data: MasterDataService
+    rules: RuleService
+    rule_applications: RuleApplicationService
     documents: DocumentService
     pipeline: PipelineService
     maintenance: MaintenanceService
@@ -412,8 +427,7 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
     """The use cases; tuning (retries, time limits, cleanup) from `settings`, or the defaults.
 
     OCR, parsing, classification and attribute extraction run on the container's adapters
-    (without a language model, classification is uncertain). Rules and filing are
-    placeholders until M7.
+    (without a language model, classification is uncertain), then the rules and filing.
     """
     settings = settings or Settings.model_construct()
     uow, clock, store = container.unit_of_work, container.clock, container.object_store
@@ -425,6 +439,10 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
     model = container.language_model
     executors[Step.CLASSIFY] = ClassifyStep(uow, store, model, clock, policy)
     executors[Step.EXTRACT_ATTRIBUTES] = ExtractAttributesStep(uow, store, model, clock, policy)
+    executors[Step.APPLY_RULES] = ApplyRulesStep(
+        uow, store, container.patterns, max_text=settings.rules_max_text
+    )
+    executors[Step.FILE] = FileStep()
     auth = AuthService(
         uow,
         clock,
@@ -453,7 +471,27 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
         users=UserService(uow, clock, container.password_hasher),
         drawers=DrawerService(uow, clock),
         master_data=MasterDataService(uow, clock, index_renames=index is not None),
-        documents=DocumentService(uow, clock, store),
+        rules=RuleService(uow, clock),
+        rule_applications=RuleApplicationService(
+            uow,
+            clock,
+            store,
+            container.patterns,
+            max_text=settings.rules_max_text,
+            max_documents=settings.rules_apply_max_documents,
+            pipeline_version=__version__,
+        ),
+        documents=DocumentService(
+            uow,
+            clock,
+            store,
+            rules=ChangeRules(
+                store,
+                container.patterns,
+                max_text=settings.rules_max_text,
+                pipeline_version=__version__,
+            ),
+        ),
         pipeline=PipelineService(
             uow,
             clock,

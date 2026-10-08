@@ -26,11 +26,14 @@ from papiq.core.domain.ids import (
     DocumentId,
     DocumentTypeId,
     DrawerId,
+    RuleApplicationId,
+    RuleId,
     TagId,
     UserId,
 )
 from papiq.core.domain.master_data import Contact, DocumentType, Tag
 from papiq.core.domain.pipeline import Lane, StepRun
+from papiq.core.domain.rules import Rule, RuleApplication, RuleVersion
 from papiq.core.domain.users import User
 
 
@@ -171,3 +174,52 @@ class ProcessingLog(Protocol):
     async def list_for(self, document: DocumentId) -> list[StepRun]:
         """All entries of the document in the order they were appended."""
         ...
+
+
+class RuleRepository(Protocol):
+    """Rules with their versions. A rule is stored with its current version; `update` stores a
+    new current version as well and keeps the earlier ones. Deleted rules (`deleted_at`) stay
+    stored for their versions; `get` and `find` return them, the lists leave them out."""
+
+    async def get(self, id: RuleId) -> Rule: ...
+
+    async def find(self, id: RuleId) -> Rule | None: ...
+
+    async def add(self, rule: Rule) -> None: ...
+
+    async def update(self, rule: Rule) -> None:
+        """Version check as for every repository. If `rule.current` is a version that is not
+        stored yet, it is added."""
+        ...
+
+    async def list_for(
+        self, *, owners: Collection[UserId] | None, include_global: bool
+    ) -> list[Rule]:
+        """Rules that are not deleted: user rules of `owners` (None: of every user), and global
+        rules if `include_global`."""
+        ...
+
+    async def versions(self, id: RuleId) -> list[RuleVersion]:
+        """All versions of the rule, oldest first; NotFoundError if the rule does not exist."""
+        ...
+
+    async def get_version(self, id: RuleId, number: int) -> RuleVersion:
+        """NotFoundError if the rule or the version does not exist."""
+        ...
+
+    async def remove_for_owner(self, owner: UserId) -> int:
+        """Delete the user's rules with their versions, and all applications of these rules or
+        by this user, for good; returns how many rules."""
+        ...
+
+
+class RuleApplicationRepository(Protocol):
+    """Applications of a rule to existing documents (`RuleApplication`)."""
+
+    async def get(self, id: RuleApplicationId) -> RuleApplication: ...
+
+    async def find(self, id: RuleApplicationId) -> RuleApplication | None: ...
+
+    async def add(self, application: RuleApplication) -> None: ...
+
+    async def update(self, application: RuleApplication) -> None: ...

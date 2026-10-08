@@ -140,6 +140,8 @@ documents = Table(
     Column("contact_id", Uuid, ForeignKey("contacts.id"), nullable=True),
     Column("document_type_id", Uuid, ForeignKey("document_types.id"), nullable=True),
     Column("document_date", Date, nullable=True),
+    # Intake channel (`Channel`); documents from before M7 count as `api`.
+    Column("channel", Text, nullable=False, server_default="api"),
     Column("lane", Text, nullable=True),
     Column("processing_status", Text, nullable=False),
     Column("processing_step", Text, nullable=True),
@@ -196,6 +198,60 @@ processing_log = Table(
     Column("pipeline_version", Text, nullable=False),
     Column("started_at", UtcDateTime, nullable=False),
     Column("duration_us", BigInteger, nullable=False),
+)
+
+# --- rules --------------------------------------------------------------------------------------
+
+# A rule and the number of its current version; the definitions are in `rule_versions`.
+rules = Table(
+    "rules",
+    metadata,
+    Column("id", Uuid, primary_key=True),
+    Column("scope", Text, nullable=False),
+    Column("owner_id", Uuid, ForeignKey("users.id"), nullable=True, index=True),
+    Column("current_version", Integer, nullable=False),
+    Column("enabled", Boolean, nullable=False),
+    Column("disabled_reason", Text, nullable=True),
+    Column("deleted_at", UtcDateTime, nullable=True),
+    Column("created_at", UtcDateTime, nullable=False),
+    Column("updated_at", UtcDateTime, nullable=False),
+    Column("version", Integer, nullable=False),
+)
+
+# Every version of a rule; never changed once written. `created_by` has no foreign key: the
+# author may be deleted, the version stays.
+rule_versions = Table(
+    "rule_versions",
+    metadata,
+    Column("rule_id", Uuid, ForeignKey("rules.id", ondelete="CASCADE"), primary_key=True),
+    Column("number", Integer, primary_key=True),
+    Column("name", Text, nullable=False),
+    Column("priority", Integer, nullable=False),
+    Column("triggers", json_type(), nullable=False),
+    Column("conditions", json_type(), nullable=False),
+    Column("actions", json_type(), nullable=False),
+    Column("created_at", UtcDateTime, nullable=False),
+    Column("created_by", Uuid, nullable=True),
+)
+
+rule_applications = Table(
+    "rule_applications",
+    metadata,
+    Column("id", Uuid, primary_key=True),
+    Column("rule_id", Uuid, ForeignKey("rules.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("rule_version", Integer, nullable=False),
+    Column("user_id", Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("status", Text, nullable=False),
+    Column("documents", json_type(), nullable=False),
+    Column("accept_conflicts", json_type(), nullable=False),
+    Column("position", Integer, nullable=False),
+    Column("applied", Integer, nullable=False),
+    Column("unchanged", Integer, nullable=False),
+    Column("skipped", json_type(), nullable=False),
+    Column("error", Text, nullable=True),
+    Column("created_at", UtcDateTime, nullable=False),
+    Column("finished_at", UtcDateTime, nullable=True),
+    Column("version", Integer, nullable=False),
 )
 
 jobs = Table(

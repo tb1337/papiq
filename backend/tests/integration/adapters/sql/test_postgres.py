@@ -18,6 +18,7 @@ from tests import builders
 from tests.contracts.event_bus import EventBusContract, Recorder, publish, received
 from tests.contracts.identity import IdentityRepositoriesContract
 from tests.contracts.job_queue import JobQueueContract
+from tests.contracts.rules import RuleRepositoriesContract
 from tests.contracts.unit_of_work import UnitOfWorkContract
 from tests.sql_suite import MigrationSuite, SqlAdapterSuite
 
@@ -31,6 +32,10 @@ class TestPostgresIdentityRepositories(IdentityRepositoriesContract):
 
 
 class TestPostgresJobQueue(JobQueueContract):
+    pass
+
+
+class TestPostgresRuleRepositories(RuleRepositoriesContract):
     pass
 
 

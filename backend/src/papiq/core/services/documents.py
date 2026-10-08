@@ -1,3 +1,4 @@
+import copy
 import logging
 from collections.abc import Collection
 from dataclasses import dataclass
@@ -28,10 +29,25 @@ from papiq.core.services._access import (
 from papiq.core.services.inbox import InboxItem, Review, open_steps, step_reviews
 from papiq.core.services.maintenance import REMOVE_FILES_JOB
 from papiq.core.services.objects import archive_key, original_key, preview_key
+from papiq.core.services.rules.changes import ChangeRules
+from papiq.core.services.rules.running import Prepared, RuleRun
 
 log = logging.getLogger(__name__)
 
 MAX_PAGE = 200
+
+
+@dataclass(frozen=True)
+class MetadataChange:
+    """A changed document; the caller's access afterwards (None if the rules filed it where
+    the caller cannot see it); its drawer; the rules' run, for the owner; the state before the
+    change."""
+
+    document: Document
+    access: ShareLevel | None
+    drawer: Drawer
+    rules: RuleRun | None = None
+    before: Document | None = None
 
 
 @dataclass(frozen=True)
@@ -60,11 +76,18 @@ class DocumentService:
     """Reading and changing documents. Ingest and processing live in PipelineService."""
 
     def __init__(
-        self, uow: UnitOfWorkFactory, clock: Clock, object_store: ObjectStore | None = None
+        self,
+        uow: UnitOfWorkFactory,
+        clock: Clock,
+        object_store: ObjectStore | None = None,
+        *,
+        rules: ChangeRules | None = None,
     ) -> None:
+        """`rules`: run the change rules when a person changes a document's metadata."""
         self._uow = uow
         self._clock = clock
         self._store = object_store
+        self._rules = rules
 
     async def get(self, actor: UserId, id: DocumentId) -> Document:
         async with self._uow() as uow:
@@ -194,14 +217,49 @@ class DocumentService:
         self, actor: UserId, id: DocumentId, changes: DocumentChanges
     ) -> Document:
         """Needs write access. Referenced contact, type, tags and attributes must exist."""
+        return (await self.change_metadata(actor, id, changes)).document
+
+    async def change_metadata(
+        self, actor: UserId, id: DocumentId, changes: DocumentChanges, *, dry_run: bool = False
+    ) -> MetadataChange:
+        """As `update_metadata`, and the change rules of the document's owner and the global
+        ones run (see `rules.changes`). The rules' report is for the owner only. With
+        `dry_run`, nothing is stored: what would happen."""
+        rules = self._rules
+        prepared = Prepared()
+        if rules is not None:
+            async with self._uow() as uow:
+                document, _ = await writable_document(uow, await load_actor(uow, actor), id)
+                candidates = await rules.rules(uow, document)
+            prepared = await rules.prepare(candidates, document)
         async with self._uow() as uow:
-            document, _ = await writable_document(uow, await load_actor(uow, actor), id)
+            user = await load_actor(uow, actor)
+            document, _ = await writable_document(uow, user, id)
             await check_references(uow, changes)
             definitions = {item.id: item for item in await uow.attributes.list_all()}
-            document.apply_changes(changes, definitions, self._clock.now())
-            await _save(uow, document)
-            await uow.commit()
-        return document
+            now = self._clock.now()
+            before = copy.deepcopy(document)
+            document.apply_changes(changes, definitions, now)
+            run = None
+            if rules is not None:
+                run = await rules.after_change(
+                    uow,
+                    actor=user,
+                    before=before,
+                    document=document,
+                    changes=changes,
+                    prepared=prepared,
+                    definitions=definitions,
+                    now=now,
+                    log=not dry_run,
+                )
+            drawer = await uow.drawers.get(document.drawer_id)
+            access = document_access(user, document, drawer)
+            if not dry_run:
+                await _save(uow, document)
+                await uow.commit()
+        owner = is_document_owner(user, document)
+        return MetadataChange(document, access, drawer, run if owner else None, before)
 
     async def move(self, actor: UserId, id: DocumentId, drawer: DrawerId) -> None:
         """The owner moves into a drawer they may write to; an admin moves any document into
@@ -218,7 +276,12 @@ class DocumentService:
                 target = await visible_drawer(uow, user, drawer)
             if not can_move_document(user, document, target):
                 raise PermissionDeniedError(f"no write access to drawer {drawer}")
-            document.move_to(target.id, self._clock.now())
+            now = self._clock.now()
+            document.move_to(target.id, now)
+            if self._rules is not None:
+                await uow.processing_log.append(
+                    self._rules.drawer_chosen(document, actor=user, now=now)
+                )
             await _save(uow, document)
             await uow.commit()
 
