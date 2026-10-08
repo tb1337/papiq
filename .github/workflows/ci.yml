@@ -28,7 +28,9 @@ jobs:
   # job counts as passed for required checks.
   #
   # A pull request runs what its files touch; `integration` and `devcontainer` (the long ones)
-  # wait until it is no draft, and `devcontainer` ignores lock files there. A push to main runs
+  # wait until it is no draft, and `devcontainer` ignores lock files there. The slow tests
+  # (OCR, Docling: marker `docling`) run only if the change touches what they exercise
+  # (`heavy`). A push to main runs
   # the checks again only where they write a cache: `backend` (mypy) and `integration` (Docling
   # models) when the lock file changed, `devcontainer` (layers) when its inputs or the lock file
   # changed. Everything else was checked in the pull request.
@@ -38,6 +40,7 @@ jobs:
     outputs:
       backend: ${{ steps.diff.outputs.backend }}
       integration: ${{ steps.diff.outputs.integration }}
+      heavy: ${{ steps.diff.outputs.heavy }}
       devcontainer: ${{ steps.diff.outputs.devcontainer }}
     steps:
       - uses: actions/checkout@v6
@@ -60,15 +63,20 @@ jobs:
           ci='^\.github/(workflows/ci\.yml|compose\.ci\.yml)$'
           lock='^backend/(pyproject\.toml|uv\.lock)$'
           code="^backend/|^\.devcontainer/(compose\.yml|dev\.env|garage)|$ci"
+          pipeline="^backend/src/papiq/adapters/outbound/(docling|ocrmypdf|pdfium)/"
+          pipeline="$pipeline|^backend/src/papiq/core/(services/(pipeline|steps|objects)\.py|domain/pipeline)"
+          pipeline="$pipeline|^backend/src/papiq/composition/|^backend/tests/(integration|samples|contracts)/"
           image="^(Dockerfile|\.dockerignore)$|^\.devcontainer/|$ci"
           if [ "$EVENT" = push ]; then
             matches "$lock|$ci" && echo "backend=true" >> "$GITHUB_OUTPUT"
             matches "^backend/uv\.lock$|$ci" && echo "integration=true" >> "$GITHUB_OUTPUT"
+            matches "^backend/uv\.lock$|$ci" && echo "heavy=true" >> "$GITHUB_OUTPUT"
             matches "$image|$lock" && echo "devcontainer=true" >> "$GITHUB_OUTPUT"
           else
             matches "$code" && echo "backend=true" >> "$GITHUB_OUTPUT"
             if [ "$DRAFT" != true ]; then
               matches "$code" && echo "integration=true" >> "$GITHUB_OUTPUT"
+              matches "$pipeline|$lock|$ci" && echo "heavy=true" >> "$GITHUB_OUTPUT"
               matches "$image" && echo "devcontainer=true" >> "$GITHUB_OUTPUT"
             fi
           fi
@@ -146,17 +154,18 @@ jobs:
             backend/uv.lock | sha256sum | cut -c1-16)
           echo "key=docling-models-$key" >> "$GITHUB_OUTPUT"
       - id: models
+        if: needs.changes.outputs.heavy == 'true'
         uses: actions/cache/restore@v5
         with:
           path: ${{ runner.temp }}/docling-models
           key: ${{ steps.docling.outputs.key }}
       - name: Download the Docling models
-        if: steps.models.outputs.cache-hit != 'true'
+        if: needs.changes.outputs.heavy == 'true' && steps.models.outputs.cache-hit != 'true'
         working-directory: backend
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}  # avoids Hugging Face's rate limit
         run: uv run docling-tools models download layout tableformer -o "$PAPIQ_DOCLING_MODELS_PATH"
-      - if: env.WRITE_CACHE == 'true' && steps.models.outputs.cache-hit != 'true'
+      - if: needs.changes.outputs.heavy == 'true' && env.WRITE_CACHE == 'true' && steps.models.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: ${{ runner.temp }}/docling-models
@@ -164,9 +173,11 @@ jobs:
       - name: Run the integration tests
         working-directory: backend
         shell: bash
+        env:
+          MARKS: ${{ needs.changes.outputs.heavy == 'true' && 'integration' || 'integration and not docling' }}
         run: |
           set -o pipefail
-          uv run pytest -m integration -n logical -v -rs | tee pytest.log
+          uv run pytest -m "$MARKS" -n logical -v -rs | tee pytest.log
           # pytest marks skipped tests as SKIPPED; test names may contain "skipped".
           if grep -q SKIPPED pytest.log; then
             echo "Integration tests were skipped: a service or program is missing" >&2
