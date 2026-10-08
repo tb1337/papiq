@@ -7,6 +7,7 @@ from papiq.core.domain.attributes import AttributeType
 from papiq.core.domain.documents import Document, DocumentChanges
 from papiq.core.domain.drawers import Drawer, ShareLevel
 from papiq.core.domain.errors import (
+    ConflictError,
     NotFoundError,
     PermissionDeniedError,
     ValidationError,
@@ -18,7 +19,7 @@ from papiq.core.domain.users import Role, User
 from papiq.core.ports import DocumentFilter
 from papiq.core.services.documents import DocumentFile, FileInfo
 from papiq.core.services.inbox import PERSON_DRAWER
-from papiq.core.services.objects import archive_key, preview_key
+from papiq.core.services.objects import archive_key, markdown_key, preview_key
 from tests.builders import UNCERTAIN, incoming
 from tests.unit.services.conftest import Returns, World
 
@@ -302,3 +303,41 @@ async def test_downloads_need_read_access(world: World, scene: Scene, tmp_path: 
     for file in DocumentFile:
         with pytest.raises(NotFoundError):
             await world.documents.download(scene.stranger.id, scene.document.id, file, target)
+
+
+async def test_the_text_is_read_in_pieces(world: World, scene: Scene) -> None:
+    text = "Strom März 84,20 €\n" * 5  # more than one piece, with non-ASCII characters
+    await world.object_store.put(
+        markdown_key(scene.document.id), text.encode(), content_type="text/markdown"
+    )
+    first = await world.documents.read_text(scene.reader.id, scene.document.id, limit=30)
+    assert (first.text, first.offset, first.total_length) == (text[:30], 0, len(text))
+    assert first.next_offset == 30
+    last = await world.documents.read_text(
+        scene.owner.id, scene.document.id, offset=len(text) - 10, limit=1000
+    )
+    assert (last.text, last.next_offset) == (text[-10:], None)
+    beyond = await world.documents.read_text(
+        scene.owner.id, scene.document.id, offset=len(text) + 5, limit=10
+    )
+    assert (beyond.text, beyond.next_offset) == ("", None)
+    with pytest.raises(ValidationError):
+        await world.documents.read_text(scene.owner.id, scene.document.id, offset=-1, limit=10)
+    with pytest.raises(ValidationError):
+        await world.documents.read_text(scene.owner.id, scene.document.id, limit=0)
+
+
+async def test_the_text_is_for_readers_only(world: World, scene: Scene) -> None:
+    await world.object_store.put(
+        markdown_key(scene.document.id), b"secret", content_type="text/markdown"
+    )
+    with pytest.raises(NotFoundError):
+        await world.documents.read_text(scene.stranger.id, scene.document.id, limit=10)
+    with pytest.raises(NotFoundError):
+        await world.documents.read_text(scene.owner.id, DocumentId(new_id()), limit=10)
+
+
+async def test_a_document_without_text_says_so(world: World, scene: Scene) -> None:
+    await world.object_store.delete(markdown_key(scene.document.id))
+    with pytest.raises(ConflictError, match="no text yet"):
+        await world.documents.read_text(scene.owner.id, scene.document.id, limit=10)
