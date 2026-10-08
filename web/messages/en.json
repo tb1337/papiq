@@ -524,5 +524,6 @@
 	"rule_apply_done": "Done: {applied} changed, {unchanged} unchanged, {skipped} skipped.",
 	"rule_apply_failed": "Stopped: {error}",
 	"rule_apply_skipped": "Skipped",
-	"rule_subgroup": "Group"
+	"rule_subgroup": "Group",
+	"rule_left_off": "The change failed and the rule stays switched off."
 }

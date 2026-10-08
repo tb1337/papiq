@@ -524,5 +524,6 @@
 	"rule_apply_done": "Fertig: {applied} geändert, {unchanged} unverändert, {skipped} übersprungen.",
 	"rule_apply_failed": "Abgebrochen: {error}",
 	"rule_apply_skipped": "Übersprungen",
-	"rule_subgroup": "Gruppe"
+	"rule_subgroup": "Gruppe",
+	"rule_left_off": "Die Änderung ist fehlgeschlagen, die Regel bleibt ausgeschaltet."
 }

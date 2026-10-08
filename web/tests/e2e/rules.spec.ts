@@ -109,6 +109,10 @@ test('a rule is built, dry-run, applied, changed and deleted', async ({ page }) 
 	await group.getByLabel('Value').last().fill(NAME);
 	await page.getByLabel('Add action').selectOption('add_tags');
 	await page.getByRole('group', { name: 'Add tags' }).getByLabel(`${NAME} tag`).check();
+	let previews = 0;
+	page.on('request', (request) => {
+		if (request.url().endsWith('/apply/preview')) previews++;
+	});
 	await page.getByRole('button', { name: 'Save and see what it does' }).click();
 
 	// Saved switched off; the dry run shows the document, chosen.
@@ -116,6 +120,7 @@ test('a rule is built, dry-run, applied, changed and deleted', async ({ page }) 
 	const ruleUrl = page.url().replace(/\/apply\?saved=1$/, '');
 	await expect(page.getByRole('link', { name: `${NAME}` }).first()).toBeVisible();
 	await expect(page.getByRole('checkbox', { name: `Apply to ${NAME}` })).toBeChecked();
+	expect(previews).toBe(1);
 	await page.getByRole('button', { name: /^Switch on and apply to \d+ documents$/ }).click();
 	await expect(page.getByText(/^Done: 1 changed/)).toBeVisible({ timeout: 30_000 });
 	const document = await (await api.get(`/api/v1/documents/${created.document}`)).json();
@@ -131,6 +136,21 @@ test('a rule is built, dry-run, applied, changed and deleted', async ({ page }) 
 	await page.getByRole('link', { name: 'Leave off' }).click();
 	await expect(page.getByRole('switch', { name: `Switch on ${NAME} v2` })).not.toBeChecked();
 	await expect(page.getByRole('link', { name: 'Version 2' })).toBeVisible();
+
+	// A refused switch stays as the rule is.
+	await page.route('**/api/v1/rules/*', (route) =>
+		route.request().method() === 'PATCH'
+			? route.fulfill({
+					status: 404,
+					contentType: 'application/problem+json',
+					body: JSON.stringify({ title: 'Not Found', status: 404, detail: 'tag gone' })
+				})
+			: route.fallback()
+	);
+	await page.getByRole('switch', { name: `Switch on ${NAME} v2` }).click();
+	await expect(page.getByText('tag gone')).toBeVisible();
+	await expect(page.getByRole('switch', { name: `Switch on ${NAME} v2` })).not.toBeChecked();
+	await page.unroute('**/api/v1/rules/*');
 
 	// Version 1 reads as it was.
 	await page.getByRole('link', { name: 'Version 1' }).click();

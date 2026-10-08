@@ -3,6 +3,7 @@
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import Play from '@lucide/svelte/icons/play';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import { untrack } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
@@ -43,7 +44,7 @@
 		Promise.all([
 			unwrap(api.GET('/api/v1/rules/{id}', { params: { path: { id: wanted } } })),
 			unwrap(api.GET('/api/v1/rules/{id}/versions', { params: { path: { id: wanted } } })),
-			lookup ?? loadLookup()
+			untrack(() => lookup) ?? loadLookup()
 		]).then(
 			([found, history, loaded]) => {
 				if (wanted !== id) return;
@@ -117,12 +118,11 @@
 			<div class="flex flex-wrap items-center gap-2">
 				{#if canChangeRule(rule, session.user)}
 					<Switch
-						checked={rule.enabled}
+						bind:checked={() => rule?.enabled ?? false, switchRule}
 						disabled={busy}
 						aria-label={rule.enabled
 							? m.rule_switch_off({ name: rule.name })
 							: m.rule_switch_on({ name: rule.name })}
-						onCheckedChange={switchRule}
 					/>
 					<a href="{BASE}/rules/{rule.id}/edit" class={cn(buttonVariants({ variant: 'outline' }))}>
 						<Pencil aria-hidden="true" />

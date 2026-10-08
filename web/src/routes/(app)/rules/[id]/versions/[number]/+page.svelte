@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
+	import { untrack } from 'svelte';
 	import { page } from '$app/state';
 	import { api } from '#lib/api/client.ts';
 	import { unwrap } from '#lib/api/call.ts';
@@ -27,7 +28,7 @@
 					params: { path: { id: wantedId, number: wantedNumber } }
 				})
 			),
-			lookup ?? loadLookup()
+			untrack(() => lookup) ?? loadLookup()
 		]).then(
 			([found, loaded]) => {
 				if (wantedId !== id || wantedNumber !== number) return;
