@@ -19,7 +19,7 @@
 	import { fieldLabel } from '#lib/describe.ts';
 	import { describeError, reportError } from '#lib/errors.ts';
 	import { events } from '#lib/events.svelte.ts';
-	import { loadLookup, type Lookup } from '#lib/masterdata.svelte.ts';
+	import { drawerLabel, loadLookup, type Lookup } from '#lib/masterdata.svelte.ts';
 	import { writableDrawers } from '#lib/permissions.ts';
 	import { m } from '#lib/paraglide/messages.js';
 	import { buildConfirm, initialValue, isRuleField, type ReviewValue } from '#lib/review.ts';
@@ -46,7 +46,8 @@
 	);
 	const hasDrawer = $derived(checks.some((check) => check.field === 'drawer'));
 	const failedStep = $derived(review?.open.find((step) => step.outcome === 'failed') ?? null);
-	const drawers = $derived(writableDrawers(lookup?.drawers ?? [], session.user, false));
+	// The owner confirms into drawers they may write to; an admin into any drawer.
+	const drawers = $derived(writableDrawers(lookup?.drawers ?? [], session.user));
 
 	async function load() {
 		try {
@@ -216,7 +217,10 @@
 						<NativeSelect
 							id="review-drawer"
 							bind:value={drawerId}
-							options={drawers.map((drawer) => ({ value: drawer.id, label: drawer.name }))}
+							options={drawers.map((drawer) => ({
+								value: drawer.id,
+								label: drawerLabel(drawer, lookup?.users ?? [], session.user?.id)
+							}))}
 						/>
 					</Field.Field>
 				{/if}

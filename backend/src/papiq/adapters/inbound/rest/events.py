@@ -6,8 +6,10 @@ that moment. Events are pushed only to connected clients; there is no replay, so
 reconnects fetches the current state. One API instance is assumed: several instances would
 share the subscription and each would see only part of the events (a broker is the way out).
 
-`document.deleted` goes to the users who could read the document when it was deleted: the event
-carries their ids (a deleted document cannot be checked afterwards). They are not sent on.
+Admins may read every document, so they get the events of every document (Tobi, 08.10.2026).
+`document.deleted` goes to the users who had the document within their reach when it was deleted
+(the event carries their ids; a deleted document cannot be checked afterwards) and to the active
+admins. The ids are not sent on.
 """
 
 import asyncio
@@ -107,7 +109,8 @@ class EventHub:
         if not listeners:
             return
         if isinstance(event, DocumentDeleted):
-            readers = set(event.readers)
+            users = {listener.user for listener in listeners}
+            readers = set(event.readers) | await self._documents.active_admins(users)
         else:
             readers = await self._documents.filter_readers(
                 event.document_id, {listener.user for listener in listeners}

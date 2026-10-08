@@ -26,7 +26,7 @@
 	import { describeError, reportError } from '#lib/errors.ts';
 	import { events } from '#lib/events.svelte.ts';
 	import { formatDate } from '#lib/i18n.ts';
-	import { loadLookup, type Lookup } from '#lib/masterdata.svelte.ts';
+	import { drawerLabel, loadLookup, type Lookup } from '#lib/masterdata.svelte.ts';
 	import { canEdit, canManage, canMove, writableDrawers } from '#lib/permissions.ts';
 	import { m } from '#lib/paraglide/messages.js';
 	import { session } from '#lib/session.svelte.ts';
@@ -333,7 +333,10 @@
 			<NativeSelect
 				id="move-drawer"
 				bind:value={target}
-				options={drawers.map((drawer) => ({ value: drawer.id, label: drawer.name }))}
+				options={drawers.map((drawer) => ({
+					value: drawer.id,
+					label: drawerLabel(drawer, lookup?.users ?? [], user?.id)
+				}))}
 			/>
 		</Field.Field>
 		<Dialog.Footer>

@@ -26,14 +26,15 @@ router = APIRouter(tags=["search"], dependencies=PROTECTED)
     summary="Search documents",
     description=(
         "Full text and, if the installation has embeddings, meaning in one call. Finds the "
-        "documents the caller may read, the same ones as `GET /documents` lists, with the "
-        "same filters (they combine; `tag_id` and `lane` may repeat). Each hit is checked "
+        "documents within the caller's reach, the same ones as `GET /documents` lists, with the "
+        "same filters (they combine; `tag_id` and `lane` may repeat); admins search every "
+        "document with `all_users` (others: 403). Each hit is checked "
         "against the permissions once more before it is returned. The index follows the "
         "documents a moment later, so a new document may take a few seconds to turn up. "
         "Pages are by `offset`; at most 1000 hits can be reached."
     ),
     response_model=SearchResultPage,
-    responses=problem_responses(401, 422, 503),
+    responses=problem_responses(401, 403, 422, 503),
 )
 async def search_documents(
     user: CurrentUser,
@@ -55,6 +56,9 @@ async def search_documents(
             "only. Default: the installation's setting.",
         ),
     ] = None,
+    all_users: Annotated[
+        bool, Query(description="Every user's documents instead of the caller's reach (admins).")
+    ] = False,
 ) -> SearchResultPage:
     if context.search is None:
         raise SearchUnavailableError("search is not configured")
@@ -65,6 +69,7 @@ async def search_documents(
         offset=offset,
         limit=limit,
         semantic_ratio=semantic_ratio,
+        all_users=all_users,
     )
     return SearchResultPage(
         items=[

@@ -279,6 +279,18 @@ class SearchIndexContract:
         }
         # A user with no documents and no drawers finds nothing.
         assert await found(search_index, "Vertrag", visibility(UserId(new_id()))) == set()
+        # An admin who asks for everything finds every document, in every lane.
+        everything = Visibility(UserId(new_id()), frozenset(), everything=True)
+        assert await found(search_index, "Vertrag", everything) == {
+            *expected,
+            green_foreign.id,
+            *(document.id for document in others_unfinished),
+        }
+        yellow = DocumentFilter(lanes=frozenset({Lane.YELLOW}))
+        assert await found(search_index, "Vertrag", everything, filter=yellow) == {
+            own[Lane.YELLOW].id,
+            others_unfinished[1].id,
+        }
 
     async def test_the_rights_filter_applies_with_every_other_filter(
         self, search_index: SearchIndex

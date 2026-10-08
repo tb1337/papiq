@@ -6,11 +6,11 @@ from datetime import datetime
 from papiq.core.domain.classification import FieldCheck
 from papiq.core.domain.documents import Document
 from papiq.core.domain.json_value import JsonValue
-from papiq.core.domain.permissions import can_file_into
 from papiq.core.domain.pipeline import Outcome, StepResult
 from papiq.core.domain.rule_engine import DRAWER, Mode
 from papiq.core.domain.rules import Trigger
 from papiq.core.ports import ObjectStore, PatternMatcher, UnitOfWork, UnitOfWorkFactory
+from papiq.core.services._access import may_file
 from papiq.core.services.inbox import RULES
 from papiq.core.services.rules.running import (
     Prepared,
@@ -98,8 +98,9 @@ class RulesResult:
 
 class FileStep:
     """Files the document into its drawer. The owner must still be allowed to write to it (a
-    share can be withdrawn while the document is processed); otherwise the step is uncertain
-    and the owner chooses another drawer in the inbox."""
+    share can be withdrawn while the document is processed), unless an active admin put the
+    document there; otherwise the step is uncertain and the owner chooses another drawer in the
+    inbox."""
 
     async def run(self, document: Document) -> "FileResult":
         return FileResult()
@@ -108,9 +109,8 @@ class FileStep:
 @dataclass(frozen=True)
 class FileResult:
     async def apply(self, uow: UnitOfWork, document: Document, now: datetime) -> StepResult:
-        owner = await uow.users.get(document.owner_id)
         drawer = await uow.drawers.get(document.drawer_id)
-        if not can_file_into(owner, drawer):
+        if not await may_file(uow, document, drawer):
             reason = f"the owner may not file into drawer '{drawer.name}' (any more)"
             check = FieldCheck(field=DRAWER, outcome=Outcome.UNCERTAIN, confidence=0, reason=reason)
             return StepResult(

@@ -19,14 +19,15 @@ EVENTS = f"{PREFIX}/events"
 
 async def test_events_reach_only_users_who_may_read_the_document(api: Api) -> None:
     owner, reader, stranger = await api.user(), await api.user(), await api.user()
+    admin = await api.admin()
     shared = await api.services.drawers.create(owner.id, "Shared")
     await api.services.drawers.share(owner.id, shared.id, reader.id, ShareLevel.READ)
 
     async with serving(api.app) as url, httpx2.AsyncClient(base_url=url, timeout=10) as client:
-        streams = {user.id: Stream() for user in (owner, reader, stranger)}
+        streams = {user.id: Stream() for user in (owner, reader, stranger, admin)}
         tasks = [
             asyncio.create_task(listen(client, user, streams[user.id]))
-            for user in (owner, reader, stranger)
+            for user in (owner, reader, stranger, admin)
         ]
         for stream in streams.values():
             await asyncio.wait_for(stream.ready.wait(), timeout=5)
@@ -56,12 +57,15 @@ async def test_events_reach_only_users_who_may_read_the_document(api: Api) -> No
         assert "document.received" not in shared_events  # not visible while processing
         assert shared_events[-1] == "document.lane_changed"  # visible once green
         assert streams[stranger.id].events == []
+        # Admins read every document, in processing too (Tobi, 08.10.2026).
+        await until(lambda: streams[admin.id].types() == own.types())
 
         # A deleted document cannot be checked any more: those who could read it hear of it.
         deleted = await client.delete(f"{PREFIX}/documents/{document}", headers=auth(owner))
         assert deleted.status_code == 204
         await until(lambda: "document.deleted" in own.types())
         await until(lambda: "document.deleted" in streams[reader.id].types())
+        await until(lambda: "document.deleted" in streams[admin.id].types())
         await asyncio.sleep(0.1)
         assert own.events[-1] == {**own.events[-1], "type": "document.deleted"}
         assert "readers" not in own.events[-1] and "readers" not in streams[reader.id].events[-1]

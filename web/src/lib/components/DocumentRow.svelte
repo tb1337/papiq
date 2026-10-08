@@ -4,10 +4,13 @@
 	import { BASE } from '#lib/base.ts';
 	import DocumentThumb from '#lib/components/DocumentThumb.svelte';
 	import LaneBadge from '#lib/components/LaneBadge.svelte';
+	import { Badge } from '#lib/components/ui/badge/index.ts';
 	import { formatDate } from '#lib/i18n.ts';
 	import type { Lookup } from '#lib/masterdata.svelte.ts';
+	import { session } from '#lib/session.svelte.ts';
 
-	// One document in a list: preview, title, contact, type, date, lane; `children` adds a line.
+	// One document in a list: preview, title, contact, type, date, lane, for admins the owner of
+	// another user's document; `children` adds a line.
 	let {
 		document,
 		lookup,
@@ -29,6 +32,11 @@
 			.filter(Boolean)
 			.join(' · ')
 	);
+	const owner = $derived(
+		session.isAdmin && document.owner_id !== session.user?.id
+			? (lookup?.users.find((user) => user.id === document.owner_id)?.username ?? null)
+			: null
+	);
 </script>
 
 <a
@@ -37,7 +45,10 @@
 >
 	<DocumentThumb id={document.id} class="h-20 w-14 shrink-0 rounded-lg border" />
 	<div class="flex min-w-0 flex-1 flex-col gap-1">
-		<span class="truncate font-medium">{document.title}</span>
+		<span class="flex min-w-0 items-center gap-2">
+			<span class="truncate font-medium">{document.title}</span>
+			{#if owner}<Badge variant="outline" class="shrink-0">{owner}</Badge>{/if}
+		</span>
 		<span class="truncate text-sm text-muted-foreground">{line}</span>
 		{@render children?.()}
 	</div>

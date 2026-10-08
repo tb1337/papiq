@@ -15,19 +15,22 @@ class DrawerService:
         self._clock = clock
 
     async def list(self, actor: UserId) -> list[Drawer]:
-        """Drawers the user owns or that are shared with them."""
+        """Drawers the user owns or that are shared with them; every drawer for admins."""
         async with self._uow() as uow:
-            await load_actor(uow, actor)
+            user = await load_actor(uow, actor)
+            if user.is_active_admin:
+                return await uow.drawers.list_all()
             return await uow.drawers.list_accessible(actor)
 
     async def get(self, actor: UserId, id: DrawerId) -> Drawer:
-        """A drawer the user owns or that is shared with them; NotFoundError otherwise."""
+        """A drawer the user owns or that is shared with them, any drawer for admins;
+        NotFoundError otherwise."""
         async with self._uow() as uow:
             return await visible_drawer(uow, await load_actor(uow, actor), id)
 
     async def delete(self, actor: UserId, id: DrawerId) -> None:
-        """Owner only; not the default drawer, and only while it holds no documents. Rules that
-        file into it are disabled."""
+        """Owner or admin; not the default drawer, and only while it holds no documents. Rules
+        that file into it are disabled."""
         async with self._uow() as uow:
             drawer = await _managed_drawer(uow, await load_actor(uow, actor), id)
             if drawer.is_default:
@@ -85,7 +88,7 @@ class DrawerService:
 async def _managed_drawer(uow: UnitOfWork, user: User, id: DrawerId) -> Drawer:
     drawer = await visible_drawer(uow, user, id)
     if not can_manage_drawer(user, drawer):
-        raise PermissionDeniedError(f"only the owner manages drawer {id}")
+        raise PermissionDeniedError(f"only the owner and admins manage drawer {id}")
     return drawer
 
 

@@ -3,6 +3,7 @@
 	import { api } from '#lib/api/client.ts';
 	import { unwrap } from '#lib/api/call.ts';
 	import { BASE } from '#lib/base.ts';
+	import AllUsersToggle from '#lib/components/AllUsersToggle.svelte';
 	import DocumentRow from '#lib/components/DocumentRow.svelte';
 	import { Button } from '#lib/components/ui/button/index.ts';
 	import { describeError } from '#lib/errors.ts';
@@ -15,11 +16,17 @@
 	type Lane = 'yellow' | 'red';
 	let lookup = $state<Lookup | null>(null);
 	let lane = $state<Lane | null>(null);
+	let allUsers = $state(false);
 
 	const list = new PagedList(async (cursor) => {
 		const data = await unwrap(
 			api.GET('/api/v1/inbox', {
-				params: { query: { cursor: (cursor as string | null) ?? undefined } }
+				params: {
+					query: {
+						cursor: (cursor as string | null) ?? undefined,
+						all_users: allUsers || undefined
+					}
+				}
 			})
 		);
 		return { items: data.items, next: data.next_cursor };
@@ -29,6 +36,7 @@
 
 	$effect(() => {
 		void events.generation;
+		void allUsers;
 		void list.reload();
 	});
 
@@ -62,6 +70,7 @@
 	<h1 class="text-[1.75rem] font-semibold tracking-tight">{m.nav_inbox()}</h1>
 
 	<div class="flex flex-wrap gap-2">
+		<AllUsersToggle pressed={allUsers} onchange={(pressed) => (allUsers = pressed)} />
 		{#each tabs as tab (tab.lane)}
 			<button
 				type="button"

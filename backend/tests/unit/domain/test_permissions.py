@@ -3,6 +3,7 @@ import pytest
 from papiq.core.domain.documents import Document
 from papiq.core.domain.drawers import Drawer, ShareLevel
 from papiq.core.domain.permissions import (
+    can_control_document,
     can_file_into,
     can_manage_drawer,
     can_manage_master_data,
@@ -12,7 +13,10 @@ from papiq.core.domain.permissions import (
     can_write_document,
     document_access,
     drawer_access,
+    in_reach,
     is_document_owner,
+    reach_access,
+    reach_drawer_access,
 )
 from papiq.core.domain.pipeline import Lane, Step, StepResult
 from papiq.core.domain.users import User
@@ -120,9 +124,14 @@ def test_filing_needs_write_access_to_the_drawer(
     assert not can_file_into(stranger, shared)
 
 
-def test_only_the_drawer_owner_manages_it(owner: User, writer: User, shared: Drawer) -> None:
+def test_the_drawer_owner_and_admins_manage_it(
+    owner: User, reader: User, writer: User, stranger: User, shared: Drawer
+) -> None:
     assert can_manage_drawer(owner, shared)
+    assert can_manage_drawer(builders.admin(), shared)
     assert not can_manage_drawer(writer, shared)
+    assert not can_manage_drawer(reader, shared)
+    assert not can_manage_drawer(stranger, shared)
 
 
 def test_only_the_document_owner_controls_it(owner: User, writer: User, shared: Drawer) -> None:
@@ -139,12 +148,55 @@ def test_only_admins_manage_master_data_and_users() -> None:
     assert not can_manage_users(user)
 
 
-def test_admins_have_no_extra_rights_on_documents(owner: User, shared: Drawer) -> None:
-    document = builders.processed(owner, shared)
+@pytest.mark.parametrize(
+    "results",
+    [None, {Step.CLASSIFY: UNCERTAIN}, {Step.OCR: FAILED}, "processing"],
+    ids=["green", "yellow", "red", "processing"],
+)
+def test_admins_have_every_right_on_documents_and_drawers(
+    owner: User, shared: Drawer, results: dict[Step, StepResult] | str | None
+) -> None:
+    """Tobi, 08.10.2026: admins have every right and see everything."""
+    if results == "processing":
+        document = builders.document(owner, shared)
+    else:
+        assert not isinstance(results, str)
+        document = builders.processed(owner, shared, results)
     admin = builders.admin()
-    assert document_access(admin, document, shared) is None
-    assert not can_file_into(admin, shared)
-    assert not can_manage_drawer(admin, shared)
+    assert document_access(admin, document, shared) is ShareLevel.READ_WRITE
+    assert can_read_document(admin, document, shared)
+    assert can_write_document(admin, document, shared)
+    assert can_control_document(admin, document)
+    assert drawer_access(admin, shared) is ShareLevel.READ_WRITE
+    assert can_file_into(admin, shared)
+    assert can_manage_drawer(admin, shared)
+    # Not within their reach: lists and webhooks stay as for every user.
+    assert reach_access(admin, document, shared) is None
+    assert not in_reach(admin, document, shared)
+    assert reach_drawer_access(admin, shared) is None
+    assert not is_document_owner(admin, document)
+
+
+def test_the_reach_is_access_without_the_admins_rights(
+    owner: User, reader: User, writer: User, stranger: User, shared: Drawer
+) -> None:
+    green = builders.processed(owner, shared)
+    yellow = builders.processed(owner, shared, {Step.CLASSIFY: UNCERTAIN})
+    for user in (owner, reader, writer, stranger):
+        for document in (green, yellow):
+            assert reach_access(user, document, shared) is document_access(user, document, shared)
+            assert in_reach(user, document, shared) is can_read_document(user, document, shared)
+        assert reach_drawer_access(user, shared) is drawer_access(user, shared)
+
+
+def test_owner_and_admins_control_a_document(
+    owner: User, writer: User, stranger: User, shared: Drawer
+) -> None:
+    document = builders.processed(owner, shared)
+    assert can_control_document(owner, document)
+    assert can_control_document(builders.admin(), document)
+    assert not can_control_document(writer, document)
+    assert not can_control_document(stranger, document)
 
 
 def test_moving_is_for_the_owner_and_admins(
@@ -171,5 +223,12 @@ def test_deactivated_users_have_no_rights() -> None:
     assert not can_manage_drawer(owner, drawer)
     assert not is_document_owner(owner, document)
     assert not can_move_document(admin, document, drawer)
+    assert drawer_access(admin, drawer) is None
+    assert not can_read_document(admin, document, drawer)
+    assert not can_write_document(admin, document, drawer)
+    assert not can_file_into(admin, drawer)
+    assert not can_manage_drawer(admin, drawer)
+    assert not can_control_document(admin, document)
+    assert not can_control_document(owner, document)
     assert not can_manage_master_data(admin)
     assert not can_manage_users(admin)

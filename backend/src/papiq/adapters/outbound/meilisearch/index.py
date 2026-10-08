@@ -136,7 +136,6 @@ class MeilisearchIndex:
             return SearchResult(hits=[], estimated_total=0, semantic=False)
         body: dict[str, Any] = {
             "q": query.text,
-            "filter": filter_expression(query),
             "offset": query.offset,
             "limit": query.limit,
             "attributesToRetrieve": ["id", "version"],
@@ -147,6 +146,8 @@ class MeilisearchIndex:
             "highlightPostTag": HIGHLIGHT_END,
             "showRankingScore": True,
         }
+        if (expression := filter_expression(query)) is not None:
+            body["filter"] = expression
         semantic = query.vector is not None and query.semantic_ratio > 0
         if semantic:
             if self._dimensions is None:
@@ -393,10 +394,11 @@ class _MeilisearchBuild:
         await self._index._delete_index(self._index._build_index)
 
 
-def filter_expression(query: SearchQuery) -> str:
-    """The Meilisearch filter for the rights of the user and the criteria of the query. Only ids
-    and lane names go in, both quoted."""
-    parts = [_visibility_filter(query.visibility)]
+def filter_expression(query: SearchQuery) -> str | None:
+    """The Meilisearch filter for the rights of the user and the criteria of the query; None if
+    nothing is filtered (an admin's search over everything without criteria). Only ids and lane
+    names go in, both quoted."""
+    parts = [] if query.visibility.everything else [_visibility_filter(query.visibility)]
     criteria = query.filter
     if criteria.contact is not None:
         parts.append(f"contact_id = {_quote(criteria.contact)}")
@@ -408,7 +410,7 @@ def filter_expression(query: SearchQuery) -> str:
     if criteria.lanes:
         lanes = sorted(lane_value(lane) for lane in criteria.lanes)
         parts.append(f"lane IN [{', '.join(_quote(lane) for lane in lanes)}]")
-    return " AND ".join(parts)
+    return " AND ".join(parts) or None
 
 
 def _visibility_filter(visibility: Visibility) -> str:

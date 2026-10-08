@@ -53,6 +53,7 @@ from papiq.core.domain.rules import Rule, SetDrawer, Trigger
 from papiq.core.domain.users import User
 from papiq.core.ports import ObjectStore, PatternMatcher, UnitOfWork
 from papiq.core.services.inbox import (
+    CHOSEN_DRAWER,
     MODEL_STEPS,
     PERSON,
     PERSON_DRAWER,
@@ -291,7 +292,11 @@ def drawer_choice(
         result=StepResult(
             outcome=Outcome.OK,
             model_version=PERSON_DRAWER,
-            input={"trigger": trigger, "actor": str(actor)},
+            input={
+                "trigger": trigger,
+                "actor": str(actor),
+                CHOSEN_DRAWER: str(document.drawer_id),
+            },
             output=person_record(
                 changed=[DRAWER], tags_before=document.tag_ids, tags_after=document.tag_ids
             ),

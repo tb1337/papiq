@@ -1,10 +1,11 @@
-"""`/drawers`: the caller's drawers and those shared with them; shares."""
+"""`/drawers`: the caller's drawers and those shared with them (every drawer for admins);
+shares."""
 
 from uuid import UUID
 
 from fastapi import APIRouter
 
-from papiq.adapters.inbound.rest.auth import PROTECTED, CurrentUser
+from papiq.adapters.inbound.rest.auth import PROTECTED, Authenticated
 from papiq.adapters.inbound.rest.context import Context
 from papiq.adapters.inbound.rest.problems import problem_responses
 from papiq.adapters.inbound.rest.schemas import DrawerOut, NameIn, ShareIn
@@ -12,19 +13,23 @@ from papiq.core.domain.ids import DrawerId, UserId
 
 router = APIRouter(prefix="/drawers", tags=["drawers"], dependencies=PROTECTED)
 
-OWNER_ONLY = "Owner only."
+OWNER_ONLY = "The owner and admins."
 
 
 @router.get(
     "",
     summary="List drawers",
-    description="The drawers the caller owns or that are shared with them.",
+    description=(
+        "The drawers the caller owns or that are shared with them; every drawer for admins."
+    ),
     response_model=list[DrawerOut],
     responses=problem_responses(401),
 )
-async def list_drawers(user: CurrentUser, context: Context) -> list[DrawerOut]:
-    drawers = await context.drawers.list(user)
-    return [DrawerOut.of(d, user) for d in sorted(drawers, key=lambda d: d.name.casefold())]
+async def list_drawers(principal: Authenticated, context: Context) -> list[DrawerOut]:
+    drawers = await context.drawers.list(principal.id)
+    return [
+        DrawerOut.of(d, principal.user) for d in sorted(drawers, key=lambda d: d.name.casefold())
+    ]
 
 
 @router.post(
@@ -35,8 +40,8 @@ async def list_drawers(user: CurrentUser, context: Context) -> list[DrawerOut]:
     response_model=DrawerOut,
     responses=problem_responses(401, 409, 422),
 )
-async def create_drawer(body: NameIn, user: CurrentUser, context: Context) -> DrawerOut:
-    return DrawerOut.of(await context.drawers.create(user, body.name), user)
+async def create_drawer(body: NameIn, principal: Authenticated, context: Context) -> DrawerOut:
+    return DrawerOut.of(await context.drawers.create(principal.id, body.name), principal.user)
 
 
 @router.get(
@@ -45,8 +50,8 @@ async def create_drawer(body: NameIn, user: CurrentUser, context: Context) -> Dr
     response_model=DrawerOut,
     responses=problem_responses(401, 404, 422),
 )
-async def get_drawer(id: UUID, user: CurrentUser, context: Context) -> DrawerOut:
-    return DrawerOut.of(await context.drawers.get(user, DrawerId(id)), user)
+async def get_drawer(id: UUID, principal: Authenticated, context: Context) -> DrawerOut:
+    return DrawerOut.of(await context.drawers.get(principal.id, DrawerId(id)), principal.user)
 
 
 @router.patch(
@@ -56,8 +61,12 @@ async def get_drawer(id: UUID, user: CurrentUser, context: Context) -> DrawerOut
     response_model=DrawerOut,
     responses=problem_responses(401, 403, 404, 409, 422),
 )
-async def rename_drawer(id: UUID, body: NameIn, user: CurrentUser, context: Context) -> DrawerOut:
-    return DrawerOut.of(await context.drawers.rename(user, DrawerId(id), body.name), user)
+async def rename_drawer(
+    id: UUID, body: NameIn, principal: Authenticated, context: Context
+) -> DrawerOut:
+    return DrawerOut.of(
+        await context.drawers.rename(principal.id, DrawerId(id), body.name), principal.user
+    )
 
 
 @router.delete(
@@ -67,8 +76,8 @@ async def rename_drawer(id: UUID, body: NameIn, user: CurrentUser, context: Cont
     description=OWNER_ONLY + " Not the default drawer, and only while it is empty (409).",
     responses=problem_responses(401, 403, 404, 409, 422),
 )
-async def delete_drawer(id: UUID, user: CurrentUser, context: Context) -> None:
-    await context.drawers.delete(user, DrawerId(id))
+async def delete_drawer(id: UUID, principal: Authenticated, context: Context) -> None:
+    await context.drawers.delete(principal.id, DrawerId(id))
 
 
 @router.put(
@@ -83,10 +92,10 @@ async def delete_drawer(id: UUID, user: CurrentUser, context: Context) -> None:
     responses=problem_responses(401, 403, 404, 422),
 )
 async def share_drawer(
-    id: UUID, user_id: UUID, body: ShareIn, user: CurrentUser, context: Context
+    id: UUID, user_id: UUID, body: ShareIn, principal: Authenticated, context: Context
 ) -> DrawerOut:
-    drawer = await context.drawers.share(user, DrawerId(id), UserId(user_id), body.level)
-    return DrawerOut.of(drawer, user)
+    drawer = await context.drawers.share(principal.id, DrawerId(id), UserId(user_id), body.level)
+    return DrawerOut.of(drawer, principal.user)
 
 
 @router.delete(
@@ -96,5 +105,9 @@ async def share_drawer(
     response_model=DrawerOut,
     responses=problem_responses(401, 403, 404, 422),
 )
-async def unshare_drawer(id: UUID, user_id: UUID, user: CurrentUser, context: Context) -> DrawerOut:
-    return DrawerOut.of(await context.drawers.unshare(user, DrawerId(id), UserId(user_id)), user)
+async def unshare_drawer(
+    id: UUID, user_id: UUID, principal: Authenticated, context: Context
+) -> DrawerOut:
+    return DrawerOut.of(
+        await context.drawers.unshare(principal.id, DrawerId(id), UserId(user_id)), principal.user
+    )

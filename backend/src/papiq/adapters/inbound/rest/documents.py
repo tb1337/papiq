@@ -188,13 +188,14 @@ async def upload(
     "",
     summary="List documents",
     description=(
-        "The documents the caller may read, newest first: their own, and green documents in "
-        "drawers they own or that are shared with them. Filters combine; `tag_id` and `lane` "
-        "may repeat (all tags, any lane; `processing`: no lane yet). To search by words and "
-        "meaning use `GET /documents/search`."
+        "The documents within the caller's reach, newest first: their own, and green "
+        "documents in drawers they own or that are shared with them. Admins may read every "
+        "document and list them all with `all_users` (others: 403). Filters combine; `tag_id` "
+        "and `lane` may repeat (all tags, any lane; `processing`: no lane yet). To search by "
+        "words and meaning use `GET /documents/search`."
     ),
     response_model=DocumentPage,
-    responses=problem_responses(401, 422),
+    responses=problem_responses(401, 403, 422),
 )
 async def list_documents(
     user: CurrentUser,
@@ -206,9 +207,14 @@ async def list_documents(
     lane: Annotated[list[LaneFilter] | None, Query(max_length=4)] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE)] = 50,
     cursor: Annotated[str | None, Query(max_length=64, description="`next_cursor`.")] = None,
+    all_users: Annotated[
+        bool, Query(description="Every user's documents instead of the caller's reach (admins).")
+    ] = False,
 ) -> DocumentPage:
     filter = document_filter(contact_id, document_type_id, tag_id, drawer_id, lane)
-    views = await context.documents.query(user, filter, before=_decode_cursor(cursor), limit=limit)
+    views = await context.documents.query(
+        user, filter, before=_decode_cursor(cursor), limit=limit, all_users=all_users
+    )
     next_cursor = _encode_cursor(views[-1].document.id) if len(views) == limit else None
     return DocumentPage(
         items=[DocumentDetails.of(view.document, view.access) for view in views],
@@ -258,14 +264,15 @@ async def update_document(
     description=(
         "What `PATCH /documents/{id}` with this body would do, without storing anything: the "
         "document afterwards, the fields that would change, what the rules would do (owner "
-        "only) and who would see it. Needs write access."
+        "and admins) and who would see it. Needs write access."
     ),
     response_model=DocumentPreviewOut,
     responses=problem_responses(401, 403, 404, 409, 422),
 )
 async def preview_change(
-    id: UUID, body: DocumentPatch, user: CurrentUser, context: Context
+    id: UUID, body: DocumentPatch, principal: Authenticated, context: Context
 ) -> DocumentPreviewOut:
+    user = principal.id
     changes = await _changes(body, user, context)
     change = await context.documents.change_metadata(user, DocumentId(id), changes, dry_run=True)
     readable = change.access is not None
@@ -277,7 +284,9 @@ async def preview_change(
             if change.rules is None
             else [RuleReportOut.of(report) for report in change.rules.plan.reports]
         ),
-        visibility=VisibilityOut.of(change.document, change.drawer, user) if readable else None,
+        visibility=(
+            VisibilityOut.of(change.document, change.drawer, principal.user) if readable else None
+        ),
     )
 
 
@@ -287,7 +296,7 @@ async def preview_change(
     summary="Move a document to another drawer",
     description=(
         "The owner moves into drawers they may write to; an admin moves any document into any "
-        "drawer, without getting read access. Shares do not allow moving."
+        "drawer. Shares do not allow moving."
     ),
     responses=problem_responses(401, 403, 404, 422),
 )
@@ -299,7 +308,7 @@ async def move_document(id: UUID, body: MoveRequest, user: CurrentUser, context:
     "/{id}",
     status_code=204,
     summary="Delete a document",
-    description="Owner only.",
+    description="The owner and admins.",
     responses=problem_responses(401, 403, 404, 422),
 )
 async def delete_document(id: UUID, user: CurrentUser, context: Context) -> None:
@@ -358,7 +367,7 @@ async def _download(
 @router.get(
     "/{id}/log",
     summary="Processing log of a document",
-    description="Owner only. Every execution of every step, oldest first.",
+    description="The owner and admins. Every execution of every step, oldest first.",
     response_model=list[LogEntry],
     responses=problem_responses(401, 403, 404, 422),
 )
@@ -372,7 +381,7 @@ async def processing_log(id: UUID, user: CurrentUser, context: Context) -> list[
     "/{id}/retry",
     status_code=202,
     summary="Repeat the failed step",
-    description="Owner only. Processing continues with the following steps.",
+    description="The owner and admins. Processing continues with the following steps.",
     response_model=DocumentDetails,
     responses=problem_responses(401, 403, 404, 409, 422),
 )
@@ -385,9 +394,9 @@ async def retry(id: UUID, user: CurrentUser, context: Context) -> DocumentDetail
     status_code=202,
     summary="Process again from a step",
     description=(
-        "Owner only. Discards the results from `from_step` on, e.g. after a model change. Not "
-        "while processing runs, not past a failed step, and not from `file` while uncertain "
-        "fields wait for confirmation."
+        "The owner and admins. Discards the results from `from_step` on, e.g. after a model "
+        "change. Not while processing runs, not past a failed step, and not from `file` while "
+        "uncertain fields wait for confirmation."
     ),
     response_model=DocumentDetails,
     responses=problem_responses(401, 403, 404, 409, 422),
@@ -403,8 +412,8 @@ async def reprocess(
     "/{id}/review",
     summary="What the model proposed for a document",
     description=(
-        "Owner only. The open steps and fields, and the latest classification and attribute "
-        "extraction by the model: each field as proposed, checked and applied."
+        "The owner and admins. The open steps and fields, and the latest classification and "
+        "attribute extraction by the model: each field as proposed, checked and applied."
     ),
     response_model=ReviewOut,
     responses=problem_responses(401, 403, 404, 422),
@@ -418,15 +427,16 @@ async def review(id: UUID, user: CurrentUser, context: Context) -> ReviewOut:
     status_code=202,
     summary="Confirm a document from the inbox",
     description=(
-        "Owner only, for yellow and red documents that are not being processed. Every open "
-        "field of the steps before `resume_at` (and of `apply_rules` when processing resumes "
-        "with it) needs a decision: a value or null in `changes`, a value the document already "
-        "has (it is kept), or its suggestion with `accept_suggestions`. Otherwise 422 lists the "
-        "open fields in `open_fields`. The rules' fields `drawer`, `title` and `review` always "
-        "have a value: confirming keeps it, `drawer_id` moves the document. The results before "
-        "`resume_at` count as confirmed; processing continues from there up to filing, and the "
-        "rules leave what the owner decided or changed as it is. From `extract_attributes` on, "
-        "the extracted attributes replace the ones the document has."
+        "The owner and admins, for yellow and red documents that are not being processed. "
+        "`drawer_id` must be a drawer the owner may write to; an admin chooses any drawer. "
+        "Every open field of the steps before `resume_at` (and of `apply_rules` when processing "
+        "resumes with it) needs a decision: a value or null in `changes`, a value the document "
+        "already has (it is kept), or its suggestion with `accept_suggestions`. Otherwise 422 "
+        "lists the open fields in `open_fields`. The rules' fields `drawer`, `title` and "
+        "`review` always have a value: confirming keeps it, `drawer_id` moves the document. The "
+        "results before `resume_at` count as confirmed; processing continues from there up to "
+        "filing, and the rules leave what the owner decided or changed as it is. From "
+        "`extract_attributes` on, the extracted attributes replace the ones the document has."
     ),
     response_model=DocumentDetails,
     responses=problem_responses(401, 403, 404, 409, 422),
@@ -451,19 +461,24 @@ async def confirm(
     summary="The caller's inbox",
     description=(
         "The caller's yellow and red documents, newest first, each with its open steps and "
-        "fields. Confirm them with `POST /documents/{id}/confirm`, or repeat a failed step with "
-        "`retry`."
+        "fields; with `all_users` (admins, others: 403) those of every user. Confirm them with "
+        "`POST /documents/{id}/confirm`, or repeat a failed step with `retry`."
     ),
     response_model=InboxPage,
-    responses=problem_responses(401, 422),
+    responses=problem_responses(401, 403, 422),
 )
 async def list_inbox(
     user: CurrentUser,
     context: Context,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE)] = 50,
     cursor: Annotated[str | None, Query(max_length=64, description="`next_cursor`.")] = None,
+    all_users: Annotated[
+        bool, Query(description="Every user's documents instead of the caller's reach (admins).")
+    ] = False,
 ) -> InboxPage:
-    items = await context.documents.inbox(user, before=_decode_cursor(cursor), limit=limit)
+    items = await context.documents.inbox(
+        user, before=_decode_cursor(cursor), limit=limit, all_users=all_users
+    )
     next_cursor = _encode_cursor(items[-1].document.id) if len(items) == limit else None
     return InboxPage(items=[InboxItemOut.of(item) for item in items], next_cursor=next_cursor)
 

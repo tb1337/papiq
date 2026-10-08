@@ -16,12 +16,14 @@ from papiq.core.domain.errors import (
 )
 from papiq.core.domain.ids import DocumentId, DrawerId, UserId
 from papiq.core.domain.permissions import (
+    can_control_document,
     can_move_document,
     can_read_document,
     document_access,
-    is_document_owner,
+    in_reach,
 )
 from papiq.core.domain.pipeline import Lane, StepRun
+from papiq.core.domain.users import User
 from papiq.core.ports import Clock, DocumentFilter, ObjectStore, UnitOfWork, UnitOfWorkFactory
 from papiq.core.ports.preview import PREVIEW_MEDIA_TYPE
 from papiq.core.services._access import (
@@ -45,8 +47,8 @@ MAX_PAGE = 200
 @dataclass(frozen=True)
 class MetadataChange:
     """A changed document; the caller's access afterwards (None if the rules filed it where
-    the caller cannot see it); its drawer; the rules' run, for the owner; the state before the
-    change."""
+    the caller cannot see it); its drawer; the rules' run, for the owner and admins; the state
+    before the change."""
 
     document: Document
     access: ShareLevel | None
@@ -148,13 +150,20 @@ class DocumentService:
         *,
         before: DocumentId | None = None,
         limit: int = 50,
+        all_users: bool = False,
     ) -> list[DocumentView]:
-        """Readable documents matching `filter`, newest first, after the page ending at
-        `before`. Each is checked against the permission rules once more."""
+        """Documents within the caller's reach matching `filter`, newest first, after the page
+        ending at `before`; with `all_users` (admins only), every document. Each is checked
+        against the permission rules once more."""
         limit = max(1, min(limit, MAX_PAGE))
         async with self._uow() as uow:
-            user = await load_actor(uow, actor)
-            documents = await uow.documents.query_visible(actor, filter, before=before, limit=limit)
+            user = await _lister(uow, actor, all_users)
+            if all_users:
+                documents = await uow.documents.query(filter, before=before, limit=limit)
+            else:
+                documents = await uow.documents.query_visible(
+                    actor, filter, before=before, limit=limit
+                )
             drawers: dict[DrawerId, Drawer] = {}
             views = []
             for document in documents:
@@ -198,8 +207,8 @@ class DocumentService:
             return await uow.documents.list_visible_to(actor)
 
     async def filter_readers(self, id: DocumentId, candidates: Collection[UserId]) -> set[UserId]:
-        """Those of `candidates` who may read the document now; none if it does not exist.
-        For pushing events to users (SSE), so it reads the current state."""
+        """Those of `candidates` who may read the document now (admins: always); none if it does
+        not exist. For pushing events to users (SSE), so it reads the current state."""
         if not candidates:
             return set()
         async with self._uow() as uow:
@@ -214,40 +223,62 @@ class DocumentService:
                     readers.add(candidate)
             return readers
 
+    async def active_admins(self, candidates: Collection[UserId]) -> set[UserId]:
+        """Those of `candidates` who are active admins: they hear of every document event (SSE),
+        also of a deletion, whose stored readers name only those who had it within reach."""
+        if not candidates:
+            return set()
+        async with self._uow() as uow:
+            admins: set[UserId] = set()
+            for candidate in set(candidates):
+                user = await uow.users.find(candidate)
+                if user is not None and user.is_active_admin:
+                    admins.add(candidate)
+            return admins
+
     async def processing_log(self, actor: UserId, id: DocumentId) -> list[StepRun]:
-        """Owner only: the log may hold technical details of failed runs."""
+        """Owner or admin: the log may hold technical details of failed runs."""
         async with self._uow() as uow:
             user = await load_actor(uow, actor)
             document, _ = await readable_document(uow, user, id)
-            if not is_document_owner(user, document):
+            if not can_control_document(user, document):
                 raise PermissionDeniedError(f"only the owner reads the processing log of {id}")
             return await uow.processing_log.list_for(id)
 
     async def inbox(
-        self, actor: UserId, *, before: DocumentId | None = None, limit: int = 50
+        self,
+        actor: UserId,
+        *,
+        before: DocumentId | None = None,
+        limit: int = 50,
+        all_users: bool = False,
     ) -> list[InboxItem]:
-        """The caller's yellow and red documents, newest first, with what is open in them."""
+        """The caller's yellow and red documents, newest first, with what is open in them;
+        with `all_users` (admins only), those of every user."""
         limit = max(1, min(limit, MAX_PAGE))
         waiting = DocumentFilter(lanes=frozenset({Lane.YELLOW, Lane.RED}))
         async with self._uow() as uow:
-            await load_actor(uow, actor)
-            documents = await uow.documents.query_visible(
-                actor, waiting, before=before, limit=limit
-            )
+            await _lister(uow, actor, all_users)
+            if all_users:
+                documents = await uow.documents.query(waiting, before=before, limit=limit)
+            else:
+                documents = await uow.documents.query_visible(
+                    actor, waiting, before=before, limit=limit
+                )
             items = []
             for document in documents:
-                if document.owner_id != actor:  # only owners see yellow and red documents
-                    continue
+                if not all_users and document.owner_id != actor:
+                    continue  # only owners see their yellow and red documents in their reach
                 log = await uow.processing_log.list_for(document.id)
                 items.append(InboxItem(document, open_steps(document, log)))
         return items
 
     async def review(self, actor: UserId, id: DocumentId) -> Review:
-        """Owner only: what is open, and what the model proposed and how it was checked."""
+        """Owner or admin: what is open, and what the model proposed and how it was checked."""
         async with self._uow() as uow:
             user = await load_actor(uow, actor)
             document, _ = await readable_document(uow, user, id)
-            if not is_document_owner(user, document):
+            if not can_control_document(user, document):
                 raise PermissionDeniedError(f"only the owner reviews document {id}")
             log = await uow.processing_log.list_for(id)
         return Review(document, open_steps(document, log), step_reviews(log))
@@ -262,7 +293,7 @@ class DocumentService:
         self, actor: UserId, id: DocumentId, changes: DocumentChanges, *, dry_run: bool = False
     ) -> MetadataChange:
         """As `update_metadata`, and the change rules of the document's owner and the global
-        ones run (see `rules.changes`). The rules' report is for the owner only. With
+        ones run (see `rules.changes`). The rules' report is for the owner and admins. With
         `dry_run`, nothing is stored: what would happen."""
         rules = self._rules
         prepared = Prepared()
@@ -297,22 +328,18 @@ class DocumentService:
             if not dry_run:
                 await _save(uow, document)
                 await uow.commit()
-        owner = is_document_owner(user, document)
-        return MetadataChange(document, access, drawer, run if owner else None, before)
+        report = can_control_document(user, document)
+        return MetadataChange(document, access, drawer, run if report else None, before)
 
     async def move(self, actor: UserId, id: DocumentId, drawer: DrawerId) -> None:
         """The owner moves into a drawer they may write to; an admin moves any document into
-        any drawer. Moving grants the admin no read access, so nothing is returned."""
+        any drawer."""
         async with self._uow() as uow:
             user = await load_actor(uow, actor)
-            if user.is_admin:
-                document = await uow.documents.get(id)
-                target = await uow.drawers.get(drawer)
-            else:
-                document, _ = await readable_document(uow, user, id)
-                if not is_document_owner(user, document):
-                    raise PermissionDeniedError(f"only the owner moves document {id}")
-                target = await visible_drawer(uow, user, drawer)
+            document, _ = await readable_document(uow, user, id)
+            if not can_control_document(user, document):
+                raise PermissionDeniedError(f"only the owner moves document {id}")
+            target = await visible_drawer(uow, user, drawer)
             if not can_move_document(user, document, target):
                 raise PermissionDeniedError(f"no write access to drawer {drawer}")
             now = self._clock.now()
@@ -325,12 +352,12 @@ class DocumentService:
             await uow.commit()
 
     async def delete(self, actor: UserId, id: DocumentId) -> None:
-        """Owner only. Removes the metadata and queues the removal of its files (derivatives,
-        and the original unless another document has the same file)."""
+        """Owner or admin. Removes the metadata and queues the removal of its files
+        (derivatives, and the original unless another document has the same file)."""
         async with self._uow() as uow:
             user = await load_actor(uow, actor)
             document, _ = await readable_document(uow, user, id)
-            if not is_document_owner(user, document):
+            if not can_control_document(user, document):
                 raise PermissionDeniedError(f"only the owner deletes document {id}")
             document.delete(self._clock.now(), await _readers(uow, document))
             await uow.documents.remove(id)
@@ -343,15 +370,23 @@ class DocumentService:
             await uow.commit()
 
 
+async def _lister(uow: UnitOfWork, actor: UserId, all_users: bool) -> User:
+    user = await load_actor(uow, actor)
+    if all_users and not user.is_active_admin:
+        raise PermissionDeniedError("only admins list the documents of all users")
+    return user
+
+
 async def _readers(uow: UnitOfWork, document: Document) -> list[UserId]:
-    """The users who may read the document now: its owner, and while it is green the owner of
-    its drawer and the users the drawer is shared with (if their accounts are active)."""
+    """The users who have the document within their reach now (`in_reach`): its owner, and
+    while it is green the owner of its drawer and the users the drawer is shared with (if their
+    accounts are active). Admins hear of the deletion through their rights, not this list."""
     drawer = await uow.drawers.get(document.drawer_id)
     candidates = {document.owner_id, drawer.owner_id, *drawer.shares}
     readers = []
     for candidate in candidates:
         user = await uow.users.find(candidate)
-        if user is not None and can_read_document(user, document, drawer):
+        if user is not None and in_reach(user, document, drawer):
             readers.append(candidate)
     return sorted(readers)
 
