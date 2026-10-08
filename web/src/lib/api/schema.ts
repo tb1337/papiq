@@ -73,7 +73,7 @@ export interface paths {
 		};
 		/**
 		 * Return from the identity provider
-		 * @description The provider sends the browser here. Signs in (new session cookie; a session the browser had ends) or completes a link, then redirects to the path given at the start.
+		 * @description The provider sends the browser here. Signs in (new session cookie; a session the browser had ends) or completes a link, then redirects to the path given at the start. If that fails, the browser goes to the web UI instead: `/ui/login?error=<code>` (while linking: `/ui/settings?error=<code>`) with `denied` (the provider did not sign the user in), `failed` (the flow expired or does not match, or no account is linked to this sign-in), `conflict` (the provider's account is linked to another user) or `provider` (the provider cannot be reached or answered wrongly).
 		 */
 		get: operations['oidc_callback_api_v1_auth_oidc_callback_get'];
 		put?: never;
@@ -3778,29 +3778,12 @@ export interface operations {
 		};
 		requestBody?: never;
 		responses: {
-			/** @description To the path given at the start. */
+			/** @description To the path given at the start, or to the web UI on a failure. */
 			303: {
 				headers: {
 					[name: string]: unknown;
 				};
 				content?: never;
-			};
-			/** @description Unauthorized */
-			401: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					/**
-					 * @example {
-					 *       "type": "about:blank",
-					 *       "title": "Unauthorized",
-					 *       "status": 401,
-					 *       "detail": "authentication is required"
-					 *     }
-					 */
-					'application/problem+json': components['schemas']['Problem'];
-				};
 			};
 			/** @description Not Found */
 			404: {
@@ -3814,23 +3797,6 @@ export interface operations {
 					 *       "title": "Not Found",
 					 *       "status": 404,
 					 *       "detail": "document 01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b not found"
-					 *     }
-					 */
-					'application/problem+json': components['schemas']['Problem'];
-				};
-			};
-			/** @description Conflict */
-			409: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					/**
-					 * @example {
-					 *       "type": "about:blank",
-					 *       "title": "Conflict",
-					 *       "status": 409,
-					 *       "detail": "duplicate of document 01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b"
 					 *     }
 					 */
 					'application/problem+json': components['schemas']['Problem'];
@@ -3865,23 +3831,6 @@ export interface operations {
 					 *       "title": "Internal Server Error",
 					 *       "status": 500,
 					 *       "detail": "an unexpected error occurred"
-					 *     }
-					 */
-					'application/problem+json': components['schemas']['Problem'];
-				};
-			};
-			/** @description Bad Gateway */
-			502: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					/**
-					 * @example {
-					 *       "type": "about:blank",
-					 *       "title": "Bad Gateway",
-					 *       "status": 502,
-					 *       "detail": "the identity provider cannot be reached"
 					 *     }
 					 */
 					'application/problem+json': components['schemas']['Problem'];

@@ -82,11 +82,17 @@ async def test_the_callback_needs_the_browser_that_started(
         stolen = await other_browser.get(
             f"{OIDC}/callback", params={"code": code, "state": state(url)}
         )
-    assert stolen.status_code == 401
+    # A failure sends the browser back to the web UI with a code, not to a problem document.
+    assert stolen.status_code == 303
+    assert stolen.headers["location"] == "/ui/login?error=failed"
     wrong_state = await api.client.get(f"{OIDC}/callback", params={"code": code, "state": "x"})
-    assert wrong_state.status_code == 401
+    assert wrong_state.headers["location"] == "/ui/login?error=failed"
     refused = await api.client.get(f"{OIDC}/callback", params={"error": "access_denied"})
-    assert refused.status_code == 401
+    assert refused.status_code == 303
+    assert refused.headers["location"] == "/ui/login?error=denied"
+    assert (await api.client.get(f"{OIDC}/callback")).headers["location"] == (
+        "/ui/login?error=denied"
+    )
 
 
 async def test_unlinked_accounts_are_refused(oidc_api: tuple[Api, FakeOidcProvider]) -> None:
@@ -95,7 +101,8 @@ async def test_unlinked_accounts_are_refused(oidc_api: tuple[Api, FakeOidcProvid
     url = (await api.client.get(f"{OIDC}/login")).headers["location"]
     code = provider.consent(url, "sub-unknown", username="alice")
     response = await api.client.get(f"{OIDC}/callback", params={"code": code, "state": state(url)})
-    assert response.status_code == 401
+    assert response.status_code == 303
+    assert response.headers["location"] == "/ui/login?error=failed"
     assert (await api.client.get(f"{PREFIX}/auth/me")).status_code == 401
 
 
@@ -158,3 +165,20 @@ async def test_signing_in_ends_the_session_the_browser_had(
     assert old_cookie is not None
     with pytest.raises(AuthenticationError):
         await api.services.auth.authenticate_session(old_cookie)
+
+
+async def test_a_failed_link_returns_to_the_settings(
+    oidc_api: tuple[Api, FakeOidcProvider],
+) -> None:
+    api, provider = oidc_api
+    alice, bob = await api.user("alice"), await api.user("bob")
+    await link(api, "sub-bob", bob.id)
+    async with api.sign_in(alice) as session:
+        started = await session.client.post(f"{OIDC}/link", headers=session.headers)
+        url = started.json()["authorization_url"]
+        code = provider.consent(url, "sub-bob")
+        back = await session.client.get(
+            f"{OIDC}/callback", params={"code": code, "state": state(url)}
+        )
+    assert back.status_code == 303
+    assert back.headers["location"] == "/ui/settings?error=conflict"

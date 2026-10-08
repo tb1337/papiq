@@ -263,5 +263,9 @@
 	"user_oidc_removed": "Verknüpfung gelöst.",
 	"user_delete": "Nutzer löschen",
 	"user_delete_confirm": "Löschen geht nur für Nutzer ohne Dokumente und mit leeren Schubladen. Ihre Anmeldedaten gehen endgültig verloren.",
-	"user_deleted": "Nutzer gelöscht."
+	"user_deleted": "Nutzer gelöscht.",
+	"oidc_error_denied": "Der Identitätsanbieter hat Dich nicht angemeldet.",
+	"oidc_error_failed": "Die Anmeldung ist abgelaufen, passte nicht, oder hier ist kein Konto damit verknüpft.",
+	"oidc_error_conflict": "Dieses Konto beim Identitätsanbieter ist mit einem anderen Nutzer verknüpft.",
+	"oidc_error_provider": "Der Identitätsanbieter ist gerade nicht erreichbar."
 }

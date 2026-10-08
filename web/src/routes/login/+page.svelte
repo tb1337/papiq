@@ -13,6 +13,7 @@
 	import { Input } from '#lib/components/ui/input/index.ts';
 	import { describeError } from '#lib/errors.ts';
 	import { oidcLoginHref } from '#lib/navigation.ts';
+	import { oidcErrorMessage } from '#lib/oidc-errors.ts';
 	import { m } from '#lib/paraglide/messages.js';
 	import { session } from '#lib/session.svelte.ts';
 
@@ -23,7 +24,8 @@
 	let username = $state('');
 	let password = $state('');
 	let code = $state('');
-	let message = $state<string | null>(null);
+	// An abandoned or refused sign-in at the identity provider comes back with a code.
+	let message = $derived<string | null>(oidcErrorMessage(data.error));
 	let busy = $state(false);
 	let codeInput = $state<HTMLInputElement | null>(null);
 
