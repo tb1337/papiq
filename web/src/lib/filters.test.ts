@@ -6,7 +6,7 @@ describe('filters in the URL', () => {
 		const params = new URLSearchParams(
 			'contact=c1&type=t1&tag=a&tag=b&drawer=d1&lane=red&lane=bogus&all=1&q=x'
 		);
-		const filters = parseFilters(params);
+		const filters = parseFilters(params, true);
 		expect(filters).toEqual({
 			contact: 'c1',
 			type: 't1',
@@ -21,6 +21,8 @@ describe('filters in the URL', () => {
 		expect(out.getAll('lane')).toEqual(['red']);
 		expect(out.get('all')).toBe('1');
 		expect(apiQuery(filters).all_users).toBe(true);
+		// Only admins may ask for all users; for others the link shows their own.
+		expect(parseFilters(params).allUsers).toBe(false);
 	});
 
 	it('leaves out what is not set', () => {

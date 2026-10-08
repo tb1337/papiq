@@ -23,7 +23,8 @@ export const NO_FILTERS: Filters = {
 	allUsers: false
 };
 
-export function parseFilters(params: URLSearchParams): Filters {
+/** The filters in `params`; `all=1` counts for admins only (`admin`), as only they may ask. */
+export function parseFilters(params: URLSearchParams, admin = false): Filters {
 	return {
 		contact: params.get('contact'),
 		type: params.get('type'),
@@ -32,7 +33,7 @@ export function parseFilters(params: URLSearchParams): Filters {
 		lanes: params
 			.getAll('lane')
 			.filter((lane): lane is LaneFilter => (LANE_FILTERS as readonly string[]).includes(lane)),
-		allUsers: params.get('all') === '1'
+		allUsers: admin && params.get('all') === '1'
 	};
 }
 

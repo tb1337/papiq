@@ -6,7 +6,11 @@
 import type { components } from '#lib/api/schema.ts';
 
 type Document = Pick<components['schemas']['DocumentDetails'], 'owner_id' | 'access'>;
-type Actor = { id: string; role?: components['schemas']['Role'] | null } | null;
+type Actor = {
+	id: string;
+	role?: components['schemas']['Role'] | null;
+	active?: boolean | null;
+} | null;
 type Owned = { owner_id: string | null };
 
 const isAdmin = (user: Actor): boolean => user?.role === 'admin';
@@ -43,7 +47,8 @@ export function writableDrawers<T extends { owner_id: string; access: string }>(
 export function drawersWritableBy<
 	T extends { owner_id: string; shares?: readonly { user_id: string; level: string }[] | null }
 >(drawers: readonly T[], owner: Actor): T[] {
-	if (owner === null) return [];
+	// A deactivated user files nowhere (the API refuses).
+	if (owner === null || owner.active === false) return [];
 	if (isAdmin(owner)) return [...drawers];
 	return drawers.filter(
 		(drawer) =>
