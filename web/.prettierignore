@@ -1,0 +1,7 @@
+# Generated or locked
+pnpm-lock.yaml
+openapi.json
+/build/
+/.svelte-kit/
+/src/lib/paraglide/
+project.inlang/
