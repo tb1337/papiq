@@ -297,7 +297,8 @@ version; deleting is a soft delete.
 - **Evaluation.** All conditions see the state before any rule acts; a rule's action never makes
   another rule match in the same run. Contact, type and tags the model set and no person
   confirmed are distrusted: a rule that matches only because of them does not file into a
-  drawer that others see (shared or another user's); it is reported instead.
+  drawer that others see (shared or another user's); it is reported instead. Retroactively
+  this does not apply: the person picks each document from the preview.
 - **Combining.** A field set by one rule, or by several to the same value, is set. Different
   values are a conflict and nothing is set; priority never decides. A value a person decided
   is never replaced (the rule is logged as overruled); a value the model set and no person
@@ -308,8 +309,8 @@ version; deleting is a soft delete.
   with `drawer_id`) decides the open fields and continues to filing. Filing checks once more
   that the owner may file into the drawer.
 - **On a change** (`PATCH /documents/{id}`) rules are edge-triggered: a rule acts only if it
-  holds after the change and did not hold before. The fields the person set in this change are
-  not touched. Nothing turns yellow: what cannot be applied is only reported, in the `rules`
+  holds after the change and did not hold before. Fields the person set in this change, or
+  decided before in this processing run, are not touched. Nothing turns yellow: what cannot be applied is only reported, in the `rules`
   block of the answer (to the owner). `POST /documents/{id}/dry-run` shows the same without
   storing anything.
 - **Retroactively.** `POST /rules/{id}/apply/preview` lists the documents the current version

@@ -5,8 +5,8 @@
 - Edge, not state: a rule acts only if it holds after the change and did not hold before. A
   title change does not apply every rule again, and a new rule does not act silently on old
   documents.
-- The person wins: fields they set in this change are not changed by a rule (the rule is
-  logged as overruled).
+- The person wins: fields they set in this change, or decided before in this processing run,
+  are not changed by a rule (the rule is logged as overruled).
 - Nothing turns yellow: conflicts, refused actions and forced reviews change nothing and are
   only reported (a filed document would disappear for everyone else).
 - The change, the rules' change, the events and the log entry are stored together. The log
@@ -18,6 +18,7 @@ from dataclasses import replace
 from datetime import datetime
 
 from papiq.core.domain.attributes import AttributeDefinition
+from papiq.core.domain.classification import TAGS
 from papiq.core.domain.documents import Document, DocumentChanges
 from papiq.core.domain.ids import AttributeId
 from papiq.core.domain.json_value import JsonValue
@@ -108,6 +109,7 @@ class ChangeRules:
                     for name, value in origin.model_values.items()
                     if name not in changed
                 },
+                model_tags=frozenset() if TAGS in changed else origin.model_tags,
                 tags_added=(origin.tags_added - before.tag_ids)
                 | (document.tag_ids - before.tag_ids),
                 tags_removed=(origin.tags_removed - document.tag_ids)
@@ -125,7 +127,7 @@ class ChangeRules:
                 origin=origin,
                 definitions=definitions,
                 before=(before, before_patterns),
-                locked=changed,
+                locked=origin.person,
             )
             input["rules"] = checked_rules(rules)
             output = run.output()

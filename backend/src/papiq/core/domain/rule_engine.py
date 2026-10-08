@@ -378,7 +378,6 @@ class Situation:
     - `existing`: ids of the contacts, types, tags and attributes that exist.
     - `names`: names of contacts and types, for titles.
     - `model_values`: single fields that hold the value the model set, unconfirmed, as JSON.
-    - `model_tags`: tags the model set, unconfirmed.
     - `locked`: single fields a person decided; `person_added_tags` and `person_removed_tags`
       likewise for tags.
     - `review_confirmed`: a person confirmed the document in this processing run.
