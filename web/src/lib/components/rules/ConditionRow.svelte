@@ -176,7 +176,7 @@
 				/>
 			{:else if condition.field === 'document_date'}
 				<Input
-					type="date"
+					type={single === '' || /^\d{4}-\d{2}-\d{2}$/.test(single) ? 'date' : 'text'}
 					aria-label={valueLabel}
 					aria-invalid={invalid || undefined}
 					value={single}

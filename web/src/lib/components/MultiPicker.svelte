@@ -30,6 +30,8 @@
 	let query = $state('');
 	const labelOf = (value: string) =>
 		options.find((option) => option.value === value)?.label ?? m.rule_unknown();
+	// The API keeps repeated values of a list; they show as one chip and go together.
+	const chips = $derived([...new Set(selected)]);
 	const shown = $derived(
 		options.filter((option) => option.label.toLowerCase().includes(query.trim().toLowerCase()))
 	);
@@ -49,7 +51,7 @@
 	)}
 >
 	<div class="flex flex-wrap gap-1.5">
-		{#each selected as value (value)}
+		{#each chips as value (value)}
 			<span class="inline-flex h-7 items-center gap-1 rounded-full bg-secondary pr-1 pl-3 text-sm">
 				{labelOf(value)}
 				<button

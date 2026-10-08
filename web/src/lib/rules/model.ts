@@ -608,16 +608,23 @@ function checkAttributeValue(attribute: AttributeInfo, value: Value): Problem | 
 		case 'choice':
 			return typeof value === 'string' && value !== '' ? null : { code: 'choose' };
 		default:
-			return checkText(value, LIMITS.text);
+			// Text and links have no length limit as a whole value.
+			return checkText(value, Infinity);
 	}
 }
 
+/** What the API reads as a finite decimal (Python's `Decimal`: exponent, `_` between digits). */
 function isNumber(value: Value): boolean {
-	return typeof value === 'string' && /^[+-]?(\d+\.?\d*|\.\d+)$/.test(value.trim());
+	if (typeof value === 'number') return Number.isFinite(value);
+	return (
+		typeof value === 'string' &&
+		/^[+-]?(\d(_?\d)*(\.(\d(_?\d)*)?)?|\.\d(_?\d)*)(e[+-]?\d(_?\d)*)?$/i.test(value.trim())
+	);
 }
 
+/** What the API reads as a date (Python's `date.fromisoformat`, also `20240115`, `2024-W03-1`). */
 function isDate(value: Value): boolean {
-	return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+	return typeof value === 'string' && /^\d{4}-?(\d{2}-?\d{2}|W\d{2}(-?\d)?)$/.test(value);
 }
 
 function checkAction(
