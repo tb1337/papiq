@@ -61,7 +61,7 @@ async function enterPassword() {
 describe('sign-in page', () => {
 	it('signs in and returns to the page the user came from', async () => {
 		fetchMock.mockResolvedValueOnce(json(200, signedIn));
-		render(Page, { data: { next: '/ui/inbox', oidc: null } });
+		render(Page, { data: { next: '/ui/inbox', oidc: null, error: null } });
 
 		await enterPassword();
 
@@ -73,7 +73,7 @@ describe('sign-in page', () => {
 
 	it('says when the password is wrong', async () => {
 		fetchMock.mockResolvedValueOnce(refused());
-		render(Page, { data: { next: '/ui/', oidc: null } });
+		render(Page, { data: { next: '/ui/', oidc: null, error: null } });
 
 		await enterPassword();
 
@@ -86,7 +86,7 @@ describe('sign-in page', () => {
 
 	it('asks for the second factor, then signs in with the code', async () => {
 		fetchMock.mockResolvedValueOnce(secondFactor()).mockResolvedValueOnce(json(200, signedIn));
-		render(Page, { data: { next: '/ui/', oidc: null } });
+		render(Page, { data: { next: '/ui/', oidc: null, error: null } });
 
 		const user = await enterPassword();
 		const code = await screen.findByLabelText(m.login_totp_label());
@@ -105,7 +105,7 @@ describe('sign-in page', () => {
 
 	it('takes a recovery code instead', async () => {
 		fetchMock.mockResolvedValueOnce(secondFactor()).mockResolvedValueOnce(refused());
-		render(Page, { data: { next: '/ui/', oidc: null } });
+		render(Page, { data: { next: '/ui/', oidc: null, error: null } });
 
 		const user = await enterPassword();
 		await user.click(await screen.findByRole('button', { name: m.login_use_recovery() }));
@@ -126,7 +126,7 @@ describe('sign-in page', () => {
 				}
 			)
 		);
-		render(Page, { data: { next: '/ui/', oidc: null } });
+		render(Page, { data: { next: '/ui/', oidc: null, error: null } });
 
 		await enterPassword();
 
@@ -148,7 +148,7 @@ describe('sign-in page', () => {
 				'application/problem+json'
 			)
 		);
-		render(Page, { data: { next: '/ui/', oidc: null } });
+		render(Page, { data: { next: '/ui/', oidc: null, error: null } });
 
 		await enterPassword();
 
@@ -156,12 +156,17 @@ describe('sign-in page', () => {
 	});
 
 	it('offers the identity provider only when one is configured', () => {
-		const { unmount } = render(Page, { data: { next: '/ui/', oidc: null } });
+		const { unmount } = render(Page, { data: { next: '/ui/', oidc: null, error: null } });
 		expect(screen.queryByRole('link', { name: /Authentik/ })).toBeNull();
 		unmount();
 
-		render(Page, { data: { next: '/ui/rules', oidc: 'Authentik' } });
+		render(Page, { data: { next: '/ui/rules', oidc: 'Authentik', error: null } });
 		const link = screen.getByRole('link', { name: m.login_oidc({ provider: 'Authentik' }) });
 		expect(link.getAttribute('href')).toBe('/api/v1/auth/oidc/login?next=%2Fui%2Frules');
+	});
+
+	it('shows why the identity provider sign-in failed', () => {
+		render(Page, { data: { next: '/ui/', oidc: 'SSO', error: 'denied' } });
+		expect(screen.getByRole('alert').textContent).toContain(m.oidc_error_denied());
 	});
 });

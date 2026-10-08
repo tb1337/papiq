@@ -5,10 +5,12 @@ import tailwindcss from '@tailwindcss/vite';
 import { svelteTesting } from '@testing-library/svelte/vite';
 import { defineConfig } from 'vitest/config';
 import { BASE } from './src/lib/base.ts';
+import { pdfjsAssets } from './vite-pdfjs.js';
 
 export default defineConfig({
 	plugins: [
 		tailwindcss(),
+		pdfjsAssets(),
 		paraglideVitePlugin({
 			project: './project.inlang',
 			outdir: './src/lib/paraglide',
@@ -26,8 +28,11 @@ export default defineConfig({
 				directives: {
 					'default-src': ['self'],
 					'script-src': ['self'],
-					// bits-ui positions popovers through style attributes.
-					'style-src': ['self', 'unsafe-inline'],
+					// bits-ui, Svelte and the PDF pages set style attributes; no inline <style> elements.
+					'style-src': ['self'],
+					'style-src-attr': ['unsafe-inline'],
+					// PDF.js runs in a worker from this site.
+					'worker-src': ['self'],
 					'img-src': ['self', 'data:', 'blob:'],
 					'font-src': ['self'],
 					'connect-src': ['self'],

@@ -21,8 +21,11 @@ pnpm build           # static app in build/
 pnpm e2e             # Playwright smoke test against a running API (local only)
 ```
 
-The smoke test (`tests/e2e`) signs in with password and TOTP, navigates, reloads and signs out,
-against the API serving the built UI. It creates a user through the admin of the environment:
+The smoke tests (`tests/e2e`) run against the API serving the built UI. `smoke.spec.ts` creates a
+user through the admin of the environment, signs in with password and TOTP, navigates, reloads and
+signs out. `areas.spec.ts` signs in as that admin (without a second factor), opens every area
+without a console error (a CSP violation is one) and creates and removes a contact, a drawer, a
+webhook and an API token:
 
 ```sh
 pnpm build
@@ -35,6 +38,14 @@ of another Playwright version instead of `pnpm exec playwright install chromium`
 
 For `pnpm dev`, start the API in `backend/` with `uv run python -m papiq.composition api` and
 `PAPIQ_COOKIE_SECURE=false` (plain HTTP). Open http://localhost:5173/ui/.
+
+## PDF viewer and CSP
+
+The viewer uses the legacy build of `pdfjs-dist` (the normal one needs `Map.getOrInsertComputed`,
+missing in older browsers). The worker is bundled; the plugin `vite-pdfjs.js` serves and emits
+wasm, standard fonts and CMaps under `/ui/pdfjs/`.
+The Content-Security-Policy (`vite.config.ts`) allows `worker-src 'self'` and `style-src-attr 'unsafe-inline'` (pdf.js sets style attributes);
+scripts and style elements stay `'self'` only.
 
 ## API client
 
@@ -52,7 +63,7 @@ cd web && pnpm gen:api   # writes src/lib/api/schema.ts
 | --------------------------- | ----------------------------------------------------------------------------- |
 | `src/lib/api`               | Client, `fetch` with session cookie and CSRF header, problem details          |
 | `src/lib/session.svelte.ts` | The signed-in user and the CSRF token, in memory                              |
-| `src/lib/components`        | App shell, lane badge, menus; `ui/` holds the shadcn-svelte components        |
+| `src/lib/components`        | App shell, documents, dialogs, PDF viewer; `ui/` holds the shadcn-svelte ones |
 | `src/lib/i18n.ts`           | Language switch, date, number and money formats                               |
 | `src/routes`                | `login`, the app pages in `(app)`; `(app)/dev/components` in development only |
 | `messages/{en,de}.json`     | All texts; a test fails on raw text in markup and on missing keys             |
