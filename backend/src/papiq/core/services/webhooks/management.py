@@ -90,7 +90,7 @@ class WebhookService:
 
     async def get(self, actor: UserId, id: WebhookId) -> Webhook:
         async with self._uow() as uow:
-            return await _visible(uow, await load_actor(uow, actor), id)
+            return await visible_webhook(uow, await load_actor(uow, actor), id)
 
     async def update(
         self,
@@ -103,7 +103,7 @@ class WebhookService:
         active: bool | None = None,
     ) -> Webhook:
         async with self._uow() as uow:
-            webhook = await _owned(uow, await load_actor(uow, actor), id)
+            webhook = await owned_webhook(uow, await load_actor(uow, actor), id)
             webhook.change(
                 now=self._clock.now(), name=name, url=url, event_types=event_types, active=active
             )
@@ -114,14 +114,14 @@ class WebhookService:
     async def delete(self, actor: UserId, id: WebhookId) -> None:
         """The webhook and its log. Deliveries that are queued find it gone and stop."""
         async with self._uow() as uow:
-            webhook = await _owned(uow, await load_actor(uow, actor), id)
+            webhook = await owned_webhook(uow, await load_actor(uow, actor), id)
             await uow.webhooks.remove(webhook.id)
             await uow.commit()
 
     async def renew_secret(self, actor: UserId, id: WebhookId) -> CreatedWebhook:
         """A new secret, shown once. The old one signs next to it for the grace period."""
         async with self._uow() as uow:
-            webhook = await _owned(uow, await load_actor(uow, actor), id)
+            webhook = await owned_webhook(uow, await load_actor(uow, actor), id)
             secret = new_secret()
             webhook.renew_secret(
                 self._encrypt(webhook, secret),
@@ -138,22 +138,22 @@ class WebhookService:
         """The log of a webhook, newest first."""
         limit = max(1, min(limit, MAX_PAGE))
         async with self._uow() as uow:
-            webhook = await _visible(uow, await load_actor(uow, actor), id)
+            webhook = await visible_webhook(uow, await load_actor(uow, actor), id)
             return await uow.webhooks.deliveries(webhook.id, before=before, limit=limit)
 
     def _encrypt(self, webhook: Webhook, secret: str) -> bytes:
         return self._cipher.encrypt(secret.encode("ascii"), context=secret_context(webhook.id))
 
 
-async def _visible(uow: UnitOfWork, user: User, id: WebhookId) -> Webhook:
+async def visible_webhook(uow: UnitOfWork, user: User, id: WebhookId) -> Webhook:
     webhook = await uow.webhooks.find(id)
     if webhook is None or not (webhook.owner_id == user.id or user.is_active_admin):
         raise NotFoundError("webhook", id)
     return webhook
 
 
-async def _owned(uow: UnitOfWork, user: User, id: WebhookId) -> Webhook:
-    webhook = await _visible(uow, user, id)
+async def owned_webhook(uow: UnitOfWork, user: User, id: WebhookId) -> Webhook:
+    webhook = await visible_webhook(uow, user, id)
     if webhook.owner_id != user.id:
         raise PermissionDeniedError(f"only the owner changes webhook {id}")
     return webhook

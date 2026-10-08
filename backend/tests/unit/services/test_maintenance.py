@@ -7,7 +7,9 @@ import pytest
 
 from papiq.adapters.outbound.memory import MemoryEventBus
 from papiq.core.domain.errors import AuthenticationError
+from papiq.core.domain.ids import DocumentId, EventId, new_id
 from papiq.core.domain.jobs import JobStatus
+from papiq.core.domain.webhooks import DeliveryOutcome, WebhookDelivery
 from papiq.core.services.maintenance import CLEANUP_JOB, REMOVE_FILES_JOB, MaintenanceService
 from papiq.core.services.objects import derivative_keys, original_key
 from tests.builders import PASSWORD, incoming
@@ -153,3 +155,34 @@ async def test_removing_files_is_retried(world: World, monkeypatch: pytest.Monke
     world.clock.advance(timedelta(minutes=1))
     assert await service.run_next_job()
     assert not await world.object_store.exists(original_key(document.sha256))
+
+
+async def test_cleanup_removes_old_webhook_deliveries(world: World) -> None:
+    service = maintenance(world)
+    user = await world.user()
+    hook = (
+        await world.webhooks.create(user.id, name="x", url="http://x.lan/hook", event_types=["*"])
+    ).webhook
+
+    def delivery(at: timedelta) -> WebhookDelivery:
+        return WebhookDelivery.record(
+            webhook_id=hook.id,
+            event_id=EventId(new_id()),
+            event_type="document.filed",
+            document_id=DocumentId(new_id()),
+            attempt=1,
+            started_at=world.clock.now() + at,
+            duration_ms=5,
+            outcome=DeliveryOutcome.DELIVERED,
+            status_code=200,
+        )
+
+    old, recent = delivery(-RETENTION - timedelta(hours=1)), delivery(-RETENTION / 2)
+    async with world.uow() as uow:
+        await uow.webhooks.add_delivery(old)
+        await uow.webhooks.add_delivery(recent)
+        await uow.commit()
+    await service.schedule()
+    assert await service.run_next_job()
+    async with world.uow() as uow:
+        assert [d.id for d in await uow.webhooks.deliveries(hook.id)] == [recent.id]

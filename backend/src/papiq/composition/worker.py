@@ -7,6 +7,7 @@ from papiq.adapters.inbound.worker import Worker
 from papiq.composition.container import build_container, build_services
 from papiq.composition.settings import Settings
 from papiq.core.services.indexing import SUBSCRIBER
+from papiq.core.services.webhooks import SUBSCRIBER as WEBHOOK_SUBSCRIBER
 
 
 async def run_worker(settings: Settings) -> None:
@@ -17,6 +18,7 @@ async def run_worker(settings: Settings) -> None:
         services = build_services(container, settings)
         if services.indexing is not None:
             container.event_bus.subscribe(SUBSCRIBER, services.indexing.on_event)
+        container.event_bus.subscribe(WEBHOOK_SUBSCRIBER, services.webhook_delivery.on_event)
         worker = Worker(
             pipeline=services.pipeline,
             maintenance=services.maintenance,
@@ -27,6 +29,8 @@ async def run_worker(settings: Settings) -> None:
             shutdown_timeout=settings.worker_shutdown_timeout,
             indexing=services.indexing,
             rules=services.rule_applications,
+            webhooks=services.webhook_delivery,
+            webhook_concurrency=settings.webhook_concurrency,
         )
         loop = asyncio.get_running_loop()
         for signum in (signal.SIGTERM, signal.SIGINT):
