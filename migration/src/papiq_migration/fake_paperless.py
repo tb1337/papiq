@@ -27,6 +27,8 @@ class Archive:
     workflows: int = 0
     mail_rules: int = 0
     share_links: int = 0
+    mail_accounts: int = 0
+    trash: int = 0
     files: dict[int, bytes] = field(default_factory=dict)
     page_size_limit: int = 100
 
@@ -63,6 +65,8 @@ class FakePaperless:
             "workflows": self.archive.workflows,
             "mail_rules": self.archive.mail_rules,
             "share_links": self.archive.share_links,
+            "mail_accounts": self.archive.mail_accounts,
+            "trash": self.archive.trash,
         }
         if name in counted:
             return httpx2.Response(

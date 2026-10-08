@@ -7,11 +7,11 @@ import tempfile
 import time
 from collections import Counter
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-from papiq_migration.config import Config
+from papiq_migration.config import Config, public
 from papiq_migration.mapping import (
     ASN_SPEC,
     NOTES_SPEC,
@@ -27,7 +27,6 @@ from papiq_migration.prepare import Ids, Prepared, prepare
 from papiq_migration.state import State
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
-_NUMBER = re.compile(r"[-+]?\d+(\.\d+)?")
 _PATHS = {
     "user": "/users",
     "contact": "/contacts",
@@ -170,6 +169,7 @@ async def verify(
                 if missing:
                     deviation("attribute", entry["source_id"], "options missing", missing)
 
+    types = {attribute_id: found["data_type"] for attribute_id, found in by_id["attribute"].items()}
     users = {int(user["id"]): user for user in snapshot.users}
     expected: dict[int, Prepared] = {
         int(document["id"]): prepare(
@@ -183,6 +183,7 @@ async def verify(
         key = item.drawer_key()
         if key is not None and item.skip is None:
             needed.setdefault(key, item)
+    defaults = {d["owner_id"]: d["id"] for d in listed["drawer"] if d.get("is_default")}
     drawer_ids: dict[str, str] = {}
     for key, item in needed.items():
         objects_checked += 1
@@ -230,13 +231,14 @@ async def verify(
         if actual is None:
             deviation("document", document_id, "missing in Papiq", item.title)
             continue
-        _compare(
+        applied = _compare(
             item,
             actual,
-            drawer_ids.get(item.drawer_key() or ""),
+            drawer_ids.get(key) if (key := item.drawer_key()) else defaults.get(item.owner),
             deviation,
             originals[document_id],
             row.sha256,
+            types,
         )
         if actual.get("lane") != row.lane and row.status == "done":
             deviation(
@@ -247,12 +249,15 @@ async def verify(
                 actual.get("lane"),
             )
         if actual.get("lane") in ("yellow", "red"):
+            reason = row.reason or ""
+            if not applied:
+                reason += " (the metadata from Paperless is applied after a retry of the step)"
             findings.append(
                 {
                     "id": document_id,
                     "title": item.title,
                     "lane": actual["lane"],
-                    "reason": row.reason,
+                    "reason": reason.strip(),
                 }
             )
     extra = len(papiq_documents) - checked
@@ -266,8 +271,8 @@ async def verify(
     return {
         "command": "verify",
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
-        "paperless": {"url": config.paperless_url, "version": snapshot.version},
-        "papiq": {"url": config.papiq_url},
+        "paperless": {"url": public(config.paperless_url), "version": snapshot.version},
+        "papiq": {"url": public(config.papiq_url)},
         "checked": checked,
         "objects_checked": objects_checked,
         "deviations": deviations,
@@ -284,30 +289,37 @@ def _compare(
     deviation: Any,
     original: dict[str, Any],
     state_sha: str | None,
-) -> None:
+    types: dict[str, str],
+) -> bool:
+    """Compare a document with what it should be; False if its pipeline stopped before the
+    metadata was applied (then there is nothing to compare: the document is a finding)."""
     id, meta = item.id, item.metadata
-    if actual["title"] != meta["title"]:
-        deviation("document", id, "title differs", meta["title"], actual["title"])
-    for field, key in (("contact_id", "contact_id"), ("document_type_id", "document_type_id")):
-        if (actual.get(field) or None) != (meta[key] or None):
-            deviation("document", id, f"{field} differs", meta[key], actual.get(field))
-    if sorted(actual.get("tag_ids") or []) != sorted(meta["tag_ids"]):
-        deviation("document", id, "tags differ", meta["tag_ids"], actual.get("tag_ids"))
-    if actual.get("document_date") != meta["document_date"]:
-        deviation(
-            "document",
-            id,
-            "document date differs",
-            meta["document_date"],
-            actual.get("document_date"),
-        )
-    for attribute_id in sorted(set(meta["attributes"]) | set(actual.get("attributes") or {})):
-        want, have = (
-            meta["attributes"].get(attribute_id),
-            (actual.get("attributes") or {}).get(attribute_id),
-        )
-        if not _same(want, have):
-            deviation("document", id, f"attribute {attribute_id} differs", want, have)
+    outcomes = (actual.get("processing") or {}).get("outcomes") or {}
+    classified, extracted = "classify" in outcomes, "extract_attributes" in outcomes
+    if classified:
+        if actual["title"] != meta["title"]:
+            deviation("document", id, "title differs", meta["title"], actual["title"])
+        for field in ("contact_id", "document_type_id"):
+            if (actual.get(field) or None) != (meta[field] or None):
+                deviation("document", id, f"{field} differs", meta[field], actual.get(field))
+        if sorted(actual.get("tag_ids") or []) != sorted(meta["tag_ids"]):
+            deviation("document", id, "tags differ", meta["tag_ids"], actual.get("tag_ids"))
+        if actual.get("document_date") != meta["document_date"]:
+            deviation(
+                "document",
+                id,
+                "document date differs",
+                meta["document_date"],
+                actual.get("document_date"),
+            )
+    if extracted:
+        for attribute_id in sorted(set(meta["attributes"]) | set(actual.get("attributes") or {})):
+            want, have = (
+                meta["attributes"].get(attribute_id),
+                (actual.get("attributes") or {}).get(attribute_id),
+            )
+            if not _same(want, have, types.get(attribute_id, "text")):
+                deviation("document", id, f"attribute {attribute_id} differs", want, have)
     if actual["owner_id"] != item.owner:
         deviation(
             "document",
@@ -316,7 +328,7 @@ def _compare(
             item.owner_name or "executing admin",
             actual["owner_id"],
         )
-    if item.drawer_key() is not None and actual["drawer_id"] != drawer_id:
+    if drawer_id is not None and actual["drawer_id"] != drawer_id:
         deviation("document", id, "drawer differs", drawer_id, actual["drawer_id"])
     if actual.get("channel") != "migration" and state_sha is not None:
         deviation(
@@ -329,6 +341,7 @@ def _compare(
     checksum = _paperless_checksum(original) or state_sha
     if checksum and actual.get("sha256") != checksum:
         deviation("document", id, "SHA-256 of the original differs", checksum, actual.get("sha256"))
+    return classified and extracted
 
 
 def _paperless_checksum(document: dict[str, Any]) -> str | None:
@@ -340,19 +353,20 @@ def _paperless_checksum(document: dict[str, Any]) -> str | None:
     return None
 
 
-def _same(want: Any, have: Any) -> bool:
-    """Attribute values are equal; numbers by value (`12` and `12.00`), amounts with currency."""
+def _same(want: Any, have: Any, data_type: str) -> bool:
+    """Attribute values are equal; numbers and amounts by value (`12` and `1.2E+1`)."""
     if want is None or have is None:
         return want is None and have is None
-    if isinstance(want, dict) and isinstance(have, dict):
-        return want.get("currency") == have.get("currency") and _same(
-            want.get("amount"), have.get("amount")
-        )
-    if want == have:
-        return True
-    if isinstance(want, str) and isinstance(have, str) and _NUMBER.fullmatch(want):
-        return bool(_NUMBER.fullmatch(have)) and Decimal(want) == Decimal(have)
-    return False
+    try:
+        if data_type == "amount" and isinstance(want, dict) and isinstance(have, dict):
+            return want.get("currency") == have.get("currency") and Decimal(
+                str(want.get("amount"))
+            ) == Decimal(str(have.get("amount")))
+        if data_type == "number":
+            return Decimal(str(want)) == Decimal(str(have))
+    except InvalidOperation:
+        return False
+    return bool(want == have)
 
 
 async def _rehash(

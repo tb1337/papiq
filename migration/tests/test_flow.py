@@ -43,7 +43,9 @@ async def test_the_trial_run_writes_nothing_and_reports_everything(setup: Setup)
         "saved_views": 2,
         "workflows": 1,
         "mail_rules": 0,
+        "mail_accounts": 0,
         "share_links": 0,
+        "trash": 0,
     }
     results = report["document_results"]
     assert results == {"planned": 8, "skipped": 2}
@@ -167,7 +169,7 @@ async def test_the_migration_takes_everything_over(setup: Setup) -> None:
         (named(papiq.users, "bob")["id"], "read"),
         (named(papiq.users, "tobias")["id"], "read_write"),
     }
-    assert len(papiq.drawers) == 1
+    assert sum(1 for d in papiq.drawers.values() if not d["is_default"]) == 1
 
     # the upload carries owner, channel and metadata, and no key
     upload = next(u for u in papiq.uploads if u["filename"] == "scan-13.pdf")
@@ -408,3 +410,24 @@ async def test_rehashing_downloads_the_originals_again(setup: Setup) -> None:
 
 def test_the_state_file_is_not_a_secret_store(setup: Setup) -> None:
     assert not Path(setup.directory / "state.sqlite").exists()
+
+
+async def test_the_check_compares_numbers_by_value_and_skips_what_a_stopped_pipeline_never_applied(
+    setup: Setup,
+) -> None:
+    setup.papiq.lanes["scan-12.pdf"] = "red"
+    assert await setup.run("run") == 0
+    gross = named(setup.papiq.attributes, "Gross")["id"]
+    document = by_title(setup, "Document 10")
+    document["attributes"][gross] = {"amount": "9.99E+1", "currency": "EUR"}  # 99.90
+    count = named(setup.papiq.attributes, "Count")["id"]
+    document["attributes"][count] = "4.2E+1"  # 42
+    stopped = by_title(setup, "Document 12")
+    stopped["title"] = "scan-12"  # the pipeline stopped before the metadata was applied
+    stopped["processing"]["outcomes"] = {}
+    assert await setup.run("verify") == 0
+    findings = setup.report("verify")["findings"]
+    assert findings[0]["id"] == 12 and "applied after a retry" in findings[0]["reason"]
+    # A wrong amount is still found.
+    document["attributes"][gross] = {"amount": "9.9E+1", "currency": "EUR"}
+    assert await setup.run("verify") == 1

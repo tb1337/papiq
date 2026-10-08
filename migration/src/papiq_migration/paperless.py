@@ -31,7 +31,7 @@ DOCUMENT_FIELDS = ",".join(
     ]
 )
 # Things Papiq has no counterpart for; only counted.
-COUNTED = ("saved_views", "workflows", "mail_rules", "share_links")
+COUNTED = ("saved_views", "workflows", "mail_rules", "mail_accounts", "share_links", "trash")
 
 
 class PaperlessError(Exception):
@@ -125,7 +125,10 @@ class Paperless:
             documents=documents,
         )
         for name in COUNTED:
-            snapshot.counted[name] = await self.count(f"/api/{name}/")
+            try:
+                snapshot.counted[name] = await self.count(f"/api/{name}/")
+            except PaperlessError:
+                snapshot.counted[name] = -1  # this Paperless has no such endpoint
         snapshot.version = self.version
         return snapshot
 

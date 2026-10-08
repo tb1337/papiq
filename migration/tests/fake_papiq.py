@@ -25,7 +25,17 @@ class FakePapiq:
     document_types: dict[str, dict[str, Any]] = field(default_factory=dict)
     tags: dict[str, dict[str, Any]] = field(default_factory=dict)
     attributes: dict[str, dict[str, Any]] = field(default_factory=dict)
-    drawers: dict[str, dict[str, Any]] = field(default_factory=dict)
+    drawers: dict[str, dict[str, Any]] = field(
+        default_factory=lambda: {
+            f"default:{ADMIN['id']}": {
+                "id": f"default:{ADMIN['id']}",
+                "name": "Default",
+                "owner_id": ADMIN["id"],
+                "is_default": True,
+                "shares": [],
+            }
+        }
+    )
     documents: dict[str, dict[str, Any]] = field(default_factory=dict)
     scope: str = "read_write"
     role: str = "admin"
@@ -35,6 +45,8 @@ class FakePapiq:
     log: list[tuple[str, str]] = field(default_factory=list)
     uploads: list[dict[str, str]] = field(default_factory=list)
     after_upload: Callable[[int], None] | None = None
+    refuse: dict[str, int] = field(default_factory=dict)  # "POST /users" -> status
+    lose_answer: set[str] = field(default_factory=set)  # names created, but the answer is lost
     _polls: dict[str, int] = field(default_factory=dict)
 
     def transport(self) -> httpx2.MockTransport:
@@ -83,6 +95,10 @@ class FakePapiq:
                 return httpx2.Response(200, json=store[found[2]])
         if found := re.fullmatch(r"/drawers/([^/]+)/shares/([^/]+)", path):
             drawer = self.drawers[found[1]]
+            if found[2] == drawer["owner_id"]:
+                return _problem(422, "a drawer cannot be shared with its owner")
+            if not self.users[found[2]]["active"]:
+                return _problem(404, "user not found")
             drawer["shares"] = [s for s in drawer["shares"] if s["user_id"] != found[2]]
             drawer["shares"].append({"user_id": found[2], "level": body["level"]})
             return httpx2.Response(200, json=drawer)
@@ -107,6 +123,8 @@ class FakePapiq:
             return httpx2.Response(200, json=list(store.values()))
         if method != "POST":
             return _problem(405, "method not allowed")
+        if f"POST {path}" in self.refuse:
+            return _problem(self.refuse[f"POST {path}"], "refused")
         name = str(body.get("username") or body.get("name"))
         if any(
             (item.get("username") or item["name"]).casefold() == name.casefold()
@@ -116,7 +134,11 @@ class FakePapiq:
         id = uuid4().hex
         if path == "/users":
             item = {"id": id, "username": name, "role": "user", "active": True}
+            self._default_drawer(id)
         elif path == "/drawers":
+            owner = self.users.get(body.get("owner_id", ADMIN["id"]))
+            if owner is None or not owner["active"]:
+                return _problem(404, "user not found")
             item = {
                 "id": id,
                 "name": name,
@@ -135,7 +157,19 @@ class FakePapiq:
         else:
             item = {"id": id, "name": name}
         store[id] = item
+        if name in self.lose_answer:
+            self.lose_answer.discard(name)
+            return _problem(503, "lost")
         return httpx2.Response(201, json=item)
+
+    def _default_drawer(self, owner: str) -> None:
+        self.drawers[f"default:{owner}"] = {
+            "id": f"default:{owner}",
+            "name": "Default",
+            "owner_id": owner,
+            "is_default": True,
+            "shares": [],
+        }
 
     # --- documents ---------------------------------------------------------------------------
 
@@ -162,6 +196,8 @@ class FakePapiq:
             self.errors[filename] = (status, times - 1)
             return _problem(status, f"injected failure {status}")
         owner = fields.get("owner", ADMIN["id"])
+        if owner in self.users and not self.users[owner]["active"]:
+            return _problem(404, "user not found")
         sha256 = hashlib.sha256(content).hexdigest()
         for existing in self.documents.values():
             if existing["owner_id"] == owner and existing["sha256"] == sha256:
@@ -202,13 +238,29 @@ class FakePapiq:
         if self.ticks >= 0 and self._polls[id] > self.ticks:
             lane = document["_lane"]
             document["lane"] = lane
-            document["processing"] = {
-                "status": "completed" if lane == "green" else "review",
-                "current_step": None,
-                "run": 1,
-                "outcomes": {},
-            }
-            if lane != "green":
+            steps = [
+                "receive",
+                "ocr",
+                "parse",
+                "classify",
+                "extract_attributes",
+                "apply_rules",
+                "file",
+            ]
+            if lane == "green":
+                document["processing"] = {
+                    "status": "completed",
+                    "current_step": None,
+                    "run": 1,
+                    "outcomes": {step: "ok" for step in steps},
+                }
+            else:
+                document["processing"] = {
+                    "status": "failed",
+                    "current_step": "parse",
+                    "run": 1,
+                    "outcomes": {"receive": "ok", "ocr": "ok"},
+                }
                 document["_log"] = [
                     {"step": "parse", "outcome": "failed", "reason": "no text recognised"}
                 ]

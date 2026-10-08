@@ -30,6 +30,7 @@ class Ids:
     """Paperless ids to the Papiq ids they became."""
 
     admin: str  # the executing admin: owns documents without an owner
+    inactive: set[str] = field(default_factory=set)  # Papiq users that cannot own or share
     users: dict[int, str] = field(default_factory=dict)  # Paperless user id -> Papiq user id
     usernames: dict[str, str] = field(default_factory=dict)  # norm(username) -> Papiq user id
     contacts: dict[int, str] = field(default_factory=dict)
@@ -79,10 +80,24 @@ def prepare(
     skip = None
     if document.get("deleted_at"):
         skip = "the document is in Paperless' trash"
+    elif document.get("root_document") not in (None, document["id"]):
+        skip = f"the file is a version of document {document['root_document']}"
     elif mime not in SUPPORTED:
         skip = f"Papiq takes PDF, JPEG, PNG and TIFF; this file is {mime or 'of unknown type'}"
-    shares = tuple((name, level) for name, level in access.shares if norm(name) in ids.usernames)
+    final_owner = owner_id or ids.admin
+    shares: list[tuple[str, str]] = []
+    for name, level in access.shares:
+        recipient = ids.usernames.get(norm(name))
+        if recipient is None or recipient in ids.inactive:
+            notes.append(f"shared with {name}, who is not an active user in Papiq: not shared")
+        elif recipient == final_owner:
+            notes.append(f"shared with {name}, who owns the document in Papiq: not shared")
+        else:
+            shares.append((name, level))
 
+    further = [v for v in document.get("versions") or [] if not v.get("is_root")]
+    if further:
+        notes.append(f"{len(further)} further versions of the file are not taken over")
     attributes: dict[str, Any] = {}
     asn = document.get("archive_serial_number")
     if asn is not None and ASN_SPEC.key in ids.attributes:
@@ -126,10 +141,16 @@ def prepare(
         "document_date": document_date(document),
         "attributes": attributes,
     }
-    if len(json.dumps(metadata)) > METADATA_LIMIT and NOTES_SPEC.key in ids.attributes:
-        dropped = attributes.pop(ids.attributes[NOTES_SPEC.key], None)
-        if dropped is not None:
-            notes.append("the metadata was too large: the notes are not taken over")
+    while len(json.dumps(metadata)) > METADATA_LIMIT and attributes:
+        # Too large for the upload: leave out the biggest value, the notes first.
+        notes_id = ids.attributes.get(NOTES_SPEC.key)
+        biggest = (
+            notes_id
+            if notes_id in attributes
+            else max(attributes, key=lambda key: len(json.dumps(attributes[key])))
+        )
+        del attributes[biggest]
+        notes.append("the metadata was too large: one value is not taken over")
     return Prepared(
         id=int(document["id"]),
         title=title,
@@ -138,7 +159,7 @@ def prepare(
         skip=skip,
         owner=owner_id or ids.admin,
         owner_name=access.owner if owner_id else None,
-        shares=shares,
+        shares=tuple(shares),
         metadata=metadata,
         notes=notes,
         access=access,

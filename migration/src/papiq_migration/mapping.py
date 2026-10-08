@@ -55,7 +55,7 @@ def field_key(id: int) -> str:
 def select_options(custom_field: dict[str, Any]) -> dict[str, str]:
     """The labels of a select field by option id."""
     options = (custom_field.get("extra_data") or {}).get("select_options") or []
-    return {str(o["id"]): str(o["label"]).strip() for o in options if o}
+    return {str(o["id"]): str(o["label"]).strip() for o in options if isinstance(o, dict)}
 
 
 def field_spec(custom_field: dict[str, Any]) -> tuple[AttributeSpec | None, list[str]]:
