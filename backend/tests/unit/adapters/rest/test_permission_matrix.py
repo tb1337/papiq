@@ -2,10 +2,13 @@
 a drawer or master data. Each case runs on a fresh scene.
 
 Actors: the owner; a share `read`; a share `read_write`; a stranger; an admin (no share); the
-owner's `read` token; an expired token; a revoked token; a deactivated user who had a share.
+owner's `read` token; an expired token; a revoked token; a deactivated user who had a share; a
+deactivated admin.
 
 Documents in the shared drawer: green (others may see it), yellow and in processing (owner
-only). Hidden documents and drawers are "not found" (404), exactly as missing ones.
+and admins only). Admins have every right and see everything (Tobi, 08.10.2026); lists show
+their reach unless they ask for all users. Hidden documents and drawers are "not found" (404),
+exactly as missing ones.
 """
 
 import base64
@@ -39,6 +42,7 @@ ACTORS = [
     "expired_token",
     "revoked_token",
     "deactivated",
+    "deactivated_admin",
 ]
 
 
@@ -62,6 +66,7 @@ async def build_scene(api: Api) -> Scene:
     owner, reader, writer = await api.user("owner"), await api.user("reader"), await api.user()
     stranger, admin = await api.user("stranger"), await api.admin("admin")
     gone = await api.user("deactivated")
+    retired = await api.admin("retired")
     drawers = api.services.drawers
     shared = await drawers.create(owner.id, "Shared")
     for user, level in [(reader, ShareLevel.READ), (writer, ShareLevel.READ_WRITE)]:
@@ -104,6 +109,7 @@ async def build_scene(api: Api) -> Scene:
     await api.services.auth.revoke_api_token(owner.id, revoked_token.id)
     api.clock.advance(timedelta(seconds=1))
     await api.services.users.set_active(admin.id, gone.id, False)
+    await api.services.users.set_active(admin.id, retired.id, False)
     headers = {
         "owner": auth(owner),
         "reader": auth(reader),
@@ -114,6 +120,7 @@ async def build_scene(api: Api) -> Scene:
         "expired_token": bearer(expired),
         "revoked_token": bearer(revoked),
         "deactivated": auth(gone),
+        "deactivated_admin": auth(retired),
     }
     return Scene(
         api, headers, owner, shared, own_drawer, green, yellow, processing, str(contact.id)
@@ -152,30 +159,70 @@ def doc(method: str, suffix: str = "", body: Any = None) -> Call:
     return call
 
 
-DENIED = {"expired_token": 401, "revoked_token": 401, "deactivated": 401}
-HIDDEN = {"stranger": 404, "admin": 404}
+DENIED = {"expired_token": 401, "revoked_token": 401, "deactivated": 401, "deactivated_admin": 401}
+HIDDEN = {"stranger": 404}
 
 # For the green document in the shared drawer.
 GREEN: dict[str, tuple[Call, dict[str, int]]] = {
     "read": (
         doc("GET"),
-        {"owner": 200, "reader": 200, "writer": 200, "read_token": 200, **HIDDEN, **DENIED},
+        {
+            "owner": 200,
+            "reader": 200,
+            "writer": 200,
+            "read_token": 200,
+            "admin": 200,
+            **HIDDEN,
+            **DENIED,
+        },
     ),
     "original": (
         doc("GET", "/original"),
-        {"owner": 200, "reader": 200, "writer": 200, "read_token": 200, **HIDDEN, **DENIED},
+        {
+            "owner": 200,
+            "reader": 200,
+            "writer": 200,
+            "read_token": 200,
+            "admin": 200,
+            **HIDDEN,
+            **DENIED,
+        },
     ),
     "archive": (
         doc("GET", "/archive"),
-        {"owner": 200, "reader": 200, "writer": 200, "read_token": 200, **HIDDEN, **DENIED},
+        {
+            "owner": 200,
+            "reader": 200,
+            "writer": 200,
+            "read_token": 200,
+            "admin": 200,
+            **HIDDEN,
+            **DENIED,
+        },
     ),
     "preview": (
         doc("GET", "/preview"),
-        {"owner": 200, "reader": 200, "writer": 200, "read_token": 200, **HIDDEN, **DENIED},
+        {
+            "owner": 200,
+            "reader": 200,
+            "writer": 200,
+            "read_token": 200,
+            "admin": 200,
+            **HIDDEN,
+            **DENIED,
+        },
     ),
     "change": (
         doc("PATCH", body={"title": "Changed"}),
-        {"owner": 200, "reader": 403, "writer": 200, "read_token": 403, **HIDDEN, **DENIED},
+        {
+            "owner": 200,
+            "reader": 403,
+            "writer": 200,
+            "read_token": 403,
+            "admin": 200,
+            **HIDDEN,
+            **DENIED,
+        },
     ),
     "move": (
         doc("POST", "/move", lambda scene: {"drawer_id": str(scene.own_drawer.id)}),
@@ -184,34 +231,82 @@ GREEN: dict[str, tuple[Call, dict[str, int]]] = {
             "reader": 403,
             "writer": 403,
             "stranger": 404,
-            "admin": 204,  # admins move any document, without read access
+            "admin": 204,  # admins move any document into any drawer
             "read_token": 403,
             **DENIED,
         },
     ),
     "delete": (
         doc("DELETE"),
-        {"owner": 204, "reader": 403, "writer": 403, "read_token": 403, **HIDDEN, **DENIED},
+        {
+            "owner": 204,
+            "reader": 403,
+            "writer": 403,
+            "read_token": 403,
+            "admin": 204,
+            **HIDDEN,
+            **DENIED,
+        },
     ),
     "log": (
         doc("GET", "/log"),
-        {"owner": 200, "reader": 403, "writer": 403, "read_token": 200, **HIDDEN, **DENIED},
+        {
+            "owner": 200,
+            "reader": 403,
+            "writer": 403,
+            "read_token": 200,
+            "admin": 200,
+            **HIDDEN,
+            **DENIED,
+        },
     ),
     "retry": (
         doc("POST", "/retry"),
-        {"owner": 409, "reader": 403, "writer": 403, "read_token": 403, **HIDDEN, **DENIED},
+        {
+            "owner": 409,
+            "reader": 403,
+            "writer": 403,
+            "read_token": 403,
+            "admin": 409,
+            **HIDDEN,
+            **DENIED,
+        },
     ),
     "reprocess": (
         doc("POST", "/reprocess", {"from_step": "parse"}),
-        {"owner": 202, "reader": 403, "writer": 403, "read_token": 403, **HIDDEN, **DENIED},
+        {
+            "owner": 202,
+            "reader": 403,
+            "writer": 403,
+            "read_token": 403,
+            "admin": 202,
+            **HIDDEN,
+            **DENIED,
+        },
     ),
     "review": (
         doc("GET", "/review"),
-        {"owner": 200, "reader": 403, "writer": 403, "read_token": 200, **HIDDEN, **DENIED},
+        {
+            "owner": 200,
+            "reader": 403,
+            "writer": 403,
+            "read_token": 200,
+            "admin": 200,
+            **HIDDEN,
+            **DENIED,
+        },
     ),
     "confirm": (
         doc("POST", "/confirm", {}),
-        {"owner": 409, "reader": 403, "writer": 403, "read_token": 403, **HIDDEN, **DENIED},
+        {
+            "owner": 409,
+            "reader": 403,
+            "writer": 403,
+            "read_token": 403,
+            "admin": 409,
+            **HIDDEN,
+            **DENIED,
+        },
     ),
 }
 
@@ -246,23 +341,26 @@ HIDDEN_FROM_SHARES = [
 
 @pytest.mark.parametrize("which", ["yellow", "processing"])
 @pytest.mark.parametrize("operation", HIDDEN_FROM_SHARES)
-async def test_yellow_and_processing_documents_are_the_owners_only(
+async def test_yellow_and_processing_documents_are_the_owners_and_admins(
     api: Api, which: str, operation: str
 ) -> None:
     scene = await build_scene(api)
     call, _ = GREEN[operation]
-    for actor in ("reader", "writer", "stranger", "admin"):
+    for actor in ("reader", "writer", "stranger"):
         response = await call(scene, api.client, scene.headers[actor], which)
         assert response.status_code == 404, (actor, response.text)
         assert response.json()["detail"] == f"document {scene.document(which)} not found"
-    owner = await call(scene, api.client, scene.headers["owner"], which)
-    if which == "processing" and operation in {"archive", "preview"}:
-        assert owner.status_code == 404  # not made yet
-    else:
-        assert owner.status_code in {200, 204}, owner.text
+    for actor in ("owner", "admin"):
+        response = await call(scene, api.client, scene.headers[actor], which)
+        if which == "processing" and operation in {"archive", "preview"}:
+            assert response.status_code == 404  # not made yet
+        else:
+            assert response.status_code in {200, 204}, (actor, response.text)
+        if operation == "delete":
+            break  # gone for the admin as well
 
 
-async def test_the_inbox_is_the_owners(api: Api) -> None:
+async def test_the_inbox_is_the_owners_and_all_of_them_for_admins(api: Api) -> None:
     scene = await build_scene(api)
     for actor, expected in [("owner", [scene.yellow]), ("read_token", [scene.yellow])] + [
         (actor, []) for actor in ("reader", "writer", "stranger", "admin")
@@ -270,15 +368,26 @@ async def test_the_inbox_is_the_owners(api: Api) -> None:
         response = await api.client.get(f"{PREFIX}/inbox", headers=scene.headers[actor])
         assert response.status_code == 200, response.text
         assert [item["document"]["id"] for item in response.json()["items"]] == expected, actor
-    for actor in ("expired_token", "revoked_token", "deactivated"):
+    every = await api.client.get(
+        f"{PREFIX}/inbox", params={"all_users": True}, headers=scene.headers["admin"]
+    )
+    assert [item["document"]["id"] for item in every.json()["items"]] == [scene.yellow]
+    for actor in ("owner", "reader", "stranger", "read_token"):
+        response = await api.client.get(
+            f"{PREFIX}/inbox", params={"all_users": True}, headers=scene.headers[actor]
+        )
+        assert response.status_code == 403, actor
+    for actor in ("expired_token", "revoked_token", "deactivated", "deactivated_admin"):
         response = await api.client.get(f"{PREFIX}/inbox", headers=scene.headers[actor])
         assert response.status_code == 401
     confirm = doc("POST", "/confirm", {})
-    for actor in ("reader", "writer", "stranger", "admin"):
+    for actor in ("reader", "writer", "stranger"):
         response = await confirm(scene, api.client, scene.headers[actor], "yellow")
         assert response.status_code == 404, actor
     denied = await confirm(scene, api.client, scene.headers["read_token"], "yellow")
     assert denied.status_code == 403
+    by_admin = await confirm(scene, api.client, scene.headers["admin"], "yellow")
+    assert by_admin.status_code == 202, by_admin.text
 
 
 async def test_hidden_and_missing_documents_look_alike(api: Api) -> None:
@@ -328,11 +437,19 @@ async def test_lists_show_only_readable_documents(api: Api) -> None:
         assert await listed(scene, actor) == set()
         assert await listed(scene, actor, drawer_id=str(scene.shared.id)) == set()
         assert await listed(scene, actor, contact_id=scene.contact) == set()
+    # Admins see every document when they ask for all users; nobody else may ask.
+    assert await listed(scene, "admin", all_users=True) == everything
+    assert await listed(scene, "admin", all_users=True, lane="yellow") == {scene.yellow}
+    for actor in ("owner", "reader", "stranger", "read_token"):
+        response = await api.client.get(
+            f"{PREFIX}/documents", params={"all_users": True}, headers=scene.headers[actor]
+        )
+        assert response.status_code == 403, actor
     assert await listed(scene, "owner", lane=["yellow", "processing"]) == {
         scene.yellow,
         scene.processing,
     }
-    for actor in ("expired_token", "revoked_token", "deactivated"):
+    for actor in ("expired_token", "revoked_token", "deactivated", "deactivated_admin"):
         response = await api.client.get(f"{PREFIX}/documents", headers=scene.headers[actor])
         assert response.status_code == 401
 
@@ -357,9 +474,9 @@ async def test_a_cursor_does_not_reveal_hidden_documents(api: Api) -> None:
         ("reader", "yellow", 404),
         ("reader", "processing", 404),
         ("stranger", "green", 404),
-        ("admin", "green", 404),
         ("expired_token", "green", 401),
         ("deactivated", "green", 401),
+        ("deactivated_admin", "green", 401),
     ],
 )
 async def test_event_streams_of_one_document(
@@ -385,17 +502,22 @@ async def test_drawers(api: Api) -> None:
     assert {s["level"] for s in owner_view.json()["shares"]} == {"read", "read_write"}
     reader_view = (await api.client.get(url, headers=scene.headers["reader"])).json()
     assert reader_view["access"] == "read" and reader_view["shares"] is None
-    for actor in ("stranger", "admin"):
-        assert (await api.client.get(url, headers=scene.headers[actor])).status_code == 404
-        listed = (await api.client.get(f"{PREFIX}/drawers", headers=scene.headers[actor])).json()
-        assert str(scene.shared.id) not in str(listed)
+    assert (await api.client.get(url, headers=scene.headers["stranger"])).status_code == 404
+    listed = (await api.client.get(f"{PREFIX}/drawers", headers=scene.headers["stranger"])).json()
+    assert str(scene.shared.id) not in str(listed)
+    # Admins see and manage every drawer (Tobi, 08.10.2026).
+    admin_view = (await api.client.get(url, headers=scene.headers["admin"])).json()
+    assert admin_view["access"] == "read_write"
+    assert {s["level"] for s in admin_view["shares"]} == {"read", "read_write"}
+    every = (await api.client.get(f"{PREFIX}/drawers", headers=scene.headers["admin"])).json()
+    assert {str(scene.shared.id), str(scene.own_drawer.id)} <= {d["id"] for d in every}
     changes = [
         ("PATCH", url, {"name": "Renamed"}),
         ("PUT", f"{url}/shares/{UUID(int=1)}", {"level": "read"}),
         ("DELETE", f"{url}/shares/{UUID(int=1)}", None),
         ("DELETE", url, None),
     ]
-    expected = {"reader": 403, "writer": 403, "stranger": 404, "admin": 404, "read_token": 403}
+    expected = {"reader": 403, "writer": 403, "stranger": 404, "read_token": 403}
     for method, target, body in changes:
         for actor, status in {**expected, **DENIED}.items():
             response = await api.client.request(
@@ -404,7 +526,9 @@ async def test_drawers(api: Api) -> None:
             assert response.status_code == status, (method, target, actor)
     renamed = await api.client.patch(url, json={"name": "Renamed"}, headers=scene.headers["owner"])
     assert renamed.status_code == 200
-    not_empty = await api.client.delete(url, headers=scene.headers["owner"])
+    by_admin = await api.client.patch(url, json={"name": "Again"}, headers=scene.headers["admin"])
+    assert by_admin.status_code == 200 and by_admin.json()["owner_id"] == str(scene.owner.id)
+    not_empty = await api.client.delete(url, headers=scene.headers["admin"])
     assert not_empty.status_code == 409
 
 

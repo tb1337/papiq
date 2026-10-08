@@ -28,7 +28,10 @@ from papiq.core.domain.rules import RuleScope, definition_from_json
 
 router = APIRouter(prefix="/rules", tags=["rules"], dependencies=PROTECTED)
 
-WHO_CHANGES = "A user rule: its owner. A global rule: admins."
+WHO_CHANGES = (
+    "A user rule: its owner and admins (its references are checked for its owner). A global "
+    "rule: admins."
+)
 WHO_READS = (
     "Global rules: everyone; user rules: their owner and admins. Other users' rules are not "
     "found (404)."
@@ -157,9 +160,9 @@ async def get_rule_version(
 
 
 WHO_APPLIES = (
-    "A user rule: its owner, on their documents. A global rule: anyone, on the documents they "
-    "may write to (admins included, without extra rights). Documents in processing are left "
-    "out."
+    "A user rule: its owner and admins, on the documents of the rule's owner. A global rule: "
+    "anyone, on the documents they may write to (admins: every document). Documents in "
+    "processing are left out."
 )
 
 
@@ -235,7 +238,7 @@ applications = APIRouter(prefix="/rule-applications", tags=["rules"], dependenci
 @applications.get(
     "/{id}",
     summary="Progress of a rule application",
-    description="Only for the user who started it.",
+    description="For the user who started it and admins.",
     response_model=RuleApplicationOut,
     responses=problem_responses(401, 404, 422),
 )

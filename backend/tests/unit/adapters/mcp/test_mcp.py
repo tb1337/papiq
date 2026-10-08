@@ -258,7 +258,6 @@ async def test_a_document_one_may_not_read_is_just_not_found(api: Api, scene: Sc
     missing = error(await call(api, scene.headers["stranger"], "get_document", id=unknown))
     for actor, which in [
         ("stranger", scene.green),
-        ("admin", scene.green),
         ("reader", scene.yellow),
         ("reader", scene.processing),
     ]:
@@ -266,6 +265,9 @@ async def test_a_document_one_may_not_read_is_just_not_found(api: Api, scene: Sc
         assert message.replace(which, "X") == missing.replace(unknown, "X"), (actor, which)
     owner_sees = data(await call(api, scene.headers["owner"], "get_document", id=scene.yellow))
     assert owner_sees["lane"] == "yellow"
+    # Admins read every document (Tobi, 08.10.2026).
+    admin_sees = data(await call(api, scene.headers["admin"], "get_document", id=scene.yellow))
+    assert admin_sees["lane"] == "yellow"
 
 
 async def test_get_text_reads_in_pieces_and_only_for_readers(api: Api, scene: Scene) -> None:
