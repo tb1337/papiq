@@ -240,7 +240,7 @@ rule_applications = Table(
     Column("id", Uuid, primary_key=True),
     Column("rule_id", Uuid, ForeignKey("rules.id", ondelete="CASCADE"), nullable=False, index=True),
     Column("rule_version", Integer, nullable=False),
-    Column("user_id", Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("user_id", Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True),
     Column("status", Text, nullable=False),
     Column("documents", json_type(), nullable=False),
     Column("accept_conflicts", json_type(), nullable=False),

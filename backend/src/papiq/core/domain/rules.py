@@ -23,7 +23,7 @@ them) and are read with the attribute definitions where needed (`check_attribute
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Literal, Self
@@ -949,8 +949,3 @@ def _tag_list(tags: frozenset[TagId]) -> None:
         raise ValidationError("give at least one tag")
     if len(tags) > MAX_LIST:
         raise ValidationError(f"at most {MAX_LIST} tags")
-
-
-def with_definition(rule: Rule, definition: RuleDefinition) -> Rule:
-    """A copy of `rule` that shows `definition` (for evaluating a pinned version)."""
-    return replace(rule, current=replace(rule.current, definition=definition))

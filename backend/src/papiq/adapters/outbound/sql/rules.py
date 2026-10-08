@@ -5,7 +5,7 @@ from collections.abc import Collection, Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Row, and_, delete, insert, or_, select
+from sqlalchemy import Row, and_, delete, insert, or_, select, tuple_
 
 from papiq.adapters.outbound.sql import tables as t
 from papiq.adapters.outbound.sql.repositories import SqlRepository, Values
@@ -79,11 +79,16 @@ class SqlRuleRepository(SqlRepository[RuleId, Rule]):
         if not rows:
             return []
         versions = t.rule_versions
+        # Only the current versions: older ones are neither needed nor read again.
         current = {
             (row.rule_id, row.number): _version(row)
             for row in (
                 await self._tx.read(
-                    select(versions).where(versions.c.rule_id.in_([row.id for row in rows]))
+                    select(versions).where(
+                        tuple_(versions.c.rule_id, versions.c.number).in_(
+                            [(row.id, row.current_version) for row in rows]
+                        )
+                    )
                 )
             ).all()
         }

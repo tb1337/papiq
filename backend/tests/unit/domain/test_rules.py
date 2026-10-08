@@ -56,7 +56,6 @@ from papiq.core.domain.rules import (
     definition_from_json,
     definition_to_json,
     group_from_json,
-    with_definition,
 )
 from tests.builders import NOW
 
@@ -898,17 +897,6 @@ def test_rule_invariants() -> None:
             created_at=NOW.replace(tzinfo=None),
             created_by=None,
         )
-
-
-def test_with_definition_shows_a_pinned_version() -> None:
-    rule = user_rule()
-    pinned = definition(SetContact(CONTACT), name="Old")
-
-    copy = with_definition(rule, pinned)
-
-    assert copy.definition == pinned
-    assert copy.id == rule.id and copy.current.number == rule.current.number
-    assert rule.definition == definition()
 
 
 def test_rule_order() -> None:
