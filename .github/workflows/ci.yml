@@ -14,6 +14,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# pytest runs with `-n logical`: `-n auto` counts physical cores, and a runner's two vCPUs are one,
+# so the tests ran in a single process.
+
 # Caches: only pushes to main write them, one entry per content (lock file, Docling version);
 # pull requests read main's entries. The uv cache is off: downloading the wheels is as fast as
 # restoring them.
@@ -101,7 +104,7 @@ jobs:
           path: backend/.mypy_cache
           key: ${{ steps.mypy-cache.outputs.cache-primary-key }}
       - run: uv run lint-imports
-      - run: uv run pytest -m unit -n auto
+      - run: uv run pytest -m unit -n logical
 
   # The integration tests against the devcontainer's services (Postgres, Garage, Meilisearch),
   # the OCR programs and the Docling models, on the runner. No test may skip.
@@ -163,7 +166,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          uv run pytest -m integration -n auto -v -rs | tee pytest.log
+          uv run pytest -m integration -n logical -v -rs | tee pytest.log
           # pytest marks skipped tests as SKIPPED; test names may contain "skipped".
           if grep -q SKIPPED pytest.log; then
             echo "Integration tests were skipped: a service or program is missing" >&2
@@ -212,7 +215,7 @@ jobs:
           $COMPOSE exec -T -u root dev bash -e -o pipefail -c '
             uv sync --locked --project backend
             cd backend
-            uv run pytest -n auto -v -rs tests/integration/test_services_reachable.py \
+            uv run pytest -n logical -v -rs tests/integration/test_services_reachable.py \
               tests/integration/adapters/ocrmypdf tests/integration/adapters/docling \
               | tee /tmp/pytest.log
             # pytest marks skipped tests as SKIPPED; test names may contain "skipped".
