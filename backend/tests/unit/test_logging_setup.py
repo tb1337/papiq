@@ -5,8 +5,11 @@ from typing import Any
 import pytest
 import structlog
 
+from papiq.adapters.outbound.webhooks import HttpWebhookSender
 from papiq.composition.logging_setup import configure_logging
 from papiq.composition.settings import Settings
+from tests.contracts.webhook_sender import request
+from tests.unit.adapters.webhooks.receiver import LocalReceiver
 
 
 def settings(**values: Any) -> Settings:
@@ -78,3 +81,11 @@ def test_the_access_log_hides_the_oidc_callback_query(capsys: pytest.CaptureFixt
     assert "secret" not in output
     assert "/api/v1/auth/oidc/callback" in output
     assert "/api/v1/documents?x=1" in output
+
+
+async def test_a_webhook_url_never_reaches_the_log(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging(settings(log_format="json", log_level="DEBUG"))
+    async with LocalReceiver() as receiver:
+        await HttpWebhookSender().send(request(f"{receiver.url}/hooks/capability-token?key=abc"))
+
+    assert "capability-token" not in capsys.readouterr().err
