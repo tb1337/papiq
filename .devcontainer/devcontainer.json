@@ -5,7 +5,11 @@
   "workspaceFolder": "/workspaces/papiq",
   "remoteUser": "vscode",
   "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {},
     "ghcr.io/devcontainers/features/docker-outside-of-docker:1": { "moby": false }
+  },
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
   },
   // API, Vite, and the services of the compose network (Meilisearch, Garage S3).
   "forwardPorts": [8000, 5173, "meilisearch:7700", "garage:3900"],
@@ -16,7 +20,8 @@
         "ms-python.python",
         "charliermarsh.ruff",
         "ms-python.mypy-type-checker",
-        "editorconfig.editorconfig"
+        "editorconfig.editorconfig",
+        "Anthropic.claude-code"
       ],
       "settings": {
         "python.defaultInterpreterPath": "/home/vscode/.venv/bin/python",
