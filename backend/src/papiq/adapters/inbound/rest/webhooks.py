@@ -173,8 +173,10 @@ async def list_webhooks(
     summary="Create a webhook",
     description=(
         "Papiq sends a signed request to the URL for each event of the chosen types on "
-        "documents the caller may see. The answer holds the secret, shown only once. At most "
-        "20 webhooks per user (409)."
+        "documents within the owner's reach: their own, and green ones in drawers they own or "
+        "that are shared with them (an admin's webhooks too; the rights of an admin do not "
+        "widen them). The answer holds the secret, shown only once. At most 20 webhooks per "
+        "user (409)."
     ),
     response_model=WebhookCreated,
     responses=problem_responses(401, 403, 409, 422),
@@ -237,7 +239,7 @@ async def delete_webhook(id: UUID, user: CurrentUser, context: Context) -> None:
     description=(
         "A new secret, shown only now. The old one keeps signing next to it for a while "
         "(`previous_secret_valid_until`), so the receiver can switch without a gap; renewing "
-        "again ends that at once. Owner only."
+        "again ends that at once. " + WHO
     ),
     response_model=WebhookCreated,
     responses=problem_responses(401, 403, 404, 422),
@@ -280,8 +282,7 @@ async def list_deliveries(
     description=(
         "Sends a `webhook.test` request to the URL now, signed like any other, without "
         "repetition; works for a switched-off webhook too. The answer is the entry of the "
-        "delivery log: `delivered` for a 2xx answer, else `gave_up` with status or error. "
-        "Owner only."
+        "delivery log: `delivered` for a 2xx answer, else `gave_up` with status or error. " + WHO
     ),
     response_model=DeliveryOut,
     responses=problem_responses(401, 403, 404, 422),

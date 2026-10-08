@@ -617,7 +617,7 @@ export interface paths {
 		};
 		/**
 		 * List drawers
-		 * @description The drawers the caller owns or that are shared with them.
+		 * @description The drawers the caller owns or that are shared with them; every drawer for admins.
 		 */
 		get: operations['list_drawers_api_v1_drawers_get'];
 		put?: never;
@@ -645,14 +645,14 @@ export interface paths {
 		post?: never;
 		/**
 		 * Delete a drawer
-		 * @description Owner only. Not the default drawer, and only while it is empty (409).
+		 * @description The owner and admins. Not the default drawer, and only while it is empty (409).
 		 */
 		delete: operations['delete_drawer_api_v1_drawers__id__delete'];
 		options?: never;
 		head?: never;
 		/**
 		 * Rename a drawer
-		 * @description Owner only.
+		 * @description The owner and admins.
 		 */
 		patch: operations['rename_drawer_api_v1_drawers__id__patch'];
 		trace?: never;
@@ -667,13 +667,13 @@ export interface paths {
 		get?: never;
 		/**
 		 * Share a drawer
-		 * @description Owner only. Sets the user's access: `read` or `read_write`. The default drawer cannot be shared (422); an unknown or deactivated user is not found (404). Other users see documents in it once they are green.
+		 * @description The owner and admins. Sets the user's access: `read` or `read_write`. The default drawer cannot be shared (422); an unknown or deactivated user is not found (404). Other users see documents in it once they are green.
 		 */
 		put: operations['share_drawer_api_v1_drawers__id__shares__user_id__put'];
 		post?: never;
 		/**
 		 * Stop sharing a drawer with a user
-		 * @description Owner only.
+		 * @description The owner and admins.
 		 */
 		delete: operations['unshare_drawer_api_v1_drawers__id__shares__user_id__delete'];
 		options?: never;
@@ -719,20 +719,20 @@ export interface paths {
 		get: operations['get_rule_api_v1_rules__id__get'];
 		/**
 		 * Change a rule
-		 * @description Makes a new version; earlier ones stay readable. A user rule: its owner. A global rule: admins. The content is checked: operators fit the field and the attribute's data type, patterns compile, a global rule only tags, sets attributes and forces reviews (422); contacts, types, tags, attributes and drawers exist (404); a user rule files only into drawers its owner may write to (403).
+		 * @description Makes a new version; earlier ones stay readable. A user rule: its owner and admins (its references are checked for its owner). A global rule: admins. The content is checked: operators fit the field and the attribute's data type, patterns compile, a global rule only tags, sets attributes and forces reviews (422); contacts, types, tags, attributes and drawers exist (404); a user rule files only into drawers its owner may write to (403).
 		 */
 		put: operations['change_rule_api_v1_rules__id__put'];
 		post?: never;
 		/**
 		 * Delete a rule
-		 * @description A user rule: its owner. A global rule: admins. The rule never runs again and is no longer listed; its versions stay readable, so the processing log can be read.
+		 * @description A user rule: its owner and admins (its references are checked for its owner). A global rule: admins. The rule never runs again and is no longer listed; its versions stay readable, so the processing log can be read.
 		 */
 		delete: operations['delete_rule_api_v1_rules__id__delete'];
 		options?: never;
 		head?: never;
 		/**
 		 * Enable or disable a rule
-		 * @description A user rule: its owner. A global rule: admins. Makes no version. Enabling checks the references again: a rule disabled because something it uses was deleted stays disabled until it is changed.
+		 * @description A user rule: its owner and admins (its references are checked for its owner). A global rule: admins. Makes no version. Enabling checks the references again: a rule disabled because something it uses was deleted stays disabled until it is changed.
 		 */
 		patch: operations['patch_rule_api_v1_rules__id__patch'];
 		trace?: never;
@@ -788,7 +788,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Preview applying a rule to existing documents
-		 * @description The documents the rule's current version would change, newest first, with what would change and the conflicts (a field that has another value). Nothing is stored. A user rule: its owner, on their documents. A global rule: anyone, on the documents they may write to (admins included, without extra rights). Documents in processing are left out.
+		 * @description The documents the rule's current version would change, newest first, with what would change and the conflicts (a field that has another value). Nothing is stored. A user rule: its owner and admins, on the documents of the rule's owner. A global rule: anyone, on the documents they may write to (admins: every document). Documents in processing are left out.
 		 */
 		post: operations['preview_apply_api_v1_rules__id__apply_preview_post'];
 		delete?: never;
@@ -808,7 +808,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Apply a rule to existing documents
-		 * @description Applies the given version to the selected documents in the background; follow it at `GET /rule-applications/{id}`. Rights are checked again for every document. Conflicts are applied only for documents in `accept_conflicts`; forced reviews do not act. A user rule: its owner, on their documents. A global rule: anyone, on the documents they may write to (admins included, without extra rights). Documents in processing are left out.
+		 * @description Applies the given version to the selected documents in the background; follow it at `GET /rule-applications/{id}`. Rights are checked again for every document. Conflicts are applied only for documents in `accept_conflicts`; forced reviews do not act. A user rule: its owner and admins, on the documents of the rule's owner. A global rule: anyone, on the documents they may write to (admins: every document). Documents in processing are left out.
 		 */
 		post: operations['apply_rule_api_v1_rules__id__apply_post'];
 		delete?: never;
@@ -826,7 +826,7 @@ export interface paths {
 		};
 		/**
 		 * Progress of a rule application
-		 * @description Only for the user who started it.
+		 * @description For the user who started it and admins.
 		 */
 		get: operations['get_application_api_v1_rule_applications__id__get'];
 		put?: never;
@@ -846,7 +846,7 @@ export interface paths {
 		};
 		/**
 		 * Search documents
-		 * @description Full text and, if the installation has embeddings, meaning in one call. Finds the documents the caller may read, the same ones as `GET /documents` lists, with the same filters (they combine; `tag_id` and `lane` may repeat). Each hit is checked against the permissions once more before it is returned. The index follows the documents a moment later, so a new document may take a few seconds to turn up. Pages are by `offset`; at most 1000 hits can be reached.
+		 * @description Full text and, if the installation has embeddings, meaning in one call. Finds the documents within the caller's reach, the same ones as `GET /documents` lists, with the same filters (they combine; `tag_id` and `lane` may repeat); admins search every document with `all_users` (others: 403). Each hit is checked against the permissions once more before it is returned. The index follows the documents a moment later, so a new document may take a few seconds to turn up. Pages are by `offset`; at most 1000 hits can be reached.
 		 */
 		get: operations['search_documents_api_v1_documents_search_get'];
 		put?: never;
@@ -886,7 +886,7 @@ export interface paths {
 		};
 		/**
 		 * List documents
-		 * @description The documents the caller may read, newest first: their own, and green documents in drawers they own or that are shared with them. Filters combine; `tag_id` and `lane` may repeat (all tags, any lane; `processing`: no lane yet). To search by words and meaning use `GET /documents/search`.
+		 * @description The documents within the caller's reach, newest first: their own, and green documents in drawers they own or that are shared with them. Admins may read every document and list them all with `all_users` (others: 403). Filters combine; `tag_id` and `lane` may repeat (all tags, any lane; `processing`: no lane yet). To search by words and meaning use `GET /documents/search`.
 		 */
 		get: operations['list_documents_api_v1_documents_get'];
 		put?: never;
@@ -917,7 +917,7 @@ export interface paths {
 		post?: never;
 		/**
 		 * Delete a document
-		 * @description Owner only.
+		 * @description The owner and admins.
 		 */
 		delete: operations['delete_document_api_v1_documents__id__delete'];
 		options?: never;
@@ -940,7 +940,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Try a metadata change
-		 * @description What `PATCH /documents/{id}` with this body would do, without storing anything: the document afterwards, the fields that would change, what the rules would do (owner only) and who would see it. Needs write access.
+		 * @description What `PATCH /documents/{id}` with this body would do, without storing anything: the document afterwards, the fields that would change, what the rules would do (owner and admins) and who would see it. Needs write access.
 		 */
 		post: operations['preview_change_api_v1_documents__id__dry_run_post'];
 		delete?: never;
@@ -960,7 +960,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Move a document to another drawer
-		 * @description The owner moves into drawers they may write to; an admin moves any document into any drawer, without getting read access. Shares do not allow moving.
+		 * @description The owner moves into drawers they may write to; an admin moves any document into any drawer. Shares do not allow moving.
 		 */
 		post: operations['move_document_api_v1_documents__id__move_post'];
 		delete?: never;
@@ -1038,7 +1038,7 @@ export interface paths {
 		};
 		/**
 		 * Processing log of a document
-		 * @description Owner only. Every execution of every step, oldest first.
+		 * @description The owner and admins. Every execution of every step, oldest first.
 		 */
 		get: operations['processing_log_api_v1_documents__id__log_get'];
 		put?: never;
@@ -1060,7 +1060,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Repeat the failed step
-		 * @description Owner only. Processing continues with the following steps.
+		 * @description The owner and admins. Processing continues with the following steps.
 		 */
 		post: operations['retry_api_v1_documents__id__retry_post'];
 		delete?: never;
@@ -1080,7 +1080,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Process again from a step
-		 * @description Owner only. Discards the results from `from_step` on, e.g. after a model change. Not while processing runs, not past a failed step, and not from `file` while uncertain fields wait for confirmation.
+		 * @description The owner and admins. Discards the results from `from_step` on, e.g. after a model change. Not while processing runs, not past a failed step, and not from `file` while uncertain fields wait for confirmation.
 		 */
 		post: operations['reprocess_api_v1_documents__id__reprocess_post'];
 		delete?: never;
@@ -1098,7 +1098,7 @@ export interface paths {
 		};
 		/**
 		 * What the model proposed for a document
-		 * @description Owner only. The open steps and fields, and the latest classification and attribute extraction by the model: each field as proposed, checked and applied.
+		 * @description The owner and admins. The open steps and fields, and the latest classification and attribute extraction by the model: each field as proposed, checked and applied.
 		 */
 		get: operations['review_api_v1_documents__id__review_get'];
 		put?: never;
@@ -1120,7 +1120,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Confirm a document from the inbox
-		 * @description Owner only, for yellow and red documents that are not being processed. Every open field of the steps before `resume_at` (and of `apply_rules` when processing resumes with it) needs a decision: a value or null in `changes`, a value the document already has (it is kept), or its suggestion with `accept_suggestions`. Otherwise 422 lists the open fields in `open_fields`. The rules' fields `drawer`, `title` and `review` always have a value: confirming keeps it, `drawer_id` moves the document. The results before `resume_at` count as confirmed; processing continues from there up to filing, and the rules leave what the owner decided or changed as it is. From `extract_attributes` on, the extracted attributes replace the ones the document has.
+		 * @description The owner and admins, for yellow and red documents that are not being processed. `drawer_id` must be a drawer the owner may write to (filing checks the owner). Every open field of the steps before `resume_at` (and of `apply_rules` when processing resumes with it) needs a decision: a value or null in `changes`, a value the document already has (it is kept), or its suggestion with `accept_suggestions`. Otherwise 422 lists the open fields in `open_fields`. The rules' fields `drawer`, `title` and `review` always have a value: confirming keeps it, `drawer_id` moves the document. The results before `resume_at` count as confirmed; processing continues from there up to filing, and the rules leave what the owner decided or changed as it is. From `extract_attributes` on, the extracted attributes replace the ones the document has.
 		 */
 		post: operations['confirm_api_v1_documents__id__confirm_post'];
 		delete?: never;
@@ -1138,7 +1138,7 @@ export interface paths {
 		};
 		/**
 		 * The caller's inbox
-		 * @description The caller's yellow and red documents, newest first, each with its open steps and fields. Confirm them with `POST /documents/{id}/confirm`, or repeat a failed step with `retry`.
+		 * @description The caller's yellow and red documents, newest first, each with its open steps and fields; with `all_users` (admins, others: 403) those of every user. Confirm them with `POST /documents/{id}/confirm`, or repeat a failed step with `retry`.
 		 */
 		get: operations['list_inbox_api_v1_inbox_get'];
 		put?: never;
@@ -1184,7 +1184,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Create a webhook
-		 * @description Papiq sends a signed request to the URL for each event of the chosen types on documents the caller may see. The answer holds the secret, shown only once. At most 20 webhooks per user (409).
+		 * @description Papiq sends a signed request to the URL for each event of the chosen types on documents within the owner's reach: their own, and green ones in drawers they own or that are shared with them (an admin's webhooks too; the rights of an admin do not widen them). The answer holds the secret, shown only once. At most 20 webhooks per user (409).
 		 */
 		post: operations['create_webhook_api_v1_webhooks_post'];
 		delete?: never;
@@ -1232,7 +1232,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Renew the secret
-		 * @description A new secret, shown only now. The old one keeps signing next to it for a while (`previous_secret_valid_until`), so the receiver can switch without a gap; renewing again ends that at once. Owner only.
+		 * @description A new secret, shown only now. The old one keeps signing next to it for a while (`previous_secret_valid_until`), so the receiver can switch without a gap; renewing again ends that at once. Its owner, or an admin (who also changes, deletes and tests other users' webhooks and sees the secret only when renewing it). Other users' webhooks are not found (404).
 		 */
 		post: operations['renew_secret_api_v1_webhooks__id__secret_post'];
 		delete?: never;
@@ -1272,7 +1272,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Send a test request
-		 * @description Sends a `webhook.test` request to the URL now, signed like any other, without repetition; works for a switched-off webhook too. The answer is the entry of the delivery log: `delivered` for a 2xx answer, else `gave_up` with status or error. Owner only.
+		 * @description Sends a `webhook.test` request to the URL now, signed like any other, without repetition; works for a switched-off webhook too. The answer is the entry of the delivery log: `delivered` for a 2xx answer, else `gave_up` with status or error. Its owner, or an admin (who also changes, deletes and tests other users' webhooks and sees the secret only when renewing it). Other users' webhooks are not found (404).
 		 */
 		post: operations['test_webhook_api_v1_webhooks__id__test_post'];
 		delete?: never;
@@ -2045,11 +2045,11 @@ export interface components {
 			owner_id: string;
 			/** Is Default */
 			is_default: boolean;
-			/** @description The caller's access: owner (read_write) or share. */
+			/** @description The caller's access: owner and admins (read_write), or the share. */
 			access: components['schemas']['ShareLevel'];
 			/**
 			 * Shares
-			 * @description Only for the owner.
+			 * @description Only for the owner and admins.
 			 */
 			shares: components['schemas']['ShareOut'][] | null;
 			/**
@@ -3270,7 +3270,7 @@ export interface components {
 			drawer_owner_id: string | null;
 			/**
 			 * Shares
-			 * @description The drawer's shares, if the document is green and the caller owns the drawer; otherwise not shown.
+			 * @description The drawer's shares, if the document is green and the caller owns the drawer or is an admin; otherwise not shown.
 			 */
 			shares: components['schemas']['ShareOut'][] | null;
 		};
@@ -10248,6 +10248,8 @@ export interface operations {
 				offset?: number;
 				/** @description Weight of the meaning against the words: 0 words only, 1 meaning only. Default: the installation's setting. */
 				semantic_ratio?: number | null;
+				/** @description Every user's documents instead of the caller's reach (admins). */
+				all_users?: boolean;
 			};
 			header?: never;
 			path?: never;
@@ -10276,6 +10278,23 @@ export interface operations {
 					 *       "title": "Unauthorized",
 					 *       "status": 401,
 					 *       "detail": "authentication is required"
+					 *     }
+					 */
+					'application/problem+json': components['schemas']['Problem'];
+				};
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					/**
+					 * @example {
+					 *       "type": "about:blank",
+					 *       "title": "Forbidden",
+					 *       "status": 403,
+					 *       "detail": "only the owner controls processing of this document"
 					 *     }
 					 */
 					'application/problem+json': components['schemas']['Problem'];
@@ -10431,6 +10450,8 @@ export interface operations {
 				limit?: number;
 				/** @description `next_cursor`. */
 				cursor?: string | null;
+				/** @description Every user's documents instead of the caller's reach (admins). */
+				all_users?: boolean;
 			};
 			header?: never;
 			path?: never;
@@ -10459,6 +10480,23 @@ export interface operations {
 					 *       "title": "Unauthorized",
 					 *       "status": 401,
 					 *       "detail": "authentication is required"
+					 *     }
+					 */
+					'application/problem+json': components['schemas']['Problem'];
+				};
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					/**
+					 * @example {
+					 *       "type": "about:blank",
+					 *       "title": "Forbidden",
+					 *       "status": 403,
+					 *       "detail": "only the owner controls processing of this document"
 					 *     }
 					 */
 					'application/problem+json': components['schemas']['Problem'];
@@ -12217,6 +12255,8 @@ export interface operations {
 				limit?: number;
 				/** @description `next_cursor`. */
 				cursor?: string | null;
+				/** @description Every user's documents instead of the caller's reach (admins). */
+				all_users?: boolean;
 			};
 			header?: never;
 			path?: never;
@@ -12245,6 +12285,23 @@ export interface operations {
 					 *       "title": "Unauthorized",
 					 *       "status": 401,
 					 *       "detail": "authentication is required"
+					 *     }
+					 */
+					'application/problem+json': components['schemas']['Problem'];
+				};
+			};
+			/** @description Forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					/**
+					 * @example {
+					 *       "type": "about:blank",
+					 *       "title": "Forbidden",
+					 *       "status": 403,
+					 *       "detail": "only the owner controls processing of this document"
 					 *     }
 					 */
 					'application/problem+json': components['schemas']['Problem'];
