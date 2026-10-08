@@ -8,11 +8,11 @@ Paperless-ngx. Python backend, hexagonal (ports and adapters); the REST API is t
 | Path | Content |
 | --- | --- |
 | `backend/` | Python package `papiq`: `core` (domain, ports, services), `adapters` (inbound, outbound), `composition` |
-| `web/` | Web UI (SvelteKit, not started) |
+| `web/` | Web UI: SvelteKit single-page app below `/ui`, client generated from `web/openapi.json` (see `web/README.md`) |
 | `migration/` | Paperless-ngx migration client (not started) |
 | `deploy/` | Runtime image files (s6-overlay services, `image/rootfs`), example Compose stacks (SQLite, Postgres + Garage), `test-image.sh`, `README.md` (operation, backup) |
 | `.devcontainer/` | Devcontainer: Compose services (Postgres, Garage, Meilisearch) and dev credentials |
-| `Dockerfile` | Stages `base`, `deps`, `docling-models`, `app`, `dev` (devcontainer) and `runtime` (production image) |
+| `Dockerfile` | Stages `base`, `deps`, `docling-models`, `app`, `s6`, `web` (UI build), `dev` (devcontainer) and `runtime` (production image) |
 | `.idea/` | Design documents in German: `architektur.md` (binding), `umsetzungsplan.md` |
 
 ## Commands
@@ -36,6 +36,17 @@ uv run python -m papiq.composition api       # serve the REST API until SIGTERM
 uv run python -m papiq.composition worker    # run the worker until SIGTERM
 ```
 
+Web UI, in `web/` (`web/README.md`):
+
+```sh
+pnpm install
+pnpm lint && pnpm format:check && pnpm check && pnpm test && pnpm build
+pnpm dev                         # Vite on :5173 below /ui, /api proxied to the API on :8000
+```
+
+After an API change: `uv run python -m papiq.composition.openapi ../web/openapi.json` in `backend/`,
+then `pnpm gen:api` in `web/` (a backend test fails while `web/openapi.json` is out of date).
+
 Image (in the repository root; s6-overlay, `PAPIQ_ROLE`, `PUID`/`PGID`; see `deploy/README.md`):
 
 ```sh
@@ -43,7 +54,7 @@ docker build --target runtime -t papiq:local .
 deploy/test-image.sh papiq:local     # starts it with SQLite: migration, health, user, roles, a PDF, stop
 ```
 
-Run all five checks before every commit.
+Run all five checks before every commit; with changes in `web/` also the web UI's checks.
 
 ## Architecture rules
 
@@ -62,6 +73,8 @@ Run all five checks before every commit.
 - Schema changes: change `adapters/outbound/sql/tables.py` and add an Alembic revision in
   `adapters/outbound/sql/migrations/versions`; a test fails if the two differ.
 - State change, domain events and follow-up jobs go through one `UnitOfWork` and one commit.
+- The web UI talks to the REST API only. Every text a user reads is in `web/messages/{en,de}.json`;
+  a test fails on raw text in markup.
 
 ## Language
 
