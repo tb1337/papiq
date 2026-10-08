@@ -343,7 +343,7 @@ Ein eigener CLI-Client liest die Paperless-REST-API und schreibt über die Papiq
 
 ## Offene Punkte
 
-- [ ] Backup-Strategie für SQLite und Postgres
+- [x] Backup-Strategie für SQLite und Postgres (nur Dokumentation in `deploy/README.md`: SQLite-Backup-API bzw. `pg_dump`, Datenbank vor Objekten, `reindex` nach der Wiederherstellung; Tobi 08.10.2026; ein `backup`-Befehl ggf. in M13)
 - [x] Konfidenz-Schwellen und Anzahl automatischer Retries festlegen (0,9 und 0,75; eine Nachfrage bei unpassender Antwort, dann Rot; Schritt-Retries `PAPIQ_STEP_MAX_ATTEMPTS`)
 - [x] Attribut-Datentypen bestätigen
 - [x] Embedding-Modell für die semantische Suche bestätigen (`snowflake-arctic-embed2`, Tobi 07.10.2026; Bewertung unter „Suche“)
