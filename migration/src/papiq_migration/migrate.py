@@ -87,6 +87,8 @@ class Migration:
         self.snapshot: Snapshot | None = None
         self.ids = Ids(admin="admin")
         self.prepared: list[Prepared] = []
+        self._inactive: list[tuple[str, str]] = []
+        self._asleep: dict[str, str] = {}  # ours, inactive in Papiq from an earlier run
 
     # --- the whole run -----------------------------------------------------------------------
 
@@ -120,12 +122,15 @@ class Migration:
             )
             for document in snapshot.documents
         ]
+        await self._wake()
         phase = self._clock()
         drawers = await self._drawers()
         self.totals.seconds["drawers"] = self._clock() - phase
         phase = self._clock()
         await self._documents(drawers)
         self.totals.seconds["documents"] = self._clock() - phase
+        if not self._stop.is_set():
+            await self._deactivate()
         self.totals.seconds["total"] = self._clock() - started
         return self.totals
 
@@ -167,31 +172,56 @@ class Migration:
     # --- users -------------------------------------------------------------------------------
 
     async def _users(self, snapshot: Snapshot) -> None:
+        """Users by name; missing ones are created (active: a user who owns documents or gets
+        shares must be active; the ones inactive in Paperless are deactivated at the end)."""
         existing = {norm(user["username"]): user for user in await self._list("/users")}
         for user in snapshot.users:
             name = str(user["username"])
             notes: list[str] = []
-            if user.get("is_superuser"):
+            found = existing.get(norm(name))
+            if user.get("is_superuser") and found is None:
                 notes.append(
                     "administrator in Paperless: role 'user' in Papiq (admins are named by hand)"
                 )
-            found = existing.get(norm(name))
             active = bool(user.get("is_active", True))
+            ours = (self._state.object("user", str(user["id"])) or (None, ""))[1] == NEW
             try:
-                if found is not None:
-                    id, status = found["id"], EXISTING
-                    if not active:
-                        notes.append("inactive in Paperless; the Papiq user stays as it is")
-                elif self._dry or self._target is None:
-                    id, status = f"new:{name}", NEW
-                    if not active:
-                        notes.append("will be created deactivated")
+                if found is None and not (self._dry or self._target is None):
+                    try:
+                        found = await self._target.create_user(name)
+                        ours = True
+                    except ApiError as error:
+                        if error.status != 409:
+                            raise
+                        # Created by an earlier attempt whose answer was lost.
+                        found = next(
+                            (
+                                u
+                                for u in await self._list("/users")
+                                if norm(u["username"]) == norm(name)
+                            ),
+                            None,
+                        )
+                        if found is None:
+                            raise
+                    existing[norm(name)] = found
+                    status = NEW if ours else EXISTING
+                    id = found["id"]
+                elif found is not None:
+                    id, status = found["id"], NEW if ours else EXISTING
                 else:
-                    created = await self._target.create_user(name)
-                    id, status = created["id"], NEW
-                    if not active:
-                        await self._target.deactivate_user(id)
-                        notes.append("created deactivated")
+                    id, status = f"new:{name}", NEW
+                if not active:
+                    if status == NEW:
+                        notes.append("deactivated at the end of the migration")
+                        if found is not None and found.get("active") is False:
+                            self._asleep[id] = name
+                        else:
+                            self._inactive.append((id, name))
+                    else:
+                        notes.append("inactive in Paperless; the Papiq user stays as it is")
+                if found is not None and found.get("active") is False and status == EXISTING:
+                    self.ids.inactive.add(id)
             except ApiError as error:
                 self._record("user", str(user["id"]), name, None, FAILED, [str(error)])
                 raise MigrationError(f"cannot create the user '{name}': {error}") from None
@@ -207,6 +237,33 @@ class Migration:
                 OMITTED,
                 ["only used to resolve document permissions to users"],
             )
+
+    async def _wake(self) -> None:
+        """Activate the users deactivated by an earlier run if documents of theirs (owned or
+        shared) are still to be taken over; they are deactivated again at the end."""
+        if self._dry or self._target is None or not self._asleep:
+            return
+        needed: set[str] = set()
+        for item in self.prepared:
+            row = self._state.document(item.id)
+            if item.skip is None and not (row is not None and row.status in DOCUMENT_DONE):
+                needed.add(item.owner)
+                needed.update(self.ids.usernames[norm(name)] for name, _ in item.shares)
+        for id, name in self._asleep.items():
+            if id in needed:
+                await self._target.set_active(id, True)
+                self._inactive.append((id, name))
+
+    async def _deactivate(self) -> None:
+        """The users that are inactive in Paperless are inactive in Papiq, too, now that no
+        document of theirs is left to upload."""
+        if self._dry or self._target is None:
+            return
+        for id, name in self._inactive:
+            try:
+                await self._target.set_active(id, False)
+            except ApiError as error:
+                self._progress(f"cannot deactivate {name}: {error}")
 
     # --- contacts, document types, tags ------------------------------------------------------
 
@@ -231,7 +288,16 @@ class Migration:
                     elif self._dry or self._target is None:
                         id, status = f"new:{kind}:{key}", NEW
                     else:
-                        id, status = (await self._target.create_named(path, name))["id"], NEW
+                        try:
+                            id, status = (await self._target.create_named(path, name))["id"], NEW
+                        except ApiError as error:
+                            if error.status != 409:
+                                raise
+                            # Created by an earlier attempt whose answer was lost.
+                            again = {norm(i["name"]): i for i in await self._list(path)}
+                            if key not in again:
+                                raise
+                            id, status = again[key]["id"], EXISTING
                 except ApiError as error:
                     self._record(kind, str(item["id"]), name, None, FAILED, [str(error)])
                     raise MigrationError(f"cannot create {kind} '{name}': {error}") from None
@@ -305,8 +371,16 @@ class Migration:
                 [f"no counterpart in Papiq; {counts.get(str(path['id']), 0)} documents use it"],
             )
         for name, count in snapshot.counted.items():
+            what = "could not be read" if count < 0 else f"{count} not taken over"
+            self._record("other", name, name.replace("_", " "), None, OMITTED, [what])
+        for name, text in (("date_added", "date added"), ("history", "history")):
             self._record(
-                "other", name, name.replace("_", " "), None, OMITTED, [f"{count} not taken over"]
+                "other",
+                name,
+                text,
+                None,
+                OMITTED,
+                [f"not taken over for the {len(snapshot.documents)} documents"],
             )
         # Make sure the ids of attributes that could not be created do not linger.
         for key in list(self.ids.specs):
@@ -348,8 +422,9 @@ class Migration:
                     if have.get(user_id) != level and not self._dry and self._target is not None:
                         await self._target.share(id, user_id, level)
             except ApiError as error:
+                # The documents that need this drawer fail with this reason; the others go on.
                 self._record("drawer", key, name, None, FAILED, [str(error)])
-                raise MigrationError(f"cannot prepare the drawer '{name}': {error}") from None
+                continue
             result[key] = id
             self._record("drawer", key, name, id, status, notes)
         return result
@@ -371,8 +446,12 @@ class Migration:
                     await self._document(item, drawers)
                 except Exception as error:  # one document never stops the others
                     self.totals.failed += 1
+                    row = self._state.document(item.id)
+                    # An upload stays `uploaded`: the next run waits for it, it does not repeat it.
                     self._state.put_document(
-                        item.id, FAILED, reason=f"{type(error).__name__}: {error}"[:300]
+                        item.id,
+                        "uploaded" if row is not None and row.status == "uploaded" else FAILED,
+                        reason=f"{type(error).__name__}: {error}"[:300],
                     )
                 done += 1
                 if done % 25 == 0 or done == len(self.prepared):
@@ -428,8 +507,9 @@ class Migration:
             uploaded = await self._upload(item, drawers, detail)
             if uploaded is None:
                 return
-            papiq_id, sha256 = uploaded
+            papiq_id, sha256, duplicate = uploaded
             upload_seconds = self._clock() - began
+            detail = {**detail, "duplicate": duplicate}
             self._state.put_document(
                 item.id,
                 "uploaded",
@@ -439,7 +519,8 @@ class Migration:
                 detail=detail,
                 upload_seconds=upload_seconds,
             )
-            self.totals.uploaded += 1
+            if not duplicate:
+                self.totals.uploaded += 1
         waited = self._clock()
         finished = await self._wait(papiq_id)
         if finished is None:
@@ -459,9 +540,13 @@ class Migration:
         reason = None
         if lane != "green":
             reason = await self._why_not_green(papiq_id)
+        known = self._state.document(item.id)
+        duplicate = bool(known is not None and known.detail.get("duplicate"))
+        if duplicate:
+            reason = "; ".join(filter(None, ["Papiq has the file already (same owner)", reason]))
         self._state.put_document(
             item.id,
-            "done",
+            "duplicate" if duplicate else "done",
             papiq_id=papiq_id,
             lane=lane,
             reason=reason,
@@ -470,9 +555,10 @@ class Migration:
 
     async def _upload(
         self, item: Prepared, drawers: dict[str, str], detail: dict[str, Any]
-    ) -> tuple[str, str] | None:
-        """Download the original and upload it with owner, drawer and metadata; the Papiq id
-        and the file's SHA-256. None: not taken over (recorded)."""
+    ) -> tuple[str, str, bool] | None:
+        """Download the original and upload it with owner, drawer and metadata; the Papiq id,
+        the file's SHA-256 and whether Papiq had the file already. None: not taken over
+        (recorded)."""
         assert self._target is not None
         key = item.drawer_key()
         fields = {
@@ -481,6 +567,16 @@ class Migration:
             "metadata": json.dumps(item.metadata),
         }
         if key is not None:
+            if key not in drawers:
+                self.totals.failed += 1
+                self._state.put_document(
+                    item.id,
+                    FAILED,
+                    reason="its drawer could not be prepared (see the drawers)",
+                    notes=item.notes,
+                    detail=detail,
+                )
+                return None
             fields["drawer_id"] = drawers[key]
         with tempfile.TemporaryDirectory(prefix="papiq-migration-") as directory:
             path = Path(directory) / "original"
@@ -495,26 +591,17 @@ class Migration:
             try:
                 accepted = await self._target.upload(path, item.filename, fields)
             except ApiError as error:
+                if error.status == 409 and error.existing:
+                    self.totals.duplicates += 1
+                    return error.existing, download.sha256, True
                 self._refused(item, error, download.sha256, detail)
                 return None
-        return accepted["id"], download.sha256
+        return accepted["id"], download.sha256, False
 
     def _refused(
         self, item: Prepared, error: ApiError, sha256: str, detail: dict[str, Any]
     ) -> None:
-        if error.status == 409 and error.existing:
-            self.totals.duplicates += 1
-            self._state.put_document(
-                item.id,
-                "duplicate",
-                papiq_id=error.existing,
-                sha256=sha256,
-                lane=None,
-                reason="Papiq has the file already (same owner)",
-                notes=item.notes,
-                detail=detail,
-            )
-        elif error.status == 415:
+        if error.status == 415:
             self.totals.skipped += 1
             self._state.put_document(
                 item.id,

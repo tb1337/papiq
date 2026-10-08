@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx2
 
 from papiq_migration import report as reports
-from papiq_migration.config import Config, ConfigError
+from papiq_migration.config import Config, ConfigError, public
 from papiq_migration.migrate import Migration, MigrationError, Progress
 from papiq_migration.paperless import Paperless, PaperlessError
 from papiq_migration.papiq import DELAYS, ApiError, Papiq
@@ -85,7 +85,7 @@ def _stop(stop: asyncio.Event, number: signal.Signals) -> None:
     if stop.is_set():
         raise KeyboardInterrupt
     print(
-        f"\n{number.name}: finishing the documents in progress; run again to continue",
+        f"\n{number.name}: stopping after the uploads in progress; run again to continue",
         file=sys.stderr,
     )
     stop.set()
@@ -122,7 +122,9 @@ async def execute(
                 raise MigrationError(
                     "the Papiq URL and API key are needed (PAPIQ_MIGRATION_PAPIQ_*)"
                 )
-            state.bind(paperless=config.paperless_url, papiq=config.papiq_url or "")
+            state.bind(
+                paperless=public(config.paperless_url) or "", papiq=public(config.papiq_url) or ""
+            )
         if command == "verify":
             assert target is not None
             result = await verify(config, source, target, state, progress=progress)
@@ -140,13 +142,25 @@ async def execute(
             progress=progress,
             poll=poll,
         )
-        totals = await migration.execute()
+        try:
+            totals = await migration.execute()
+        except MigrationError as error:
+            if migration.snapshot is not None:  # what was done so far is in the report
+                partial = reports.build(
+                    command,
+                    migration,
+                    state,
+                    paperless_url=public(config.paperless_url) or "",
+                    papiq_url=public(config.papiq_url),
+                )
+                _write(config, command, reports.to_markdown(partial), reports.to_json(partial))
+            raise error
         result = reports.build(
             command,
             migration,
             state,
-            paperless_url=config.paperless_url,
-            papiq_url=config.papiq_url,
+            paperless_url=public(config.paperless_url) or "",
+            papiq_url=public(config.papiq_url),
         )
         _write(config, command, reports.to_markdown(result), reports.to_json(result))
         progress(

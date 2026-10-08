@@ -80,7 +80,7 @@ class Papiq:
                 await self._sleep(self._delays[attempt])
                 continue
             if response.status_code == 429 and attempt < len(self._delays):
-                await self._sleep(min(float(response.headers.get("retry-after", "5")), 60.0))
+                await self._sleep(_wait(response.headers.get("retry-after")))
                 continue
             if response.status_code >= 400:
                 raise _error(response)
@@ -115,8 +115,8 @@ class Papiq:
     async def create_user(self, username: str) -> dict[str, Any]:
         return await self._object("POST", "/users", json={"username": username})
 
-    async def deactivate_user(self, id: str) -> dict[str, Any]:
-        return await self._object("PATCH", f"/users/{id}", json={"active": False})
+    async def set_active(self, id: str, active: bool) -> dict[str, Any]:
+        return await self._object("PATCH", f"/users/{id}", json={"active": active})
 
     async def create_named(self, path: str, name: str) -> dict[str, Any]:
         return await self._object("POST", path, json={"name": name})
@@ -142,6 +142,14 @@ class Papiq:
 
     async def upload(self, path: Path, filename: str, fields: dict[str, str]) -> dict[str, Any]:
         return await self._object("POST", "/documents", data=fields, upload=(path, filename))
+
+
+def _wait(header: str | None) -> float:
+    """Seconds to wait for a `Retry-After` header; five if it is not a plain number."""
+    try:
+        return min(max(float(header or "5"), 0.0), 60.0)
+    except ValueError:
+        return 5.0
 
 
 def _error(response: httpx2.Response) -> ApiError:

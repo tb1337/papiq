@@ -5,6 +5,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 PREFIX = "PAPIQ_MIGRATION_"
 
@@ -25,6 +26,17 @@ def secret(env: Mapping[str, str], name: str) -> str | None:
         except OSError as error:
             raise ConfigError(f"cannot read {PREFIX}{name}_FILE: {error.strerror}") from None
     return value.strip() if value and value.strip() else None
+
+
+def public(url: str | None) -> str | None:
+    """The address without user name and password, for the state file and the reports."""
+    if not url:
+        return url
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if parts.port:
+        host += f":{parts.port}"
+    return urlunsplit((parts.scheme, host, parts.path, "", ""))
 
 
 @dataclass(frozen=True)

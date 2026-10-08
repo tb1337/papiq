@@ -19,9 +19,11 @@ Papiq image.
 | Permissions | a drawer of the owner for every combination of readers and writers (groups resolved to users), named `Geteilt: anna (schreiben), bob (lesen)`; without extra permissions the owner's default drawer |
 | File | the original (not Paperless' archive PDF) |
 
-Not taken over, and counted in the report: storage paths, `documentlink` fields, the date added,
-history, share links, saved views, workflows, mail rules, matching rules of master data, tag
-hierarchy and inbox flag. Files Papiq does not accept (anything but PDF, JPEG, PNG, TIFF) and
+Not taken over, and listed or counted in the report: storage paths, `documentlink` fields, the
+date added, history, share links, saved views, workflows, mail rules and accounts, documents in
+Paperless' trash, further versions of a file, matching rules of master data, tag hierarchy and
+inbox flag. Users who are inactive in Paperless are created active, because they may own
+documents or receive shares, and deactivated when the migration is through. Files Papiq does not accept (anything but PDF, JPEG, PNG, TIFF) and
 documents in Paperless' trash are listed with the reason.
 
 Documents are uploaded with `channel=migration`, the owner and their metadata
@@ -52,7 +54,9 @@ reports.
 
 The state file maps every Paperless object to its Papiq object and records how far each document
 got. An interrupted run continues where it stopped; a second run creates nothing twice; a state
-file belongs to one Paperless and one Papiq. Reports (`plan`, `run`, `verify`, each as `.md` and
+file belongs to one Paperless and one Papiq (if Papiq is reset, delete the state file, too).
+`verify` compares the SHA-256 in Papiq with the checksum Paperless keeps for the original;
+`--rehash` downloads the originals again and hashes them. Reports (`plan`, `run`, `verify`, each as `.md` and
 `.json`) list every Paperless object with its Papiq counterpart or the reason it has none.
 Exit codes: 0 fine, 1 failures or deviations, 2 cannot go on (wrong key, unreachable server),
 130 stopped.
