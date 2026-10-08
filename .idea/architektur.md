@@ -330,17 +330,28 @@ Papiq wird als ein Docker-Image ausgeliefert. Darin überwacht s6-overlay alle P
 
 ## Migration aus Paperless-ngx
 
-Ein eigener CLI-Client liest die Paperless-REST-API und schreibt über die Papiq-API – damit beweist er zugleich, dass die API vollständig ist. Umsetzung nach dem ersten Wurf.
+Ein eigener CLI-Client (`migration/`) liest die Paperless-REST-API und schreibt über die Papiq-API – damit beweist er zugleich, dass die API vollständig ist. Ein Admin-Token genügt für die ganze Migration (Tobi, 08.10.2026).
 
 | Paperless-ngx | Papiq | Hinweis |
 | --- | --- | --- |
-| Korrespondent | Kontakt | 1:1 |
-| Dokumenttyp | Dokumenttyp | 1:1 |
-| Tag | Tag | 1:1 |
-| Custom Field | Attribut | Geltungsbereich bei Migration festlegen |
-| Besitzer | Besitzer | 1:1 |
-| Speicherpfad | – | entfällt; Abbildung auf Schubladen offen |
-| Berechtigungen pro Dokument | Schublade | Abbildung offen |
+| Nutzer | Nutzer | Zuordnung über den Benutzernamen; fehlende ohne Passwort, Rolle „Nutzer“, inaktive deaktiviert |
+| Korrespondent | Kontakt | per Name zugeordnet |
+| Dokumenttyp | Dokumenttyp | per Name zugeordnet |
+| Tag | Tag | per Name zugeordnet; Hierarchie entfällt |
+| Custom Field | Attribut, global | string/longtext → Text, url → Link, date → Datum, boolean → Ja/Nein, integer/float → Zahl, monetary → Betrag (Währung aus dem Wert, sonst Option, Standard EUR), select → Auswahl; documentlink entfällt |
+| ASN, Notizen | Attribute „ASN“ (Zahl), „Notizen“ (Text) | |
+| Besitzer | Besitzer | ohne Besitzer: der ausführende Admin |
+| Speicherpfad | – | entfällt, nur gezählt |
+| Berechtigungen pro Dokument | Schublade des Besitzers | ohne zusätzliche Rechte: Standardschublade; sonst eine Schublade je Kombination aus Lesern und Schreibern (Gruppen zu Nutzern aufgelöst), geteilt mit „lesen“ bzw. „lesen/schreiben“ |
+| Datei | Original | nicht das Archiv-PDF; Papiq erzeugt ein eigenes |
+| Datum „hinzugefügt“, Verlauf, Freigabelinks, gespeicherte Ansichten, Workflows, Mail-Regeln, Zuordnungsregeln | – | entfallen, im Bericht |
+
+**API-Erweiterungen für die Migration (M12)**
+
+- `POST /documents` nimmt `owner` (nur Admins; der Besitzer muss aktiv sein) und `metadata` (JSON: Titel, Kontakt, Typ, Tags, Dokumentdatum, Attribute; nur Admins und nur mit `channel=migration`). Referenzen und Attributwerte werden beim Upload geprüft (422, nichts gespeichert).
+- Die Metadaten stehen im Protokolleintrag `receive` (`imported`); das Schema bleibt unverändert. Klassifizieren und Attribute extrahieren übernehmen sie bei Kanal `migration` ohne LLM (Ergebnis ok, Grund „taken over from the source system“, `model_version` `imported`). Empfangen, OCR, Parsen und Regeln laufen normal, die Lane ergibt sich wie sonst. Die übernommenen Werte haben keine Feldprüfungen im Protokoll und gelten für Regeln damit als von Menschen gesetzt, nicht als Modellvorschlag. Ein „ab Schritt neu verarbeiten“ wendet dieselben Werte erneut an.
+- `POST /drawers` nimmt `owner_id` (nur Admins), `POST /users` genügt mit Admin-Token (`read_write`) für die Rolle „Nutzer“ ohne Passwort (Passwort oder Rolle Admin weiter nur mit Sitzung). Die Dokumentdetails nennen `sha256`.
+- Keine Erweiterung gibt Nicht-Admins Rechte.
 
 ## Offene Punkte
 
@@ -348,5 +359,5 @@ Ein eigener CLI-Client liest die Paperless-REST-API und schreibt über die Papiq
 - [x] Konfidenz-Schwellen und Anzahl automatischer Retries festlegen (0,9 und 0,75; eine Nachfrage bei unpassender Antwort, dann Rot; Schritt-Retries `PAPIQ_STEP_MAX_ATTEMPTS`)
 - [x] Attribut-Datentypen bestätigen
 - [x] Embedding-Modell für die semantische Suche bestätigen (`snowflake-arctic-embed2`, Tobi 07.10.2026; Bewertung unter „Suche“)
-- [ ] Migration: Paperless-Speicherpfade und -Berechtigungen auf Schubladen abbilden
+- [x] Migration: Paperless-Speicherpfade und -Berechtigungen auf Schubladen abbilden (Speicherpfade entfallen, Berechtigungen: eine Schublade des Besitzers je Kombination aus Lesern und Schreibern; Tobi 08.10.2026)
 - [ ] Verfügbarkeit des Namens „Papiq“ prüfen (GitHub, PyPI, Docker Hub, Marken)
