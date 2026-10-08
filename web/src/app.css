@@ -31,7 +31,8 @@
 	--destructive: #a11d17;
 	--border: #e3e0da;
 	--input: #dedbd5;
-	--ring: #2a9d94;
+	/* Focus outline: petrol, 6:1 on paper (WCAG 1.4.11 asks 3:1). */
+	--ring: #0d6b6b;
 
 	/* The petrol as text and the tinted panel of the sign-in page. */
 	--brand: #0d6b6b;

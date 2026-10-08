@@ -78,6 +78,9 @@ describe('sign-in page', () => {
 		await enterPassword();
 
 		expect((await screen.findByRole('alert')).textContent).toContain(m.login_failed());
+		expect(screen.getByLabelText(m.login_password()).getAttribute('aria-describedby')).toBe(
+			'login-error'
+		);
 		expect(goto).not.toHaveBeenCalled();
 	});
 
@@ -87,6 +90,7 @@ describe('sign-in page', () => {
 
 		const user = await enterPassword();
 		const code = await screen.findByLabelText(m.login_totp_label());
+		expect(document.activeElement).toBe(code);
 		await user.type(code, '123 456');
 		await user.click(screen.getByRole('button', { name: m.login_submit() }));
 
@@ -129,6 +133,26 @@ describe('sign-in page', () => {
 		expect((await screen.findByRole('alert')).textContent).toContain(
 			m.error_too_many({ seconds: 30 })
 		);
+	});
+
+	it('shows the detail of other refusals', async () => {
+		fetchMock.mockResolvedValueOnce(
+			json(
+				503,
+				{
+					type: 'about:blank',
+					title: 'Service Unavailable',
+					status: 503,
+					detail: 'database: down'
+				},
+				'application/problem+json'
+			)
+		);
+		render(Page, { data: { next: '/ui/', oidc: null } });
+
+		await enterPassword();
+
+		expect((await screen.findByRole('alert')).textContent).toContain('database: down');
 	});
 
 	it('offers the identity provider only when one is configured', () => {

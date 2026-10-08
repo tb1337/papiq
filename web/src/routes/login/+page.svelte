@@ -1,6 +1,7 @@
 <script lang="ts">
 	import KeyRound from '@lucide/svelte/icons/key-round';
 	import OctagonX from '@lucide/svelte/icons/octagon-x';
+	import { tick } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { api } from '#lib/api/client.ts';
 	import { apiError } from '#lib/api/problem.ts';
@@ -24,9 +25,19 @@
 	let code = $state('');
 	let message = $state<string | null>(null);
 	let busy = $state(false);
+	let codeInput = $state<HTMLInputElement | null>(null);
+
+	// The code field takes the focus as soon as it appears.
+	async function showStep(next: Step) {
+		step = next;
+		code = '';
+		await tick();
+		codeInput?.focus();
+	}
 
 	async function submit(event: SubmitEvent) {
 		event.preventDefault();
+		if (busy) return;
 		busy = true;
 		message = null;
 		try {
@@ -47,12 +58,11 @@
 				password = '';
 				await goto(data.next, { replaceState: true });
 			} else if (response.status === 401 && error?.second_factor_required) {
-				step = 'totp';
-				code = '';
+				await showStep('totp');
 			} else if (response.status === 401) {
 				message = step === 'password' ? m.login_failed() : m.login_code_failed();
 			} else {
-				message = describeError(await apiError(response));
+				message = describeError(await apiError(response, error));
 			}
 		} catch (error) {
 			message = describeError(error);
@@ -68,9 +78,8 @@
 	}
 
 	function swapCode() {
-		step = step === 'recovery' ? 'totp' : 'recovery';
-		code = '';
 		message = null;
+		void showStep(step === 'recovery' ? 'totp' : 'recovery');
 	}
 </script>
 
@@ -116,6 +125,8 @@
 								autocomplete="username"
 								required
 								bind:value={username}
+								aria-invalid={message ? true : undefined}
+								aria-describedby={message ? 'login-error' : undefined}
 								class="h-12"
 							/>
 						</Field.Field>
@@ -128,6 +139,8 @@
 								autocomplete="current-password"
 								required
 								bind:value={password}
+								aria-invalid={message ? true : undefined}
+								aria-describedby={message ? 'login-error' : undefined}
 								class="h-12"
 							/>
 						</Field.Field>
@@ -142,6 +155,9 @@
 								maxlength={8}
 								required
 								bind:value={code}
+								aria-invalid={message ? true : undefined}
+								aria-describedby={message ? 'login-error' : undefined}
+								bind:ref={codeInput}
 								class="h-14 text-center font-mono text-2xl tracking-[0.4em]"
 							/>
 						</Field.Field>
@@ -155,6 +171,9 @@
 								spellcheck={false}
 								required
 								bind:value={code}
+								aria-invalid={message ? true : undefined}
+								aria-describedby={message ? 'login-error' : undefined}
+								bind:ref={codeInput}
 								class="h-14 text-center font-mono text-lg"
 							/>
 						</Field.Field>
@@ -162,6 +181,7 @@
 
 					{#if message}
 						<div
+							id="login-error"
 							role="alert"
 							class="flex items-start gap-2.5 rounded-xl bg-lane-red px-4 py-3.5 text-sm text-lane-red-foreground"
 						>
@@ -170,7 +190,8 @@
 						</div>
 					{/if}
 
-					<Button type="submit" size="lg" disabled={busy}>{m.login_submit()}</Button>
+					<!-- Not disabled while busy: the focus stays on the button. -->
+					<Button type="submit" size="lg" aria-disabled={busy}>{m.login_submit()}</Button>
 
 					{#if step === 'password'}
 						{#if data.oidc}
