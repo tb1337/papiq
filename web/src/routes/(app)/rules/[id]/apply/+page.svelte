@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
-	import { onDestroy } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { toast } from 'svelte-sonner';
 	import { goto } from '$app/navigation';
@@ -63,7 +63,7 @@
 		const wanted = id;
 		Promise.all([
 			unwrap(api.GET('/api/v1/rules/{id}', { params: { path: { id: wanted } } })),
-			lookup ?? loadLookup()
+			untrack(() => lookup) ?? loadLookup()
 		]).then(
 			([found, loaded]) => {
 				if (wanted !== id) return;

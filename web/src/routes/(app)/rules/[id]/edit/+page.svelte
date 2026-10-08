@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
+	import { untrack } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
@@ -42,7 +43,7 @@
 		const wanted = id;
 		Promise.all([
 			unwrap(api.GET('/api/v1/rules/{id}', { params: { path: { id: wanted } } })),
-			lookup ?? loadLookup()
+			untrack(() => lookup) ?? loadLookup()
 		]).then(
 			([found, loaded]) => {
 				if (wanted !== id) return;

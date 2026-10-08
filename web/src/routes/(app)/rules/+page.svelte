@@ -31,9 +31,12 @@
 
 	const ownerName = (id: string) => users.find((user) => user.id === id)?.username ?? id;
 
+	let loads = 0;
+
 	async function load() {
+		const current = ++loads;
 		try {
-			[rules, users] = await Promise.all([
+			const [found, names] = await Promise.all([
 				unwrap(
 					api.GET('/api/v1/rules', {
 						params: { query: { include_disabled: true, all_users: allUsers || undefined } }
@@ -41,9 +44,11 @@
 				),
 				users.length > 0 ? users : unwrap(api.GET('/api/v1/users'))
 			]);
-			problem = null;
+			// An earlier answer arriving late (the toggle switched twice) is dropped.
+			if (current !== loads) return;
+			[rules, users, problem] = [found, names, null];
 		} catch (error) {
-			problem = describeError(error);
+			if (current === loads) problem = describeError(error);
 		}
 	}
 
@@ -138,12 +143,11 @@
 					{#if canChangeRule(rule, session.user)}
 						<div class="flex items-center gap-2">
 							<Switch
-								checked={rule.enabled}
+								bind:checked={() => rule.enabled, (enabled) => switchRule(rule, enabled)}
 								disabled={busy === rule.id}
 								aria-label={rule.enabled
 									? m.rule_switch_off({ name: rule.name })
 									: m.rule_switch_on({ name: rule.name })}
-								onCheckedChange={(enabled) => switchRule(rule, enabled)}
 							/>
 							<Button
 								variant="ghost"
