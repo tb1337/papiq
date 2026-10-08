@@ -14,6 +14,8 @@ services:
     volumes:
       - ..:/workspaces/papiq:cached
       - uv-cache:/home/vscode/.cache/uv
+      - claude-config:/home/vscode/.claude
+      - gh-config:/home/vscode/.config/gh
     extra_hosts:
       # Lets the container reach a Ollama on the host on Linux, too (built in on Docker Desktop).
       - host.docker.internal:host-gateway
@@ -80,3 +82,7 @@ volumes:
   garage-meta:
   garage-data:
   meilisearch-data:
+  claude-config:
+    name: claude-config
+  gh-config:
+    name: gh-config
