@@ -4,6 +4,10 @@ reindex]`.
 - `check` (default): validate the configuration and print it without secrets.
 - `migrate`: validate, then bring the configured database to the newest schema. Run before the
   API and the worker start (in the image: `init-migrations`).
+- `check-schema [--wait SECONDS]`: exit 0 if the database is at the newest schema of this
+  version, otherwise 1; with `--wait`, keep looking for that long while it is older or not
+  reachable. Never changes the database. The worker's start in the image waits with it for the
+  API container's migration.
 - `api`: serve the REST API until SIGTERM or SIGINT. Only with `PAPIQ_ROLE` `all` or `api`.
 - `worker`: run the worker service until SIGTERM or SIGINT. Only with `PAPIQ_ROLE` `all` or
   `worker`.
@@ -35,7 +39,7 @@ import structlog
 
 from papiq.adapters.inbound.evaluation import EvaluationSetError
 from papiq.composition.api import run_api
-from papiq.composition.database import migrate_database
+from papiq.composition.database import check_schema, migrate_database
 from papiq.composition.endpoints import external_endpoints
 from papiq.composition.errors import ConfigurationError
 from papiq.composition.evaluation import run_evaluation
@@ -58,7 +62,15 @@ def main(argv: Sequence[str] = ()) -> int:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["check", "migrate", *SERVICES, "evaluate", "evaluate-search", "reindex"],
+        choices=[
+            "check",
+            "migrate",
+            "check-schema",
+            *SERVICES,
+            "evaluate",
+            "evaluate-search",
+            "reindex",
+        ],
         default="check",
     )
     parser.add_argument(
@@ -69,6 +81,7 @@ def main(argv: Sequence[str] = ()) -> int:
     parser.add_argument(
         "--cases", type=Path, help="evaluate, evaluate-search: the set (default: evaluation)"
     )
+    parser.add_argument("--wait", type=float, help="check-schema: seconds to wait (default: 0)")
     parser.add_argument("--output", type=Path, help="where to write the report")
     parser.add_argument("--models", help="evaluate-search: embedding models, comma separated")
     parser.add_argument("--ratios", help="evaluate-search: semantic ratios (default: 0,0.5,1)")
@@ -79,6 +92,8 @@ def main(argv: Sequence[str] = ()) -> int:
         arguments.fake or arguments.cases or arguments.output
     ):
         parser.error("--fake, --cases and --output only go with evaluate and evaluate-search")
+    if command != "check-schema" and arguments.wait is not None:
+        parser.error("--wait only goes with check-schema")
     if command != "evaluate-search" and (arguments.models or arguments.ratios or arguments.queries):
         parser.error("--models, --ratios and --queries only go with evaluate-search")
 
@@ -126,6 +141,9 @@ def main(argv: Sequence[str] = ()) -> int:
     if command == "reindex":
         return _reindex(settings)
 
+    if command == "check-schema":
+        return _check_schema(settings, wait=arguments.wait or 0)
+
     if command == "migrate":
         try:
             asyncio.run(migrate_database(settings))
@@ -134,6 +152,19 @@ def main(argv: Sequence[str] = ()) -> int:
             return 1
         log.info("database migrated", db_type=settings.db_type)
     return 0
+
+
+def _check_schema(settings: Settings, *, wait: float) -> int:
+    log = structlog.get_logger("papiq.composition")
+    state = asyncio.run(check_schema(settings, wait=wait))
+    if state == "current":
+        log.info("database schema is current", db_type=settings.db_type)
+        return 0
+    if state == "newer":
+        log.error("the database was migrated by a newer version of Papiq: update this image")
+    else:
+        log.error("the database schema is not migrated", db_type=settings.db_type)
+    return 1
 
 
 def _reindex(settings: Settings) -> int:

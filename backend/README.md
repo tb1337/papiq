@@ -127,7 +127,10 @@ SQLAlchemy 2 Core (async; aiosqlite, asyncpg); the domain classes are not ORM-ma
 
 Migrations are one Alembic chain for both databases (batch mode on SQLite), in
 `adapters/outbound/sql/migrations`. Apply them with `python -m papiq.composition migrate`; it
-creates a missing SQLite file. A schema change needs both an edit of `tables.py` and a new
+creates a missing SQLite file. `python -m papiq.composition check-schema [--wait SECONDS]` only
+looks (exit 0 if the schema is at the newest revision of this version; a database migrated by a
+newer version fails at once); the image's worker waits with it for the API container's migration.
+A schema change needs both an edit of `tables.py` and a new
 revision; a test compares the migrated schema with the table definitions.
 
 ## Object store

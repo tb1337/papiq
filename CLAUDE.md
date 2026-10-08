@@ -31,6 +31,7 @@ uv run pytest -m "not docling"   # without the slow Docling tests
 uv run pytest -n auto            # in parallel (pytest-xdist), as CI does
 uv run python -m papiq.composition   # validate PAPIQ_ configuration
 uv run python -m papiq.composition migrate   # bring the configured database to the newest schema
+uv run python -m papiq.composition check-schema   # exit 0 if the schema is at the newest revision
 uv run python -m papiq.composition api       # serve the REST API until SIGTERM
 uv run python -m papiq.composition worker    # run the worker until SIGTERM
 ```

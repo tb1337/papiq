@@ -337,6 +337,15 @@ def test_unknown_variables_are_listed(monkeypatch: pytest.MonkeyPatch) -> None:
     assert find_unknown_variables() == ["PAPIQ_DB_TYPO"]
 
 
+def test_variables_of_the_image_are_not_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`PUID`, `PGID` and the `S6_` variables belong to the container, not to Papiq."""
+    set_env(
+        monkeypatch,
+        {"PUID": "1000", "PGID": "1000", "S6_SERVICES_GRACETIME": "40000", "TZ": "Europe/Berlin"},
+    )
+    assert find_unknown_variables() == []
+
+
 def test_webhook_defaults() -> None:
     settings = load_settings()
     assert settings.webhooks_per_user == 20
