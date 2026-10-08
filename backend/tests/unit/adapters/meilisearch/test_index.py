@@ -541,6 +541,15 @@ def test_the_filter_for_a_user_with_drawers_and_criteria() -> None:
     )
 
 
+def test_the_filter_of_a_search_over_everything() -> None:
+    everything = Visibility(UserId(uid(100)), frozenset(), everything=True)
+    assert filter_expression(SearchQuery(text="x", visibility=everything)) is None
+    query = SearchQuery(
+        text="x", visibility=everything, filter=DocumentFilter(contact=ContactId(uid(3)))
+    )
+    assert filter_expression(query) == f'contact_id = "{uid(3)}"'
+
+
 def test_segments() -> None:
     mark = HIGHLIGHT_START
     end = HIGHLIGHT_END

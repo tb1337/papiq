@@ -309,6 +309,8 @@ class UnitOfWorkContract:
             accessible = {drawer.id for drawer in await uow.drawers.list_accessible(bob.id)}
             assert accessible == {bob_default.id, shared.id}
             assert await uow.drawers.list_accessible(carol.id) == []
+            every = {drawer.id for drawer in await uow.drawers.list_all()}
+            assert every >= {alice_default.id, bob_default.id, shared.id}
 
     # --- master data ----------------------------------------------------------------------------
 
@@ -505,6 +507,12 @@ class UnitOfWorkContract:
                     found = await uow.documents.query_visible(user.id, only, limit=100)
                     assert {d.id for d in found} <= expected, user.username
         assert len(expected) == 0  # the stranger sees nothing
+        async with uow_factory() as uow:
+            every = await uow.documents.query(DocumentFilter(), limit=100)
+            assert {d.id for d in every} >= {d.id for d in documents}
+            yellow = DocumentFilter(lanes=frozenset({Lane.YELLOW}), drawer=shared.id)
+            yellow_ids = {d.id for d in await uow.documents.query(yellow, limit=100)}
+            assert yellow_ids == {d.id for d in documents if d.lane is Lane.YELLOW}
 
     async def test_query_filters_and_pages(self, uow_factory: UnitOfWorkFactory) -> None:
         owner, drawer = await owner_with_drawer(uow_factory)
@@ -576,6 +584,17 @@ class UnitOfWorkContract:
                 pages += [d.id for d in page]
                 before = page[-1].id
             assert pages == [d.id for d in everything]
+
+            # Over every document: the same filters and paging.
+            assert [d.id for d in await query(owner.id, both_tags, limit=9)] == [
+                d.id for d in await uow.documents.query(both_tags, limit=9)
+            ]
+            in_drawer = [d.id for d in everything if d.drawer_id == drawer.id]
+            first = await uow.documents.query(DocumentFilter(drawer=drawer.id), limit=2)
+            rest = await uow.documents.query(
+                DocumentFilter(drawer=drawer.id), before=first[-1].id, limit=100
+            )
+            assert [d.id for d in [*first, *rest]] == in_drawer
 
     async def test_removing_a_document_removes_its_processing_log(
         self, uow_factory: UnitOfWorkFactory
