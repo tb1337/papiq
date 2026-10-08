@@ -508,15 +508,17 @@ A user subscribes to document events and Papiq sends a signed `POST` to a URL (n
 Assistant, any service). Webhooks belong to the user who created them; the API is under
 `/webhooks` (create, list, change, switch off, delete, renew the secret, test, delivery log).
 Admins read every webhook and its log, never the secret, and do not change other users' webhooks.
+What an admin reads includes the target URL (which may be a capability URL) and, in the log, the
+document IDs and event types of that user's deliveries.
 At most `PAPIQ_WEBHOOKS_PER_USER` (20) per user.
 
 **Events.** `document.received`, `document.step_completed`, `document.lane_changed`,
 `document.filed`, `document.updated`, `document.deleted`, or `*` for all, also future ones. A
 webhook only hears of documents its owner may read, as with the event stream: the right is
 checked when the event is queued and again before every attempt, and a user who lost access in
-between gets nothing (the log shows `dropped`). A document counts as done at
-`document.lane_changed` to green, or at `document.filed`; `document.filed` is not sent while the
-document is still being processed. `document.deleted` goes to those who could read the document
+between gets nothing (the log shows `dropped`). The body carries no lane, so a receiver
+that wants the state of the document fetches it; `document.filed` is not sent while the document
+is still being processed. `document.deleted` goes to those who could read the document
 when it was deleted.
 
 **The request.** `POST <url>`, `Content-Type: application/json`, `User-Agent: Papiq/<version>`,
@@ -576,6 +578,8 @@ KEY=$(printf %s "${SECRET#whsec_}" | base64 -d | od -An -vtx1 | tr -d ' \n')
 final: redirects are never followed, since the signature would not hold for another target.
 After `PAPIQ_WEBHOOK_DISABLE_AFTER` (20) deliveries given up in a row Papiq switches the webhook
 off (`active: false`, `disabled_reason: failing`); switching it on again clears the count.
+A receiver that is down delays the deliveries behind it, since the `PAPIQ_WEBHOOK_CONCURRENCY`
+loops wait for it up to the timeout per attempt; the pipeline is not affected.
 
 **The log** (`GET /webhooks/{id}/deliveries`, newest first) has one row per attempt: time,
 event, `outcome` (`delivered`, `retrying`, `gave_up`, `dropped`), HTTP status, duration, error
@@ -600,7 +604,7 @@ The API serves the Model Context Protocol (Streamable HTTP, stateless, JSON answ
 `/api/v1/mcp`, so AI clients can search documents, read them and correct their metadata.
 `PAPIQ_MCP_ENABLED=false` removes it. It is not part of the OpenAPI document.
 
-Authentication: a personal API token (`Settings > API tokens`, or `POST /auth/tokens`) as
+Authentication: a personal API token (`POST /auth/tokens`; the web UI will offer it later) as
 `Authorization: Bearer papiq_…`; cookies do not count. Without a valid token the answer is `401`
 (`WWW-Authenticate: Bearer`). A client sees exactly what its token's user sees. The scope works
 as in REST: `read` may use every tool but `update_metadata`.

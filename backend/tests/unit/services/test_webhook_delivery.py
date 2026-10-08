@@ -358,7 +358,7 @@ async def test_a_lost_right_drops_the_delivery_without_sending(world: World) -> 
     assert world.sender.requests == []
     (row,) = await log(world, webhook)
     assert (row.outcome, row.status_code) == (DeliveryOutcome.DROPPED, None)
-    assert "no longer see" in (row.error or "")
+    assert row.error == "the document is not available to the owner"
     assert (await world.webhooks.get(friend.id, webhook.id)).failed_streak == 0
     assert not await service.run_next_job()
 
@@ -387,7 +387,7 @@ async def test_a_switched_off_webhook_or_deactivated_owner_or_vanished_document_
     assert reasons == [
         "the webhook is switched off",
         "the owner's account is not active",
-        "the document no longer exists",
+        "the document is not available to the owner",
     ]
 
 

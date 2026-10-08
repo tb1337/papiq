@@ -110,6 +110,7 @@ class WebhookOut(BaseModel):
 
 class WebhookCreated(WebhookOut):
     secret: str = Field(
+        repr=False,
         description=(
             "The signing secret (`whsec_…`); shown only now. Receivers verify the "
             "`webhook-signature` header with it."

@@ -7,7 +7,7 @@ Other users do not learn that someone else's webhook exists (NotFoundError).
 
 import builtins
 from collections.abc import Collection
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from papiq.core.domain.errors import ConflictError, NotFoundError, PermissionDeniedError
 from papiq.core.domain.ids import DeliveryId, UserId, WebhookId
@@ -25,7 +25,7 @@ class CreatedWebhook:
     """A new or renewed secret is shown here and nowhere else."""
 
     webhook: Webhook
-    secret: str
+    secret: str = field(repr=False)
 
 
 def secret_context(id: WebhookId) -> bytes:

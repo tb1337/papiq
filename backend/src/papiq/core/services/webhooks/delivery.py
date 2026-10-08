@@ -401,6 +401,9 @@ async def _owners_who_may_read(
     return allowed
 
 
+DOCUMENT_UNAVAILABLE = "the document is not available to the owner"
+
+
 async def _reason_to_drop(
     uow: UnitOfWork, webhook: Webhook, event_type: str, document_id: DocumentId | None
 ) -> str | None:
@@ -414,9 +417,9 @@ async def _reason_to_drop(
         return None  # the readers were fixed with the event
     document = await uow.documents.find(document_id)
     if document is None:
-        return "the document no longer exists"
+        return DOCUMENT_UNAVAILABLE
     if not await _may_read(uow, owner, document):
-        return "the owner may no longer see the document"
+        return DOCUMENT_UNAVAILABLE  # the same words: gone and hidden must not be told apart
     return None
 
 
