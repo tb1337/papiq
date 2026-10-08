@@ -5,7 +5,8 @@
 #   deploy/test-image.sh papiq:local
 #
 # Starts the image with SQLite and the filesystem and checks: configuration from secret files,
-# migration, health, the user of the Papiq processes (PUID/PGID, never root), PAPIQ_ROLE, a PDF
+# migration, health, the user of the Papiq processes (PUID/PGID, never root), the web UI below
+# /ui (files, page fallback, cache headers, the API's paths untouched), PAPIQ_ROLE, a PDF
 # through OCR and Docling up to its lane (no language model: classification is uncertain, so
 # the lane is yellow), invalid configuration and a clean `docker stop`. Needs docker, curl and
 # python3 on the host; takes a few minutes. No language model, no other service.
@@ -83,7 +84,10 @@ wait_for() { # wait_for SECONDS DESCRIPTION COMMAND...
 healthy() { [ "$(status "$1")" = healthy ]; }
 exited() { [ "$(docker inspect --format '{{.State.Status}}' "$prefix-$1")" = exited ]; }
 logs() { docker logs "$prefix-$1" 2>&1; }
-url() { echo "http://$(docker port "$prefix-$1" 8000/tcp | head -1)/api/v1"; }
+origin() { echo "http://$(docker port "$prefix-$1" 8000/tcp | head -1)"; }
+url() { echo "$(origin "$1")/api/v1"; }
+# header NAME URL: the value of a response header (HEAD request), without the line end.
+header() { curl -fsSI "$2" | tr -d '\r' | awk -v name="$1" 'tolower($1) == tolower(name) ":" { $1 = ""; sub(/^ /, ""); print }'; }
 
 # Uid:gid and command line of every process whose command line contains $2.
 processes() { # processes NAME PATTERN
@@ -127,6 +131,31 @@ check "the admin password does not show in the logs" \
   test "$(logs all | grep -cF -f "$work/admin_password")" -eq 0
 check "\`papiq\` runs the commands of the composition root as the same user" \
   docker exec "$prefix-all" papiq check-schema
+
+step "web UI below /ui"
+ui=$(origin all)/ui
+page=$(curl -fsS "$ui/")
+check "/ui/ serves the page" grep -q '<div' <<<"$page"
+check "the page carries its content security policy" grep -q 'http-equiv="content-security-policy"' <<<"$page"
+check "the page is revalidated (no-cache)" test "$(header cache-control "$ui/")" = no-cache
+check "the headers forbid framing" test "$(header content-security-policy "$ui/")" = "frame-ancestors 'none'"
+check "the headers forbid type sniffing" test "$(header x-content-type-options "$ui/")" = nosniff
+asset=$(grep -oE '/ui/_app/immutable/[^"]+\.js' <<<"$page" | head -1)
+if [ -n "$asset" ]; then
+  check "hashed files are cached for good ($asset)" \
+    test "$(header cache-control "$(origin all)$asset")" = 'public, max-age=31536000, immutable'
+else
+  fail "the page names no file below /ui/_app/immutable"
+fi
+check "page paths get the same page" test "$(curl -fsS "$ui/documents")" = "$page"
+check "a missing file is 404" test "$(curl -s -o /dev/null -w '%{http_code}' "$ui/missing.js")" = 404
+check "/ leads to /ui/" \
+  test "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$(origin all)/")" = "302 $ui/"
+check "/api/v1/health still answers JSON" \
+  bash -c "curl -fsS -o /dev/null -w '%{content_type}' $(url all)/health | grep -q '^application/json'"
+check "an unknown API path is still a 404 problem" test \
+  "$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "$(url all)/does-not-exist")" = \
+  "404 application/problem+json"
 
 step "a PDF through OCR and Docling up to its lane"
 jar=$work/cookies
