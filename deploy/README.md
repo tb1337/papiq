@@ -6,9 +6,9 @@ processes inside it:
 | Service | Type | Purpose |
 | --- | --- | --- |
 | `init-papiq` | oneshot | check `PUID`/`PGID`, prepare the volume, validate the configuration |
-| `init-migrations` | oneshot | `PAPIQ_ROLE` `all`/`api`: migrate the database; `worker`: wait for the schema |
+| `init-migrations` | oneshot | `PAPIQ_ROLE` `all`/`api`: migrate the database; `worker`: nothing |
 | `svc-api` | longrun | Uvicorn with FastAPI: REST, MCP, SSE (web UI files follow with M10) |
-| `svc-worker` | longrun | pipeline jobs, outbox dispatch, webhook delivery |
+| `svc-worker` | longrun | waits for the schema (role `worker`), then pipeline jobs, outbox dispatch, webhook delivery |
 
 Outside the Papiq container: Postgres (if used), Garage (if S3 is used), Meilisearch, the
 language model, an identity provider. With SQLite and the file system, the database and the files
@@ -16,7 +16,7 @@ live on one volume of the Papiq container.
 
 Image: Debian slim, Python 3.13, OCRmyPDF with Tesseract (German, English), Docling with the CPU
 build of PyTorch and its models (never downloaded at run time), s6-overlay 3.2.3.2. For `amd64` and
-`arm64`. About 4.6 GB. Nothing secret is part of the image.
+`arm64`. About 3 GB (`docker image inspect`). Nothing secret is part of the image.
 
 ```sh
 docker build --target runtime -t papiq:local .     # in the repository root
@@ -58,6 +58,8 @@ in [backend/README.md](../backend/README.md#configuration).
 **Secrets** are passed as files (Docker secrets): `PAPIQ_<NAME>_FILE=/run/secrets/…`; the file's
 content is the value, and setting both `PAPIQ_<NAME>` and `PAPIQ_<NAME>_FILE` is an error. The files
 must be readable by `PUID`:`PGID`, because the services read them as that user.
+Pass secrets only this way: a secret in a plain `PAPIQ_…` variable is also stored, readable by
+every process, in `/run/s6/container_environment` inside the container, and shows in `docker inspect`.
 `create-secrets.sh` writes them with random values (`openssl rand`), keeps files that exist, and
 gives Garage's two secrets the mode `0600` it insists on. By hand:
 
@@ -114,9 +116,10 @@ every endpoint outside the local network.
 
 Separate containers run the same image: for example two services in one Compose file, one with
 `PAPIQ_ROLE: api`, one with `worker`, otherwise the same environment. The worker waits for the API
-container to migrate (`init-migrations` runs `check-schema`, ten minutes at most; then the
-container stops with the reason in its log). A database migrated by a newer image is refused at
-once. Run a single API instance: the event streams assume it.
+container to migrate (`svc-worker` runs `check-schema --wait 600`, then looks again; the container
+reports unhealthy meanwhile, and `docker stop` ends the wait at once). A database migrated by a
+newer image is refused with a message every ten seconds. Run a single API instance: the event
+streams assume it.
 
 ## User and volumes
 
@@ -141,8 +144,8 @@ The caches of the libraries go to a `HOME` that disappears with the container.
 The image has a Docker `HEALTHCHECK` (every 30 s, 120 s to start): the API through
 `GET /api/v1/health` (status `ok` or `degraded` is healthy; `unavailable`, a database or object
 store that cannot be reached, is not) and the worker through its s6 service (up for at least ten
-seconds, so a crash loop shows). The worker has no endpoint of its own: a hung worker that is still
-a process is not detected. Compose `depends_on` can use `condition: service_healthy`.
+seconds, so a crash loop shows, and past its wait for the schema). The worker has no endpoint of
+its own: a hung worker that is still a process is not detected. Compose `depends_on` can use `condition: service_healthy`.
 
 All services write to stdout/stderr of the container (`docker compose logs papiq`), as JSON by
 default. s6's own messages (`s6-rc: info: …`) are there as well. If an init service fails (invalid
@@ -163,7 +166,9 @@ together:
 | `stop_grace_period` (Compose) / `docker stop -t` | 60 s | above the s6 value, or Docker kills the whole container |
 
 Raise all three together if you raise the worker's timeout. An idle container stops in about two
-seconds with exit code 0.
+seconds with exit code 0, a worker that waits for the schema as well. A migration that is running
+cannot be interrupted: `docker stop` waits for it up to `stop_grace_period`, then kills it; the
+migration is one transaction and is rolled back.
 
 ## Reverse proxy
 
@@ -221,9 +226,11 @@ claude mcp add --transport http papiq http://localhost:8000/api/v1/mcp \
 What to back up: the **database** and the **object store** (the original files and their
 derivatives). **Not** Meilisearch: the index is derived; after a restore `papiq reindex` rebuilds
 it. Keep the secrets (`PAPIQ_SECRET_KEY` above all) in your password manager, not only in the
-backup. Back up the database first, then the objects: objects never change (their key is the SHA-256 of
-the content), so objects that came in after the database copy are only unused files, while the
-other order could leave documents without a file.
+backup. Back up the database first, then the objects: the originals never change (their key is the SHA-256
+of the content), so objects that came in after the database copy are only unused files, while the
+other order could leave documents without a file. The derivatives (archive PDF, text, preview) are
+written again when a document is processed again; a copy of an older state is still usable, and
+reprocessing the document renews it.
 
 ### SQLite and file system
 
@@ -232,6 +239,7 @@ SQLite's backup, which Python in the image provides (no `sqlite3` program needed
 
 ```sh
 mkdir backup                       # a new, empty folder for each backup
+# -u is your PUID:PGID: SQLite needs write access to the volume for its shared-memory file.
 docker compose -f compose.sqlite.yml exec -u 1000:1000 papiq python -c "
 import sqlite3
 source = sqlite3.connect('/data/papiq.db')
@@ -243,14 +251,13 @@ docker compose -f compose.sqlite.yml exec papiq rm /tmp/papiq-backup.db
 docker compose -f compose.sqlite.yml cp papiq:/data/objects backup/
 ```
 
-Restore into an empty or existing stack (the volume's files are replaced):
+Restore into an empty or existing stack (the database and the objects in the volume are replaced):
 
 ```sh
 docker compose -f compose.sqlite.yml down                    # keeps the volumes
-docker run --rm -v papiq-sqlite_papiq-data:/data -v "$PWD/backup:/backup:ro" alpine sh -c '
-  rm -f /data/papiq.db /data/papiq.db-wal /data/papiq.db-shm &&
-  cp /backup/papiq.db /data/papiq.db &&
-  mkdir -p /data/objects && cp -a /backup/objects/. /data/objects/ &&
+docker run --rm -v papiq-sqlite_papiq-data:/data -v "$PWD/backup:/backup:ro" alpine:3.24.2 sh -c '
+  rm -rf /data/papiq.db /data/papiq.db-wal /data/papiq.db-shm /data/objects &&
+  cp /backup/papiq.db /data/papiq.db && cp -a /backup/objects /data/objects &&
   chown -R 1000:1000 /data'                                  # PUID:PGID
 docker compose -f compose.sqlite.yml up -d
 docker compose -f compose.sqlite.yml exec papiq papiq reindex   # rebuild the search index
@@ -264,7 +271,7 @@ docker compose -f compose.postgres.yml exec -T postgres pg_dump -U papiq -Fc pap
 # Objects: Garage's two volumes, with Garage stopped (a consistent copy of its metadata).
 docker compose -f compose.postgres.yml stop garage
 docker run --rm -v papiq-postgres_garage-meta:/meta:ro -v papiq-postgres_garage-data:/data:ro \
-  -v "$PWD/backup:/backup" alpine tar -C / -czf /backup/garage.tar.gz meta data
+  -v "$PWD/backup:/backup" alpine:3.24.2 tar -C / -czf /backup/garage.tar.gz meta data
 docker compose -f compose.postgres.yml start garage
 ```
 
@@ -276,7 +283,7 @@ docker compose -f compose.postgres.yml up -d postgres
 docker compose -f compose.postgres.yml exec -T postgres pg_restore -U papiq -d papiq \
   --clean --if-exists --no-owner < backup/papiq.dump
 docker run --rm -v papiq-postgres_garage-meta:/meta -v papiq-postgres_garage-data:/data \
-  -v "$PWD/backup:/backup:ro" alpine sh -c 'rm -rf /meta/* /data/* && tar -C / -xzf /backup/garage.tar.gz'
+  -v "$PWD/backup:/backup:ro" alpine:3.24.2 sh -c 'rm -rf /meta/* /data/* && tar -C / -xzf /backup/garage.tar.gz'
 docker compose -f compose.postgres.yml up -d
 docker compose -f compose.postgres.yml exec papiq papiq reindex
 ```

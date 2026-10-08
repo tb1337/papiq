@@ -21,6 +21,21 @@ mkdir -p /run/papiq-home
 chown "$puid:$pgid" /run/papiq-home
 chmod 700 /run/papiq-home
 
+# The folders of the volume are chowned: refuse relative paths and system folders, where a typo
+# in a setting would hand the image to PUID:PGID or leave the data outside a volume.
+safe() { # safe VARIABLE FOLDER
+  case "$2" in
+    /) fail "$1: '$2' is the root folder" ;;
+    /*) ;;
+    *) fail "$1: '$2' must be an absolute path (the image keeps its data in /data)" ;;
+  esac
+  case "$(printf %s "$2" | cut -d/ -f2)" in
+    bin | boot | dev | etc | lib | lib64 | opt | proc | root | run | sbin | sys | usr)
+      fail "$1: '$2' is a system folder; use /data or a mounted volume"
+      ;;
+  esac
+}
+
 # Make PUID:PGID the owner of the folder. Recursive only if the folder itself belongs to someone
 # else, so that a large object store is not walked at every start.
 own() {
@@ -35,6 +50,7 @@ lower() { printf %s "$1" | tr '[:upper:]' '[:lower:]'; }
 
 if [ "$(lower "${PAPIQ_DB_TYPE:-sqlite}")" = sqlite ]; then
   database=${PAPIQ_DB_SQLITE_PATH:-/data/papiq.db}
+  safe PAPIQ_DB_SQLITE_PATH "$(dirname "$database")"
   own "$(dirname "$database")"
   # A restored backup may have left the files with another owner.
   for file in "$database" "$database-wal" "$database-shm"; do
@@ -44,6 +60,7 @@ if [ "$(lower "${PAPIQ_DB_TYPE:-sqlite}")" = sqlite ]; then
   done
 fi
 if [ "$(lower "${PAPIQ_STORAGE_TYPE:-filesystem}")" = filesystem ]; then
+  safe PAPIQ_STORAGE_PATH "${PAPIQ_STORAGE_PATH:-/data/objects}"
   own "${PAPIQ_STORAGE_PATH:-/data/objects}"
 fi
 

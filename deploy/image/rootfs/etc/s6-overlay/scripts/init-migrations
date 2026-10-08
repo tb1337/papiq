@@ -1,11 +1,12 @@
 #!/command/with-contenv sh
-# The database schema must be right before API and worker start. `all` and `api` migrate;
-# a `worker` never does and waits for the API container to (ten minutes, then the container
-# stops with the reason in its log).
+# The database schema must be right before API and worker start. `all` and `api` migrate here.
+# A `worker` never migrates; svc-worker waits for the schema itself (a oneshot cannot be stopped
+# by `docker stop`, a service can).
 set -eu
 
 role=$(printf %s "${PAPIQ_ROLE:-all}" | tr '[:upper:]' '[:lower:]')
 if [ "$role" = worker ]; then
-  exec papiq-run python -m papiq.composition check-schema --wait 600
+  echo "init-migrations: PAPIQ_ROLE=worker does not migrate; svc-worker waits for the schema"
+  exit 0
 fi
 exec papiq-run python -m papiq.composition migrate

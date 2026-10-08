@@ -8,4 +8,24 @@ case "$role" in
     exec s6-svc -Od .
     ;;
 esac
+
+# The worker never migrates: wait until the database is at this version's schema (an `all` or
+# `api` container does that). Gives up after ten minutes and tries again; a database from a newer
+# version fails at once, with a pause so that the log does not fill. The marker file tells the
+# healthcheck that the worker proper has started. SIGTERM ends the wait.
+marker=/run/papiq-worker-ready
+rm -f "$marker"
+child=
+trap '[ -z "$child" ] || kill "$child" 2>/dev/null; exit 143' TERM INT
+papiq-run python -m papiq.composition check-schema --wait 600 &
+child=$!
+if ! wait "$child"; then
+  child=
+  sleep 10 &
+  child=$!
+  wait "$child"
+  exit 1
+fi
+child=
+touch "$marker"
 exec papiq-run python -m papiq.composition worker
