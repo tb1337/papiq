@@ -57,9 +57,13 @@ select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "N"]
 [tool.mypy]
 strict = true
 files = ["src", "tests"]
+# The migration client's package, which the flow tests in tests/unit/adapters/rest run against
+# the API (it needs nothing but httpx2).
+mypy_path = "../migration/src"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["../migration/src"]
 addopts = "--strict-markers"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"

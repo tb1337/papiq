@@ -84,8 +84,11 @@ class FakePaperless:
 
 
 def pdf(number: int, base: bytes) -> bytes:
-    """A distinct file for every number: the sample with a comment appended."""
-    return base + f"\n%document {number}\n".encode()
+    """A distinct file for every number: the sample with a comment before its end marker."""
+    body = base.rstrip()
+    marker = b"%%EOF"
+    head = body[: -len(marker)] if body.endswith(marker) else body
+    return head + f"%document {number}\n".encode() + marker + b"\n"
 
 
 def sample_archive(base_pdf: bytes, jpeg: bytes | None = None) -> Archive:
