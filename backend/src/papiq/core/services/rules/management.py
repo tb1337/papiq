@@ -2,8 +2,10 @@
 
 Who may do what:
 
-- A user rule belongs to its owner: only they change it. Admins read every rule; other users do
-  not learn that someone else's rule exists (NotFoundError).
+- A user rule belongs to its owner, who changes it. Admins read and change every rule (Tobi,
+  08.10.2026); the references of a user rule are checked for its owner, also when an admin
+  changes it (it files only into drawers its owner may write to). Other users do not learn that
+  someone else's rule exists (NotFoundError).
 - Global rules are read by everyone and changed by admins only.
 """
 
@@ -93,7 +95,7 @@ class RuleService:
             user = await load_actor(uow, actor)
             rule = await _managed_rule(uow, user, id)
             rule.change(definition, user.id, self._clock.now())
-            await check_references(uow, definition, owner=user if rule.owner_id else None)
+            await check_references(uow, definition, owner=await _owner(uow, rule))
             await uow.rules.update(rule)
             await uow.commit()
         return rule
@@ -104,7 +106,7 @@ class RuleService:
             user = await load_actor(uow, actor)
             rule = await _managed_rule(uow, user, id)
             if enabled:
-                await check_references(uow, rule.definition, owner=user if rule.owner_id else None)
+                await check_references(uow, rule.definition, owner=await _owner(uow, rule))
                 rule.enable(self._clock.now())
             else:
                 rule.disable(self._clock.now())
@@ -163,9 +165,15 @@ async def _managed_rule(uow: UnitOfWork, user: User, id: RuleId) -> Rule:
     rule = await visible_rule(uow, user, id)
     if rule.deleted_at is not None:
         raise NotFoundError("rule", id)
+    if user.is_active_admin:
+        return rule
     if rule.scope is RuleScope.GLOBAL:
-        if not user.is_active_admin:
-            raise PermissionDeniedError("only admins change global rules")
-    elif rule.owner_id != user.id:
+        raise PermissionDeniedError("only admins change global rules")
+    if rule.owner_id != user.id:
         raise PermissionDeniedError("only the owner changes a user rule")
     return rule
+
+
+async def _owner(uow: UnitOfWork, rule: Rule) -> User | None:
+    """The owner of a user rule, for checking its references; None for a global rule."""
+    return None if rule.owner_id is None else await uow.users.get(rule.owner_id)

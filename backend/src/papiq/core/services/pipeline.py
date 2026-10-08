@@ -26,7 +26,7 @@ from papiq.core.domain.errors import (
 from papiq.core.domain.ids import DocumentId, DrawerId, JobId, TagId, UserId
 from papiq.core.domain.jobs import Job, JobStatus
 from papiq.core.domain.json_value import JsonObject
-from papiq.core.domain.permissions import can_file_into, is_document_owner
+from papiq.core.domain.permissions import can_control_document, can_file_into
 from papiq.core.domain.pipeline import PIPELINE, Outcome, Step, StepResult, StepRun
 from papiq.core.domain.rule_engine import DRAWER, changed_fields
 from papiq.core.domain.users import User
@@ -291,7 +291,7 @@ class PipelineService:
     # --- retry and reprocess --------------------------------------------------------------------
 
     async def retry(self, actor: UserId, id: DocumentId) -> Document:
-        """Owner only: repeat the failed step and continue from there."""
+        """Owner or admin: repeat the failed step and continue from there."""
         async with self._uow() as uow:
             document = await _owned_document(uow, await load_actor(uow, actor), id)
             document.retry(self._clock.now())
@@ -299,7 +299,7 @@ class PipelineService:
         return document
 
     async def reprocess_from(self, actor: UserId, id: DocumentId, step: Step) -> Document:
-        """Owner only: discard the results from `step` on and process again from there."""
+        """Owner or admin: discard the results from `step` on and process again from there."""
         async with self._uow() as uow:
             document = await _owned_document(uow, await load_actor(uow, actor), id)
             document.reprocess_from(step, self._clock.now())
@@ -316,9 +316,10 @@ class PipelineService:
         resume_at: Step = Step.APPLY_RULES,
         drawer: DrawerId | None = None,
     ) -> Document:
-        """Owner only, for a document in the inbox: decide its open fields, apply `changes`
-        (as a metadata change), move it into `drawer` (one the owner may write to) and let
-        processing continue from `resume_at`, up to filing.
+        """Owner or admin, for a document in the inbox: decide its open fields, apply `changes`
+        (as a metadata change), move it into `drawer` (one the owner may write to: filing checks
+        the owner's rights, also when an admin confirms) and let processing continue from
+        `resume_at`, up to filing.
 
         Each uncertain field of the steps before `resume_at`, and of the rules when processing
         resumes with them, needs a decision (see `inbox.decide`). The steps whose results the
@@ -335,11 +336,12 @@ class PipelineService:
                 if item.step.position < resume_at.position
                 or (item.step is Step.APPLY_RULES and resume_at is Step.APPLY_RULES)
             ]
+            owner = user if user.id == document.owner_id else await uow.users.get(document.owner_id)
             target = None if drawer is None else await visible_drawer(uow, user, drawer)
-            if target is not None and not can_file_into(user, target):
+            if target is not None and not can_file_into(owner, target):
                 raise PermissionDeniedError(f"no write access to drawer '{target.name}'")
             if target is None and not can_file_into(
-                user, await uow.drawers.get(document.drawer_id)
+                owner, await uow.drawers.get(document.drawer_id)
             ):
                 # Filing would stop again: the owner has to choose another drawer.
                 raise OpenFieldsError((DRAWER,))
@@ -569,8 +571,9 @@ class PipelineService:
 
 
 async def _owned_document(uow: UnitOfWork, user: User, id: DocumentId) -> Document:
+    """The document, if the caller controls its processing: its owner or an admin."""
     document, _ = await readable_document(uow, user, id)
-    if not is_document_owner(user, document):
+    if not can_control_document(user, document):
         raise PermissionDeniedError(f"only the owner controls processing of document {id}")
     return document
 

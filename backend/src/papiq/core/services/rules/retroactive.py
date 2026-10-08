@@ -1,8 +1,9 @@
 """Applying a rule to existing documents, on request: a preview, then a background job.
 
-- Who, on what: a user rule by its owner, on their own documents; a global rule by anyone, on
-  the documents they may write to. An admin has no extra rights here. Documents the caller may
-  not write to appear neither one by one nor as a count; documents in processing are left out.
+- Who, on what: a user rule by its owner or an admin, on the documents of the rule's owner; a
+  global rule by anyone, on the documents they may write to (an admin: every document, Tobi,
+  08.10.2026). Documents the caller may not write to appear neither one by one nor as a count;
+  documents in processing are left out.
 - The preview evaluates the rule's current version on each document (its state, not a change)
   and lists the documents it would change, with conflicts: a field that has another value.
 - The application pins one version. A background job works through the selected documents, one
@@ -125,9 +126,14 @@ class RuleApplicationService:
         async with self._uow() as uow:
             user = await load_actor(uow, actor)
             rule = await _applicable_rule(uow, user, id)
-            documents = await uow.documents.query_visible(
-                actor, DocumentFilter(lanes=_LANES), before=before, limit=SCAN
-            )
+            if user.is_active_admin:
+                documents = await uow.documents.query(
+                    DocumentFilter(lanes=_LANES), before=before, limit=SCAN
+                )
+            else:
+                documents = await uow.documents.query_visible(
+                    actor, DocumentFilter(lanes=_LANES), before=before, limit=SCAN
+                )
         items: list[PreviewItem] = []
         next_cursor = documents[-1].id if len(documents) == SCAN else None
         budget = PatternBudget(PREVIEW_BUDGET)
@@ -192,11 +198,11 @@ class RuleApplicationService:
         return application
 
     async def get(self, actor: UserId, id: RuleApplicationId) -> RuleApplication:
-        """Only for the user who started it."""
+        """For the user who started it and for admins."""
         async with self._uow() as uow:
-            await load_actor(uow, actor)
+            user = await load_actor(uow, actor)
             application = await uow.rule_applications.find(id)
-        if application is None or application.user_id != actor:
+        if application is None or not (application.user_id == actor or user.is_active_admin):
             raise NotFoundError("rule application", id)
         return application
 
@@ -384,11 +390,11 @@ class RuleApplicationService:
 
 
 async def _applicable_rule(uow: UnitOfWork, user: User, id: RuleId) -> Rule:
-    """A user rule its owner applies; a global rule anyone applies."""
+    """A user rule its owner or an admin applies; a global rule anyone applies."""
     rule = await visible_rule(uow, user, id)
     if rule.deleted_at is not None:
         raise NotFoundError("rule", id)
-    if rule.scope is RuleScope.USER and rule.owner_id != user.id:
+    if rule.scope is RuleScope.USER and not (rule.owner_id == user.id or user.is_active_admin):
         raise PermissionDeniedError("only the owner applies a user rule")
     return rule
 
