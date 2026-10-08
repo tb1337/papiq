@@ -5,12 +5,14 @@ from papiq.core.domain.drawers import Drawer
 from papiq.core.domain.errors import AuthenticationError, NotFoundError, PermissionDeniedError
 from papiq.core.domain.ids import DocumentId, DrawerId, UserId
 from papiq.core.domain.permissions import (
+    can_file_into,
     can_read_document,
     can_write_document,
     drawer_access,
 )
 from papiq.core.domain.users import User
 from papiq.core.ports import UnitOfWork
+from papiq.core.services.inbox import drawer_chooser
 
 
 async def load_actor(uow: UnitOfWork, actor: UserId) -> User:
@@ -44,6 +46,19 @@ async def visible_drawer(uow: UnitOfWork, user: User, id: DrawerId) -> Drawer:
     if drawer is None or drawer_access(user, drawer) is None:
         raise NotFoundError("drawer", id)
     return drawer
+
+
+async def may_file(uow: UnitOfWork, document: Document, drawer: Drawer) -> bool:
+    """Whether filing may put the document into `drawer`: its owner may write to the drawer, or
+    an active admin put the document there by hand (admins file into any drawer)."""
+    owner = await uow.users.get(document.owner_id)
+    if can_file_into(owner, drawer):
+        return True
+    chooser = drawer_chooser(await uow.processing_log.list_for(document.id), drawer.id)
+    if chooser is None:
+        return False
+    user = await uow.users.find(UserId(chooser))
+    return user is not None and user.is_active_admin
 
 
 async def check_references(uow: UnitOfWork, changes: DocumentChanges) -> None:

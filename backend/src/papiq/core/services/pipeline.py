@@ -34,10 +34,11 @@ from papiq.core.ports import Clock, ObjectStore, UnitOfWork, UnitOfWorkFactory
 from papiq.core.services._access import (
     check_references,
     load_actor,
+    may_file,
     readable_document,
     visible_drawer,
 )
-from papiq.core.services.inbox import confirmation, decide, open_steps
+from papiq.core.services.inbox import CHOSEN_DRAWER, confirmation, decide, open_steps
 from papiq.core.services.objects import original_key
 from papiq.core.services.rules.running import drawer_choice, person_record
 
@@ -317,9 +318,9 @@ class PipelineService:
         drawer: DrawerId | None = None,
     ) -> Document:
         """Owner or admin, for a document in the inbox: decide its open fields, apply `changes`
-        (as a metadata change), move it into `drawer` (one the owner may write to: filing checks
-        the owner's rights, also when an admin confirms) and let processing continue from
-        `resume_at`, up to filing.
+        (as a metadata change), move it into `drawer` (one the owner may write to; an admin
+        chooses any drawer, and filing accepts it) and let processing continue from `resume_at`,
+        up to filing.
 
         Each uncertain field of the steps before `resume_at`, and of the rules when processing
         resumes with them, needs a decision (see `inbox.decide`). The steps whose results the
@@ -336,14 +337,13 @@ class PipelineService:
                 if item.step.position < resume_at.position
                 or (item.step is Step.APPLY_RULES and resume_at is Step.APPLY_RULES)
             ]
-            owner = user if user.id == document.owner_id else await uow.users.get(document.owner_id)
             target = None if drawer is None else await visible_drawer(uow, user, drawer)
-            if target is not None and not can_file_into(owner, target):
+            if target is not None and not (user.is_active_admin or can_file_into(user, target)):
                 raise PermissionDeniedError(f"no write access to drawer '{target.name}'")
-            if target is None and not can_file_into(
-                owner, await uow.drawers.get(document.drawer_id)
+            if target is None and not await may_file(
+                uow, document, await uow.drawers.get(document.drawer_id)
             ):
-                # Filing would stop again: the owner has to choose another drawer.
+                # Filing would stop again: someone has to choose another drawer.
                 raise OpenFieldsError((DRAWER,))
             now = self._clock.now()
             tags_before = frozenset(document.tag_ids)
@@ -373,7 +373,8 @@ class PipelineService:
                 tags_before=tags_before,
                 tags_after=document.tag_ids,
             )
-            result = replace(result, output={**result.output, **person})
+            chosen = {} if target is None else {CHOSEN_DRAWER: str(target.id)}
+            result = replace(result, output={**result.output, **person, **chosen})
             await self._log(uow, id, Step.APPLY_RULES, run, result, now, now)
             await self._restart(uow, document)
         return document

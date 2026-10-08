@@ -100,10 +100,6 @@ async def test_admins_control_other_users_documents_in_every_lane(world: World) 
     with pytest.raises(NotFoundError):
         await world.documents.processing_log(stranger.id, yellow.id)
 
-    # Confirming files where the owner may write: filing checks the owner.
-    foreign = await world.drawers.create(stranger.id, "Foreign")
-    with pytest.raises(PermissionDeniedError):
-        await pipeline.confirm(admin.id, yellow.id, DocumentChanges(), drawer=foreign.id)
     owners_drawer = await world.drawers.create(owner.id, "Archive")
     confirmed = await pipeline.confirm(
         admin.id,
@@ -150,6 +146,35 @@ async def test_admins_file_into_any_drawer(world: World) -> None:
         await world.pipeline().receive(
             user.id, incoming(b"%PDF-1.7 c"), filename="c.pdf", drawer=office.id
         )
+
+
+async def test_admins_confirm_into_any_drawer(world: World) -> None:
+    admin, boss = await _second_admin(world)
+    owner, stranger = await world.user(), await world.user()
+    foreign = await world.drawers.create(stranger.id, "Foreign")
+    rules = await rule_world(world)
+    pipeline = rules.pipeline()
+    received = await pipeline.receive(owner.id, incoming(b"%PDF-1.7 d"), filename="d.pdf")
+    await world.drain(rules.pipeline(Returns(UNCERTAIN)))
+    with pytest.raises(NotFoundError):
+        await pipeline.confirm(owner.id, received.id, DocumentChanges(), drawer=foreign.id)
+
+    await pipeline.confirm(
+        admin.id, received.id, DocumentChanges(), accept_suggestions=True, drawer=foreign.id
+    )
+    await world.drain(pipeline)
+    filed = await world.documents.get(owner.id, received.id)
+    assert (filed.drawer_id, filed.lane) == (foreign.id, Lane.GREEN)
+    assert (await world.documents.get(stranger.id, received.id)).id == received.id
+
+    # The admin's choice holds while they are an admin; then filing asks the owner again.
+    await pipeline.reprocess_from(owner.id, received.id, Step.APPLY_RULES)
+    await world.drain(pipeline)
+    assert (await world.documents.get(owner.id, received.id)).lane is Lane.GREEN
+    await world.users.set_active(boss.id, admin.id, False)
+    await pipeline.reprocess_from(owner.id, received.id, Step.APPLY_RULES)
+    await world.drain(pipeline)
+    assert (await world.documents.get(owner.id, received.id)).lane is Lane.YELLOW
 
 
 async def test_admins_change_user_rules_for_their_owner(world: World) -> None:
