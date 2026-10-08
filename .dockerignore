@@ -1,5 +1,11 @@
 # Only what the image build needs; keep the context small.
 *
-# The locked dependencies, to download the Docling models of the locked Docling version.
+# The locked dependencies and the package (build stages `deps` and `app`).
 !backend/pyproject.toml
 !backend/uv.lock
+!backend/README.md
+!backend/src/
+# The s6 services and scripts of the runtime image.
+!deploy/image/
+# Bytecode caches of the host.
+**/__pycache__/

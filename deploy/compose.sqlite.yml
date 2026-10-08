@@ -1,0 +1,110 @@
+# Papiq with SQLite and the file system: one Papiq container with a volume, plus Meilisearch.
+# The language model and the embeddings are outside (Ollama or a cloud endpoint).
+#
+#   ./create-secrets.sh                              # once: the secrets in ./secrets
+#   docker compose -f compose.sqlite.yml up -d --build
+#
+# Then open http://localhost:8000/api/v1/docs; sign in as `admin` (password in secrets/admin_password).
+# See README.md for the settings, the reverse proxy and the backup.
+name: papiq-sqlite
+
+services:
+  papiq:
+    image: papiq:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: runtime
+    restart: unless-stopped
+    # The worker gets 30 s to finish its jobs, s6 waits up to 40 s: see README.md.
+    stop_grace_period: 60s
+    ports:
+      # Only this machine; a reverse proxy in front brings it to the network (see README.md).
+      - 127.0.0.1:${PAPIQ_HTTP_PORT:-8000}:8000
+    environment:
+      # The user of the Papiq processes, and the owner of the volume's files.
+      PUID: 1000
+      PGID: 1000
+      # all: API and worker in this container. api or worker: only that service; only `all` and
+      # `api` migrate the database.
+      PAPIQ_ROLE: all
+
+      PAPIQ_SECRET_KEY_FILE: /run/secrets/papiq_secret_key
+      # The first admin, created while there is none. Change the password in the web UI or
+      # through the API; later changes of this file have no effect.
+      PAPIQ_ADMIN_USERNAME: admin
+      PAPIQ_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+      # Plain HTTP on localhost. Behind a TLS proxy delete this line and set
+      # PAPIQ_FORWARDED_ALLOW_IPS (see README.md).
+      PAPIQ_COOKIE_SECURE: "false"
+
+      # SQLite and the files live in /data (the volume); these are the image's defaults.
+      PAPIQ_DB_TYPE: sqlite
+      PAPIQ_STORAGE_TYPE: filesystem
+
+      PAPIQ_MEILISEARCH_URL: http://meilisearch:7700
+      PAPIQ_MEILISEARCH_API_KEY_FILE: /run/secrets/meilisearch_key
+
+      # Language model and embeddings: Ollama, here on the host; change the address or set the
+      # variables in your shell (set empty for none). Papiq sends document content there.
+      PAPIQ_LLM_BASE_URL: ${PAPIQ_LLM_BASE_URL-http://host.docker.internal:11434/v1}
+      PAPIQ_LLM_MODEL: ${PAPIQ_LLM_MODEL-qwen3:8b}
+      # On a CPU a document takes minutes.
+      PAPIQ_LLM_TIMEOUT: "600"
+      PAPIQ_EMBEDDING_BASE_URL: ${PAPIQ_EMBEDDING_BASE_URL-http://host.docker.internal:11434/v1}
+      PAPIQ_EMBEDDING_MODEL: ${PAPIQ_EMBEDDING_MODEL-snowflake-arctic-embed2}
+      PAPIQ_EMBEDDING_QUERY_PREFIX: "query:"
+      PAPIQ_EMBEDDING_DIMENSIONS: 1024
+
+      # Further settings, shown with their defaults (README.md lists the ones that matter):
+      # PAPIQ_LOG_LEVEL: INFO
+      # PAPIQ_WORKER_CONCURRENCY: 2
+      # PAPIQ_WORKER_SHUTDOWN_TIMEOUT: 30     # then S6_SERVICES_GRACETIME and stop_grace_period too
+      # PAPIQ_MCP_ENABLED: "true"             # the MCP endpoint /api/v1/mcp
+      # PAPIQ_MCP_TEXT_MAX: 20000             # characters per get_text call
+      # PAPIQ_WEBHOOKS_PER_USER: 20
+      # PAPIQ_WEBHOOK_TIMEOUT: 10             # seconds per delivery attempt
+      # PAPIQ_WEBHOOK_MAX_ATTEMPTS: 10
+      # PAPIQ_WEBHOOK_RETRY_DELAY: 30         # seconds, doubling up to an hour
+      # PAPIQ_WEBHOOK_DISABLE_AFTER: 20       # given-up deliveries in a row
+      # PAPIQ_WEBHOOK_CONCURRENCY: 4
+      # PAPIQ_WEBHOOK_SECRET_GRACE: 86400     # seconds a renewed secret's predecessor still signs
+    extra_hosts:
+      # Reaches an Ollama on the host on Linux, too (built in on Docker Desktop and OrbStack).
+      - host.docker.internal:host-gateway
+    volumes:
+      - papiq-data:/data
+    secrets:
+      - papiq_secret_key
+      - admin_password
+      - meilisearch_key
+    depends_on:
+      meilisearch:
+        condition: service_healthy
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.54.3
+    restart: unless-stopped
+    env_file: secrets/meilisearch.env # MEILI_MASTER_KEY
+    environment:
+      MEILI_ENV: production
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - meilisearch-data:/meili_data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:7700/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+secrets:
+  papiq_secret_key:
+    file: secrets/papiq_secret_key
+  admin_password:
+    file: secrets/admin_password
+  meilisearch_key:
+    file: secrets/meilisearch_key
+
+volumes:
+  papiq-data:
+  meilisearch-data:

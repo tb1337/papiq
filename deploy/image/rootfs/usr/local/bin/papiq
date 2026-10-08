@@ -1,0 +1,4 @@
+#!/command/with-contenv sh
+# papiq COMMAND [ARGUMENT...]: `python -m papiq.composition` with the container's configuration,
+# for `docker exec <container> papiq reindex`. Runs as PUID:PGID, like the services.
+exec papiq-run python -m papiq.composition "$@"

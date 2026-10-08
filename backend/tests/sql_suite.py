@@ -17,7 +17,7 @@ from alembic.migration import MigrationContext
 from sqlalchemy import Connection, insert, inspect, select
 
 from papiq.adapters.outbound.memory import ManualClock, MemoryObjectStore
-from papiq.adapters.outbound.sql import Database, migrate
+from papiq.adapters.outbound.sql import Database, migrate, schema_state
 from papiq.adapters.outbound.sql import tables as t
 from papiq.core.domain.attributes import AttributeDefinition, AttributeType, Money
 from papiq.core.domain.documents import Document, DocumentChanges
@@ -291,6 +291,18 @@ class MigrationSuite:
         async with empty_database.reading() as connection:
             names = await connection.run_sync(lambda sync: inspect(sync).get_table_names())
         assert set(names) == {*t.metadata.tables, "alembic_version"}
+
+    async def test_schema_state_tells_outdated_current_and_newer(
+        self, empty_database: Database
+    ) -> None:
+        assert await schema_state(empty_database) == "outdated"  # nothing there yet
+        await migrate(empty_database, "0001")
+        assert await schema_state(empty_database) == "outdated"  # older
+        await migrate(empty_database)
+        assert await schema_state(empty_database) == "current"
+        async with empty_database.writing() as connection:
+            await connection.exec_driver_sql("UPDATE alembic_version SET version_num = '0000'")
+        assert await schema_state(empty_database) == "newer"  # not a revision of this version
 
     async def test_migrations_match_the_table_definitions(
         self, empty_database: Database, model_database: Database

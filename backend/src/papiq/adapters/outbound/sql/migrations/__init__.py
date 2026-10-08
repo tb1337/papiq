@@ -6,9 +6,13 @@ off meanwhile (as SQLite requires) and checked before the commit.
 """
 
 from pathlib import Path
+from typing import Literal
 
 from alembic import command
 from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
+from alembic.util import CommandError
 from sqlalchemy import Connection, text
 
 from papiq.adapters.outbound.sql.database import Database
@@ -24,6 +28,33 @@ def alembic_config(connection: Connection | None = None) -> Config:
     config.set_main_option("file_template", "v%%(rev)s_%%(slug)s")
     config.attributes["connection"] = connection
     return config
+
+
+# How a database stands against the migrations in this version of the code: `current` (at the
+# newest revision), `outdated` (empty or older), `newer` (migrated by a newer version).
+SchemaState = Literal["current", "outdated", "newer"]
+
+
+async def schema_state(database: Database) -> SchemaState:
+    """Compare the database's revision with the newest migration. Read-only: a missing SQLite
+    file is not created. Raises if the database is unreachable."""
+    sqlite_file = database.engine.url.database if database.is_sqlite else None
+    if sqlite_file and not Path(sqlite_file).exists():
+        return "outdated"
+    script = ScriptDirectory.from_config(alembic_config())
+    async with database.reading() as connection:
+        revision = await connection.run_sync(
+            lambda sync: MigrationContext.configure(sync).get_current_revision()
+        )
+    if revision is None:
+        return "outdated"
+    if revision == script.get_current_head():
+        return "current"
+    try:
+        script.get_revision(revision)
+    except CommandError:
+        return "newer"
+    return "outdated"
 
 
 async def migrate(database: Database, revision: str = "head") -> None:
