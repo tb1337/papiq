@@ -135,6 +135,14 @@ describe('the rule model', () => {
 		expect(toApi(fromApi(api))).toEqual(api);
 	});
 
+	it('keeps repeated values of a list', () => {
+		const api = definition({
+			all: [cond('channel', 'in', ['web', 'web']), cond('tags', 'in', [ID(4), ID(4)])],
+			not: false
+		});
+		expect(toApi(fromApi(api))).toEqual(api);
+	});
+
 	it('keeps nesting, negation and limits unchanged', () => {
 		const deep = definition(nested(LIMITS.depth, [cond('channel', 'is', 'api')]));
 		expect(toApi(fromApi(deep))).toEqual(deep);
@@ -273,7 +281,14 @@ describe('checking a rule', () => {
 			],
 			[{ field: 'attribute', op: 'contains', value: 'x', attributeId: ID(103) }, 'operator'],
 			[{ field: 'attribute', op: 'in', value: ['monthly'], attributeId: ID(107) }, undefined],
-			[{ field: 'attribute', op: 'missing', value: null, attributeId: ID(999) }, undefined]
+			[{ field: 'attribute', op: 'missing', value: null, attributeId: ID(999) }, undefined],
+			// What the API accepts as well: other date and number spellings, long text values.
+			[{ field: 'document_date', op: 'gt', value: '20240115' }, undefined],
+			[{ field: 'document_date', op: 'gt', value: '2024-W03-1' }, undefined],
+			[{ field: 'attribute', op: 'gt', value: '1e3', attributeId: ID(103) }, undefined],
+			[{ field: 'attribute', op: 'gt', value: '1_000.5', attributeId: ID(103) }, undefined],
+			[{ field: 'attribute', op: 'gt', value: 'inf', attributeId: ID(103) }, 'number'],
+			[{ field: 'attribute', op: 'is', value: 'x'.repeat(600), attributeId: ID(101) }, undefined]
 		];
 		for (const [change, code] of cases) {
 			const condition = { ...newCondition(), ...change } as ConditionNode;
@@ -343,6 +358,25 @@ describe('errors of saving', () => {
 		expect(keyAt('name', model)).toBe('name');
 	});
 
+	it('keeps only the kinds of the blocks from request validation', () => {
+		const detail = [
+			'conditions.AllGroup.all.1.ConditionSchema.field: Field required',
+			'conditions.AllGroup.all.1.AllGroup.all: Field required',
+			"conditions.AllGroup.all.1.AnyGroup.any.0.ConditionSchema.op: Input should be 'is'",
+			'conditions.AllGroup.all.1.AnyGroup.any.0.AllGroup.all: Field required',
+			'conditions.AnyGroup.any: Field required'
+		].join('; ');
+		expect(saveErrors(failed(422, detail), model)).toEqual({
+			byKey: { [group.items[0].key]: "Input should be 'is'" },
+			general: null
+		});
+		// A message with "; " in it stays whole.
+		const placeholder = failed(422, 'actions[0]: unknown placeholder {x}; known: {contact}');
+		expect(saveErrors(placeholder, model).byKey).toEqual({
+			[model.actions[0].key]: 'unknown placeholder {x}; known: {contact}'
+		});
+	});
+
 	it('puts messages next to their block', () => {
 		const invalid = failed(422, "conditions.all[1].any[1]: operator 'contains' does not apply");
 		expect(saveErrors(invalid, model)).toEqual({
@@ -356,6 +390,13 @@ describe('errors of saving', () => {
 		]);
 		const forbidden = failed(403, "no write access to drawer 'Office'");
 		expect(Object.keys(saveErrors(forbidden, model).byKey)).toEqual([model.actions[1].key]);
+		const typed = fromApi(
+			definition({ all: [cond('channel', 'is', 'web')], not: false }, [
+				{ type: 'set_document_type', document_type_id: ID(9) }
+			])
+		);
+		const type = failed(404, `document type ${ID(9)} not found`);
+		expect(Object.keys(saveErrors(type, typed).byKey)).toEqual([typed.actions[0].key]);
 		const other = failed(409, 'changed meanwhile');
 		expect(saveErrors(other, model)).toEqual({ byKey: {}, general: 'changed meanwhile' });
 	});

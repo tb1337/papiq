@@ -27,7 +27,11 @@
 	} = $props();
 
 	const type = $derived(textual ? 'text' : (attribute?.data_type ?? 'text'));
-	const text = $derived(typeof value === 'string' ? value : '');
+	const text = $derived(
+		typeof value === 'string' ? value : typeof value === 'number' ? String(value) : ''
+	);
+	// The date field shows only YYYY-MM-DD; other spellings the API accepts stay visible as text.
+	const dateField = $derived(type === 'date' && (text === '' || /^\d{4}-\d{2}-\d{2}$/.test(text)));
 	const money = $derived(
 		typeof value === 'object' && value !== null && !Array.isArray(value)
 			? value
@@ -88,7 +92,7 @@
 		{id}
 		aria-label={label}
 		aria-invalid={invalid || undefined}
-		type={type === 'date' ? 'date' : type === 'link' ? 'url' : 'text'}
+		type={dateField ? 'date' : type === 'link' ? 'url' : 'text'}
 		inputmode={type === 'number' ? 'decimal' : undefined}
 		value={text}
 		oninput={(event) =>
