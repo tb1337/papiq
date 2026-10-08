@@ -6,6 +6,7 @@ from papiq.core.domain.users import User
 from papiq.core.domain.validation import name_key
 from papiq.core.ports import Clock, UnitOfWork, UnitOfWorkFactory
 from papiq.core.services._access import load_actor, visible_drawer
+from papiq.core.services.rules.references import disable_rules, refers_to
 
 
 class DrawerService:
@@ -25,7 +26,8 @@ class DrawerService:
             return await visible_drawer(uow, await load_actor(uow, actor), id)
 
     async def delete(self, actor: UserId, id: DrawerId) -> None:
-        """Owner only; not the default drawer, and only while it holds no documents."""
+        """Owner only; not the default drawer, and only while it holds no documents. Rules that
+        file into it are disabled."""
         async with self._uow() as uow:
             drawer = await _managed_drawer(uow, await load_actor(uow, actor), id)
             if drawer.is_default:
@@ -33,6 +35,12 @@ class DrawerService:
             if await uow.documents.exists(drawer=id):
                 raise ConflictError(f"drawer '{drawer.name}' is not empty")
             await uow.drawers.remove(id)
+            await disable_rules(
+                uow,
+                self._clock.now(),
+                f"drawer '{drawer.name}' was deleted",
+                refers_to(lambda refs: refs.drawers, id),
+            )
             await uow.commit()
 
     async def create(self, actor: UserId, name: str) -> Drawer:

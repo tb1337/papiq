@@ -21,25 +21,30 @@ from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from papiq.adapters.inbound.rest.auth import PROTECTED, CurrentUser
+from papiq.adapters.inbound.rest.auth import PROTECTED, Authenticated, CurrentUser
 from papiq.adapters.inbound.rest.context import Context
 from papiq.adapters.inbound.rest.problems import problem_responses
 from papiq.adapters.inbound.rest.schemas import (
     ConfirmRequest,
     DocumentAccepted,
+    DocumentChanged,
     DocumentDetails,
+    DocumentOutOfReach,
     DocumentPage,
     DocumentPatch,
+    DocumentPreviewOut,
     InboxItemOut,
     InboxPage,
     LogEntry,
     MoveRequest,
     ReprocessRequest,
     ReviewOut,
+    RuleReportOut,
+    VisibilityOut,
 )
 from papiq.adapters.inbound.rest.upload import FILE_FIELD, read_upload
 from papiq.core.domain.attributes import AttributeDefinition, AttributeType, Money, Url
-from papiq.core.domain.documents import UNSET, DocumentChanges
+from papiq.core.domain.documents import UNSET, Channel, Document, DocumentChanges
 from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import ValidationError
 from papiq.core.domain.ids import (
@@ -53,7 +58,7 @@ from papiq.core.domain.ids import (
 )
 from papiq.core.domain.pipeline import Lane, Step
 from papiq.core.ports import DocumentFilter
-from papiq.core.services.documents import MAX_PAGE, DocumentFile
+from papiq.core.services.documents import MAX_PAGE, DocumentFile, MetadataChange
 
 router = APIRouter(prefix="/documents", tags=["documents"], dependencies=PROTECTED)
 inbox = APIRouter(prefix="/inbox", tags=["inbox"], dependencies=PROTECTED)
@@ -74,6 +79,7 @@ _LANES: dict[LaneFilter, Lane | None] = {
 }
 
 DRAWER_FIELD = "drawer_id"
+CHANNEL_FIELD = "channel"
 
 
 def document_filter(
@@ -111,6 +117,15 @@ _UPLOAD_BODY: dict[str, Any] = {
                             "type": "string",
                             "format": "uuid",
                             "description": "Target drawer; default: the owner's default drawer.",
+                        },
+                        CHANNEL_FIELD: {
+                            "type": "string",
+                            "enum": [Channel.MIGRATION.value],
+                            "description": (
+                                "The intake channel, for rules. Default: `web` with a session, "
+                                "`api` with an API token; `migration` for imports from another "
+                                "system."
+                            ),
                         },
                     },
                 }
@@ -153,13 +168,16 @@ _UPLOAD_BODY: dict[str, Any] = {
     openapi_extra=_UPLOAD_BODY,
 )
 async def upload(
-    request: Request, response: Response, user: CurrentUser, context: Context
+    request: Request, response: Response, principal: Authenticated, context: Context
 ) -> DocumentAccepted:
-    received = await read_upload(request, max_size=context.max_upload_size, fields=[DRAWER_FIELD])
+    received = await read_upload(
+        request, max_size=context.max_upload_size, fields=[DRAWER_FIELD, CHANNEL_FIELD]
+    )
     try:
         drawer = _drawer(received.fields.get(DRAWER_FIELD))
+        channel = _channel(received.fields.get(CHANNEL_FIELD), session=principal.session)
         document = await context.pipeline.receive(
-            user, received.file, filename=received.filename, drawer=drawer
+            principal.id, received.file, filename=received.filename, drawer=drawer, channel=channel
         )
     finally:
         await asyncio.shield(asyncio.to_thread(received.file.path.unlink, missing_ok=True))
@@ -219,18 +237,50 @@ async def get_document(id: UUID, user: CurrentUser, context: Context) -> Documen
     description=(
         "Needs write access (owner or a `read_write` share). Referenced contact, type, tags "
         "and attributes must exist; attribute values must fit their type and apply to the "
-        "document type."
+        "document type. On a filed document, the change sets off the owner's rules and the "
+        "global ones with trigger `change` that hold after it and did not before; fields set "
+        "in the change stay as they are. The owner sees what the rules did in `rules`. If the "
+        "rules filed the document where the caller can no longer read it, the answer has only "
+        "its `id` and `access: null`."
     ),
-    response_model=DocumentDetails,
+    response_model=DocumentChanged | DocumentOutOfReach,
     responses=problem_responses(401, 403, 404, 409, 422),
 )
 async def update_document(
     id: UUID, body: DocumentPatch, user: CurrentUser, context: Context
-) -> DocumentDetails:
+) -> DocumentChanged | DocumentOutOfReach:
     changes = await _changes(body, user, context)
-    document = await context.documents.update_metadata(user, DocumentId(id), changes)
-    view = await context.documents.view(user, document.id)
-    return DocumentDetails.of(view.document, view.access)
+    change = await context.documents.change_metadata(user, DocumentId(id), changes)
+    return _changed(change)
+
+
+@router.post(
+    "/{id}/dry-run",
+    summary="Try a metadata change",
+    description=(
+        "What `PATCH /documents/{id}` with this body would do, without storing anything: the "
+        "document afterwards, the fields that would change, what the rules would do (owner "
+        "only) and who would see it. Needs write access."
+    ),
+    response_model=DocumentPreviewOut,
+    responses=problem_responses(401, 403, 404, 409, 422),
+)
+async def preview_change(
+    id: UUID, body: DocumentPatch, user: CurrentUser, context: Context
+) -> DocumentPreviewOut:
+    changes = await _changes(body, user, context)
+    change = await context.documents.change_metadata(user, DocumentId(id), changes, dry_run=True)
+    readable = change.access is not None
+    return DocumentPreviewOut(
+        document=DocumentDetails.of(change.document, change.access) if change.access else None,
+        changed=_differences(change.before, change.document) if change.before else [],
+        rules=(
+            None
+            if change.rules is None
+            else [RuleReportOut.of(report) for report in change.rules.plan.reports]
+        ),
+        visibility=VisibilityOut.of(change.document, change.drawer, user) if readable else None,
+    )
 
 
 @router.post(
@@ -371,12 +421,14 @@ async def review(id: UUID, user: CurrentUser, context: Context) -> ReviewOut:
     summary="Confirm a document from the inbox",
     description=(
         "Owner only, for yellow and red documents that are not being processed. Every open "
-        "field of the steps before `resume_at` needs a decision: a value or null in `changes`, "
-        "a value the document already has (it is kept), or its suggestion with "
-        "`accept_suggestions`. Otherwise 422 lists the open fields in `open_fields`. The "
-        "results before `resume_at` count as confirmed; processing continues from there up to "
-        "filing. From `extract_attributes` on, the extracted attributes replace the ones the "
-        "document has."
+        "field of the steps before `resume_at` (and of `apply_rules` when processing resumes "
+        "with it) needs a decision: a value or null in `changes`, a value the document already "
+        "has (it is kept), or its suggestion with `accept_suggestions`. Otherwise 422 lists the "
+        "open fields in `open_fields`. The rules' fields `drawer`, `title` and `review` always "
+        "have a value: confirming keeps it, `drawer_id` moves the document. The results before "
+        "`resume_at` count as confirmed; processing continues from there up to filing, and the "
+        "rules leave what the owner decided or changed as it is. From `extract_attributes` on, "
+        "the extracted attributes replace the ones the document has."
     ),
     response_model=DocumentDetails,
     responses=problem_responses(401, 403, 404, 409, 422),
@@ -391,6 +443,7 @@ async def confirm(
         changes,
         accept_suggestions=body.accept_suggestions,
         resume_at=Step(body.resume_at.value),
+        drawer=None if body.drawer_id is None else DrawerId(body.drawer_id),
     )
     return _details(document)
 
@@ -415,6 +468,33 @@ async def list_inbox(
     items = await context.documents.inbox(user, before=_decode_cursor(cursor), limit=limit)
     next_cursor = _encode_cursor(items[-1].document.id) if len(items) == limit else None
     return InboxPage(items=[InboxItemOut.of(item) for item in items], next_cursor=next_cursor)
+
+
+def _differences(before: Document, after: Document) -> list[str]:
+    fields: dict[str, tuple[object, object]] = {
+        "title": (before.title, after.title),
+        "contact": (before.contact_id, after.contact_id),
+        "document_type": (before.document_type_id, after.document_type_id),
+        "tags": (before.tag_ids, after.tag_ids),
+        "document_date": (before.document_date, after.document_date),
+        "drawer": (before.drawer_id, after.drawer_id),
+    }
+    for attribute in sorted(set(before.attributes) | set(after.attributes)):
+        fields[f"attribute:{attribute}"] = (
+            before.attributes.get(attribute),
+            after.attributes.get(attribute),
+        )
+    return [name for name, (old, new) in fields.items() if old != new]
+
+
+def _changed(change: MetadataChange) -> DocumentChanged | DocumentOutOfReach:
+    if change.access is None:
+        return DocumentOutOfReach(id=change.document.id)
+    details = DocumentDetails.of(change.document, change.access)
+    rules = None
+    if change.rules is not None:
+        rules = [RuleReportOut.of(report) for report in change.rules.plan.reports]
+    return DocumentChanged(**details.model_dump(), rules=rules)
 
 
 def _details(document: Any) -> DocumentDetails:
@@ -499,3 +579,12 @@ def _drawer(value: str | None) -> DrawerId | None:
         return DrawerId(UUID(value.strip()))
     except ValueError:
         raise ValidationError(f"drawer_id: not a UUID: {value!r}") from None
+
+
+def _channel(value: str | None, *, session: object | None) -> Channel:
+    """The intake channel: as the caller says (`migration` only), else by credentials."""
+    if value is None or not value.strip():
+        return Channel.API if session is None else Channel.WEB
+    if value.strip() != Channel.MIGRATION.value:
+        raise ValidationError(f"channel: only '{Channel.MIGRATION.value}' can be given")
+    return Channel.MIGRATION

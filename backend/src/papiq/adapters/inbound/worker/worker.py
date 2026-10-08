@@ -23,6 +23,7 @@ from papiq.core.ports import EventBus
 from papiq.core.services.indexing import IndexingService
 from papiq.core.services.maintenance import MaintenanceService
 from papiq.core.services.pipeline import PipelineService
+from papiq.core.services.rules.retroactive import RuleApplicationService
 
 log = logging.getLogger(__name__)
 
@@ -41,8 +42,10 @@ class Worker:
         dispatch_interval: timedelta,
         shutdown_timeout: timedelta,
         indexing: IndexingService | None = None,
+        rules: RuleApplicationService | None = None,
     ) -> None:
         self._pipeline = pipeline
+        self._rules = rules
         self._maintenance = maintenance
         self._indexing = indexing
         self._bus = event_bus
@@ -109,6 +112,7 @@ class Worker:
             await self._maintenance.run_next_job()
             or (self._indexing is not None and await self._indexing.run_next_job())
             or await self._pipeline.run_next_job()
+            or (self._rules is not None and await self._rules.run_next_job())
         )
 
     async def _dispatch(self) -> bool:

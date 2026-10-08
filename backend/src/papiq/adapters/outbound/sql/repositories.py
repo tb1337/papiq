@@ -25,7 +25,7 @@ from papiq.core.domain.attributes import (
     Money,
     Url,
 )
-from papiq.core.domain.documents import Document, Sha256
+from papiq.core.domain.documents import Channel, Document, Sha256
 from papiq.core.domain.drawers import Drawer, ShareLevel
 from papiq.core.domain.errors import ConcurrencyError, NotFoundError
 from papiq.core.domain.ids import (
@@ -497,6 +497,7 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
                     for value in attributes[row.id]
                 },
                 document_date=row.document_date,
+                channel=Channel(row.channel),
                 lane=None if row.lane is None else Lane(row.lane),
                 processing=Processing(
                     status=ProcessingStatus(row.processing_status),
@@ -527,6 +528,7 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
             "contact_id": entity.contact_id,
             "document_type_id": entity.document_type_id,
             "document_date": entity.document_date,
+            "channel": entity.channel.value,
             "lane": None if entity.lane is None else entity.lane.value,
             "processing_status": processing.status.value,
             "processing_step": (
