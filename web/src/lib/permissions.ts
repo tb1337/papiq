@@ -54,6 +54,19 @@ export function drawersWritableBy<
 	);
 }
 
+/** Drawers that file a document or rule of `owner` when `caller` acts: the caller's own choice
+ * for themselves, else the owner's (an admin acting for another user). */
+export function drawersFor<
+	T extends {
+		owner_id: string;
+		access: string;
+		shares?: readonly { user_id: string; level: string }[] | null;
+	}
+>(drawers: readonly T[], owner: Actor, caller: Actor): T[] {
+	if (owner !== null && owner.id === caller?.id) return writableDrawers(drawers, caller);
+	return drawersWritableBy(drawers, owner);
+}
+
 /** Rename, share and delete a drawer: its owner and admins. */
 export function canManageDrawer(drawer: Owned, user: Actor): boolean {
 	return owns(drawer, user) || isAdmin(user);

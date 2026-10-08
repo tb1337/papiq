@@ -20,7 +20,7 @@
 	import { describeError, reportError } from '#lib/errors.ts';
 	import { events } from '#lib/events.svelte.ts';
 	import { drawerLabel, loadLookup, type Lookup } from '#lib/masterdata.svelte.ts';
-	import { drawersWritableBy, writableDrawers } from '#lib/permissions.ts';
+	import { drawersFor } from '#lib/permissions.ts';
 	import { m } from '#lib/paraglide/messages.js';
 	import { buildConfirm, initialValue, isRuleField, type ReviewValue } from '#lib/review.ts';
 	import { session } from '#lib/session.svelte.ts';
@@ -48,10 +48,12 @@
 	const failedStep = $derived(review?.open.find((step) => step.outcome === 'failed') ?? null);
 	// Confirming files where the document's owner may write, also when an admin confirms.
 	const drawers = $derived.by(() => {
-		const all = lookup?.drawers ?? [];
 		const ownerId = review?.document.owner_id;
-		if (ownerId === session.user?.id) return writableDrawers(all, session.user);
-		return drawersWritableBy(all, lookup?.users.find((user) => user.id === ownerId) ?? null);
+		const owner =
+			ownerId === session.user?.id
+				? session.user
+				: (lookup?.users.find((user) => user.id === ownerId) ?? null);
+		return drawersFor(lookup?.drawers ?? [], owner, session.user);
 	});
 
 	async function load() {
