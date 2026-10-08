@@ -10,6 +10,7 @@ from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute, iter_route_contexts
 
 from papiq import __version__
+from papiq.adapters.inbound.mcp import McpEndpoint
 from papiq.adapters.inbound.rest import (
     account,
     documents,
@@ -49,6 +50,11 @@ endpoint needs one of them (401 without), except health and the sign-in endpoint
 read (403). The own sign-in (password, sessions, TOTP, API tokens, provider links) and
 creating users or resetting their sign-in need a session; a token gets 403 there. Documents
 and drawers the caller may not see are "not found" (404), the same as ones that do not exist.
+
+The same services are available to AI clients over MCP (Streamable HTTP, stateless) at
+`/api/v1/mcp`, with the same API tokens as bearer; it is not part of this OpenAPI document.
+Tools: `search`, `get_document`, `get_text`, `update_metadata` (needs a `read_write` token),
+`list_tags`.
 """
 
 
@@ -72,6 +78,11 @@ def create_app(context: ApiContext) -> FastAPI:
     to its event streams."""
     hub = EventHub(context.documents)
     hub.attach(context.event_bus)
+    mcp = (
+        McpEndpoint(context, path=f"{PREFIX}/mcp", text_max=context.mcp_text_max)
+        if context.mcp_enabled
+        else None
+    )
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -79,7 +90,10 @@ def create_app(context: ApiContext) -> FastAPI:
             dispatch_forever(context.event_bus, context.events_poll_interval)
         )
         try:
-            yield
+            async with contextlib.AsyncExitStack() as stack:
+                if mcp is not None:
+                    await stack.enter_async_context(mcp.run())
+                yield
         finally:
             hub.close()
             dispatcher.cancel()
@@ -120,6 +134,8 @@ def create_app(context: ApiContext) -> FastAPI:
         health.router,
     ):
         app.include_router(router, prefix=PREFIX)
+    if mcp is not None:
+        app.router.routes.extend(mcp.routes)
 
     original_openapi = app.openapi
 

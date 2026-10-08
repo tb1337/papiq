@@ -72,6 +72,8 @@ def build_app(
             max_upload_size=int(settings.upload_max_size),
             max_request_size=int(settings.request_max_size),
             events_poll_interval=settings.events_poll_interval,
+            mcp_enabled=settings.mcp_enabled,
+            mcp_text_max=settings.mcp_text_max,
         )
     )
 
