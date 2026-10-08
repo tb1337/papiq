@@ -98,6 +98,19 @@ RUN mkdir -p /home/vscode/.venv /home/vscode/.cache/uv \
     && chown -R vscode:vscode /home/vscode/.venv /home/vscode/.cache
 
 USER vscode
+
+# Mount targets for the persistent auth volumes (see "volumes" in
+# .devcontainer/compose.yml). Created here as vscode so a fresh named volume inherits
+# vscode ownership; otherwise Docker creates them root-owned and Claude Code /
+# gh cannot write their credentials.
+RUN mkdir -p /home/vscode/.claude /home/vscode/.config/gh
+
+# Claude Code CLI (native installer -> ~/.local/bin/claude). The VS Code
+# extension and the CLI share the login stored in the claude-config volume.
+RUN curl -fsSL https://claude.ai/install.sh | bash
+
+ENV CLAUDE_CONFIG_DIR=/home/vscode/.claude
+
 WORKDIR /workspaces/papiq
 
 # --- runtime: production image (M9) --------------------------------------------------------------
