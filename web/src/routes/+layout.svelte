@@ -11,6 +11,7 @@
 	});
 </script>
 
-<ModeWatcher disableHeadScriptInjection />
+<!-- No transition-blocking <style> element: the CSP allows no inline style elements. -->
+<ModeWatcher disableHeadScriptInjection disableTransitions={false} />
 <Toaster richColors={false} closeButton />
 {@render children()}

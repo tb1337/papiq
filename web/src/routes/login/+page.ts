@@ -9,5 +9,9 @@ export async function load({ url }) {
 	if (await session.load()) redirect(307, next);
 	// The button for the identity provider shows only if one is configured.
 	const { data } = await api.GET('/api/v1/auth/oidc');
-	return { next, oidc: data?.enabled ? (data.display_name ?? null) : null };
+	return {
+		next,
+		error: url.searchParams.get('error'),
+		oidc: data?.enabled ? (data.display_name ?? null) : null
+	};
 }

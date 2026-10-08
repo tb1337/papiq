@@ -2,6 +2,7 @@
 
 from datetime import UTC
 from typing import Annotated
+from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, Response
@@ -40,8 +41,11 @@ from papiq.adapters.inbound.rest.schemas import (
     TotpSetupOut,
     UserOut,
 )
+from papiq.adapters.inbound.rest.ui import UI_PREFIX
 from papiq.core.domain.errors import (
     AuthenticationError,
+    ConflictError,
+    IdentityProviderError,
     NotFoundError,
     UnsupportedMediaTypeError,
 )
@@ -345,12 +349,17 @@ async def oidc_login(context: Context, next: Next = None) -> RedirectResponse:
     summary="Return from the identity provider",
     description=(
         "The provider sends the browser here. Signs in (new session cookie; a session the "
-        "browser had ends) or completes a link, then redirects to the path given at the start."
+        "browser had ends) or completes a link, then redirects to the path given at the start. "
+        "If that fails, the browser goes to the web UI instead: `/ui/login?error=<code>` (while "
+        "linking: `/ui/settings?error=<code>`) with `denied` (the provider did not sign the "
+        "user in), `failed` (the flow expired or does not match, or no account is linked to "
+        "this sign-in), `conflict` (the provider's account is linked to another user) or "
+        "`provider` (the provider cannot be reached or answered wrongly)."
     ),
     response_class=RedirectResponse,
     responses={
-        303: {"description": "To the path given at the start."},
-        **problem_responses(401, 404, 409, 422, 502),
+        303: {"description": "To the path given at the start, or to the web UI on a failure."},
+        **problem_responses(404, 422),
     },
 )
 async def oidc_callback(
@@ -362,19 +371,37 @@ async def oidc_callback(
     error: Annotated[str | None, Query(max_length=200)] = None,
 ) -> RedirectResponse:
     oidc = _oidc(context)
+    # The browser lands on a page of the web UI, not on a problem document: a failure comes back
+    # as a code in the page's address (`/ui/login?error=<code>`, or the settings while linking).
+    failed = f"{UI_PREFIX}/settings" if caller is not None else f"{UI_PREFIX}/login"
     if error is not None or code is None or state is None:
-        raise AuthenticationError("the identity provider did not sign you in")
-    outcome = await oidc.complete(
-        request.cookies.get(flow_cookie_name(context)),
-        state=state,
-        code=code,
-        caller=None if caller is None else caller.id,
-        current_session=None if caller is None or caller.session is None else caller.session.id,
-    )
+        return _oidc_failure(failed, "denied")
+    try:
+        outcome = await oidc.complete(
+            request.cookies.get(flow_cookie_name(context)),
+            state=state,
+            code=code,
+            caller=None if caller is None else caller.id,
+            current_session=None if caller is None or caller.session is None else caller.session.id,
+        )
+    except AuthenticationError:
+        return _oidc_failure(failed, "failed", context)
+    except ConflictError:
+        return _oidc_failure(failed, "conflict", context)
+    except IdentityProviderError:
+        return _oidc_failure(failed, "provider", context)
     response = RedirectResponse(outcome.redirect_to, status_code=303)
     clear_flow_cookie(response, context)
     if outcome.signed_in is not None:
         set_session_cookie(response, context, outcome.signed_in)
+    return response
+
+
+def _oidc_failure(path: str, code: str, context: ApiContext | None = None) -> RedirectResponse:
+    """Back to the web UI with the reason, and the flow's cookie gone."""
+    response = RedirectResponse(f"{path}?{urlencode({'error': code})}", status_code=303)
+    if context is not None:
+        clear_flow_cookie(response, context)
     return response
 
 
