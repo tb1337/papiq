@@ -38,7 +38,8 @@ WHO_READS = (
 )
 CHECKS = (
     " The content is checked: operators fit the field and the attribute's data type, patterns "
-    "compile, a global rule only tags, sets attributes and forces reviews (422); contacts, "
+    "compile, a global rule only tags, sets attributes and forces reviews (422, the message "
+    "names the place, such as `conditions.all[1].any[0]` or `actions[2]`); contacts, "
     "types, tags, attributes and drawers exist (404); a user rule files only into drawers its "
     "owner may write to (403)."
 )

@@ -696,7 +696,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Create a rule
-		 * @description Global rules: admins only (403). The content is checked: operators fit the field and the attribute's data type, patterns compile, a global rule only tags, sets attributes and forces reviews (422); contacts, types, tags, attributes and drawers exist (404); a user rule files only into drawers its owner may write to (403).
+		 * @description Global rules: admins only (403). The content is checked: operators fit the field and the attribute's data type, patterns compile, a global rule only tags, sets attributes and forces reviews (422, the message names the place, such as `conditions.all[1].any[0]` or `actions[2]`); contacts, types, tags, attributes and drawers exist (404); a user rule files only into drawers its owner may write to (403).
 		 */
 		post: operations['create_rule_api_v1_rules_post'];
 		delete?: never;
@@ -719,7 +719,7 @@ export interface paths {
 		get: operations['get_rule_api_v1_rules__id__get'];
 		/**
 		 * Change a rule
-		 * @description Makes a new version; earlier ones stay readable. A user rule: its owner and admins (its references are checked for its owner). A global rule: admins. The content is checked: operators fit the field and the attribute's data type, patterns compile, a global rule only tags, sets attributes and forces reviews (422); contacts, types, tags, attributes and drawers exist (404); a user rule files only into drawers its owner may write to (403).
+		 * @description Makes a new version; earlier ones stay readable. A user rule: its owner and admins (its references are checked for its owner). A global rule: admins. The content is checked: operators fit the field and the attribute's data type, patterns compile, a global rule only tags, sets attributes and forces reviews (422, the message names the place, such as `conditions.all[1].any[0]` or `actions[2]`); contacts, types, tags, attributes and drawers exist (404); a user rule files only into drawers its owner may write to (403).
 		 */
 		put: operations['change_rule_api_v1_rules__id__put'];
 		post?: never;
