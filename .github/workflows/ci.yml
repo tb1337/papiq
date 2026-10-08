@@ -156,8 +156,9 @@ jobs:
 
   # The dev image, only when its inputs change. First amd64: the devcontainer's services start
   # like "Reopen in Container", Garage's init is repeatable, and the image's own OCR programs
-  # and Docling models work (`integration` tests the code). Then amd64 and arm64 (Apple
-  # Silicon, emulated), which also writes the layer cache: one scope, only from main.
+  # and Docling models work (`integration` tests the code). The build also writes the layer
+  # cache: one scope, only from main. arm64 (Apple Silicon) is not built here: emulated, it was
+  # slow and filled the runner's disk.
   devcontainer:
     needs: changes
     if: needs.changes.outputs.devcontainer == 'true'
@@ -167,10 +168,6 @@ jobs:
       COMPOSE: docker compose -f .devcontainer/compose.yml
     steps:
       - uses: actions/checkout@v6
-      - uses: docker/setup-qemu-action@v4
-        with:
-          platforms: arm64
-          cache-image: false
       - uses: docker/setup-buildx-action@v4
         with:
           cache-binary: false
@@ -183,6 +180,7 @@ jobs:
           load: true
           tags: papiq-dev-dev:latest
           cache-from: type=gha,scope=dev-image
+          cache-to: ${{ env.WRITE_CACHE == 'true' && 'type=gha,scope=dev-image,mode=max' || '' }}
           secrets: hf_token=${{ secrets.HF_TOKEN }}
       - name: Start the services
         # Uses the image built above; builds only the small garage-init image.
@@ -207,12 +205,3 @@ jobs:
       - name: Show service logs
         if: failure()
         run: $COMPOSE logs
-      - name: Build for amd64 and arm64
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          target: dev
-          platforms: linux/amd64,linux/arm64
-          cache-from: type=gha,scope=dev-image
-          cache-to: ${{ env.WRITE_CACHE == 'true' && 'type=gha,scope=dev-image,mode=max' || '' }}
-          secrets: hf_token=${{ secrets.HF_TOKEN }}
