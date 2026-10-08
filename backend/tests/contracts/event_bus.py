@@ -14,7 +14,7 @@ from papiq.core.domain.events import (
     LaneChanged,
     StepCompleted,
 )
-from papiq.core.domain.ids import DocumentId, DrawerId, new_id
+from papiq.core.domain.ids import DocumentId, DrawerId, UserId, new_id
 from papiq.core.domain.pipeline import Lane, Outcome, Step
 from papiq.core.ports import Clock, DeliveryRetry, EventBus, UnitOfWorkFactory
 from papiq.core.ports.event_bus import DEFAULT_DELIVERY_RETRY
@@ -94,6 +94,11 @@ class EventBusContract:
             DocumentFiled(document_id=document, occurred_at=NOW, drawer_id=DrawerId(new_id())),
             DocumentUpdated(document_id=document, occurred_at=NOW, fields=("title", "attributes")),
             DocumentDeleted(document_id=document, occurred_at=NOW),
+            DocumentDeleted(
+                document_id=document,
+                occurred_at=NOW,
+                readers=(UserId(new_id()), UserId(new_id())),
+            ),
         ]
         assert {type(event) for event in events} == set(EVENT_TYPES.values())
         await publish(uow_factory, *events)

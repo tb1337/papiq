@@ -38,8 +38,9 @@ async def _visible_document(
     summary="Progress of documents (server-sent events)",
     description=(
         "A stream of document events (`document.received`, `document.step_completed`, "
-        "`document.lane_changed`, `document.filed`, `document.updated`), only for documents "
-        "the caller may read at that moment; other users' documents are visible once green. "
+        "`document.lane_changed`, `document.filed`, `document.updated`, `document.deleted`), "
+        "only for documents the caller may read at that moment (`document.deleted`: could "
+        "read when it was deleted); other users' documents are visible once green. "
         "Each event has the event type as `event`, the event id as `id`, and JSON as `data` "
         "(see `EventMessage`). Events are thin: fetch the document for its state. There is "
         "no replay; after reconnecting, fetch the current state. The stream checks every "

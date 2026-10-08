@@ -293,7 +293,7 @@ class DocumentService:
             document, _ = await readable_document(uow, user, id)
             if not is_document_owner(user, document):
                 raise PermissionDeniedError(f"only the owner deletes document {id}")
-            document.delete(self._clock.now())
+            document.delete(self._clock.now(), await _readers(uow, document))
             await uow.documents.remove(id)
             await uow.outbox.add(document.pull_events())
             await uow.jobs.enqueue(
@@ -302,6 +302,19 @@ class DocumentService:
                 run_at=self._clock.now(),
             )
             await uow.commit()
+
+
+async def _readers(uow: UnitOfWork, document: Document) -> list[UserId]:
+    """The users who may read the document now: its owner, and while it is green the owner of
+    its drawer and the users the drawer is shared with (if their accounts are active)."""
+    drawer = await uow.drawers.get(document.drawer_id)
+    candidates = {document.owner_id, drawer.owner_id, *drawer.shares}
+    readers = []
+    for candidate in candidates:
+        user = await uow.users.find(candidate)
+        if user is not None and can_read_document(user, document, drawer):
+            readers.append(candidate)
+    return sorted(readers)
 
 
 async def _save(uow: UnitOfWork, document: Document) -> None:

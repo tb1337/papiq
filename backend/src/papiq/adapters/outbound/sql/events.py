@@ -13,7 +13,7 @@ from papiq.core.domain.events import (
     LaneChanged,
     StepCompleted,
 )
-from papiq.core.domain.ids import DocumentId, DrawerId, EventId
+from papiq.core.domain.ids import DocumentId, DrawerId, EventId, UserId
 from papiq.core.domain.json_value import JsonObject
 from papiq.core.domain.pipeline import Lane, Outcome, Step
 
@@ -21,8 +21,13 @@ from papiq.core.domain.pipeline import Lane, Outcome, Step
 def encode(event: DomainEvent) -> JsonObject:
     """The payload of an event: every field except type, id and time."""
     match event:
-        case DocumentReceived() | DocumentDeleted():
+        case DocumentReceived():
             return {"document_id": str(event.document_id)}
+        case DocumentDeleted():
+            return {
+                "document_id": str(event.document_id),
+                "readers": [str(reader) for reader in event.readers],
+            }
         case StepCompleted():
             return {
                 "document_id": str(event.document_id),
@@ -53,7 +58,8 @@ def decode(type: str, id: UUID, occurred_at: datetime, payload: dict[str, Any]) 
         case DocumentReceived.type:
             return DocumentReceived(**common)
         case DocumentDeleted.type:
-            return DocumentDeleted(**common)
+            readers = tuple(UserId(UUID(reader)) for reader in payload.get("readers", ()))
+            return DocumentDeleted(**common, readers=readers)
         case StepCompleted.type:
             return StepCompleted(
                 **common,

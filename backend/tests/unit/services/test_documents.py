@@ -192,6 +192,38 @@ async def test_only_the_owner_deletes(world: World, scene: Scene) -> None:
     assert event.document_id == scene.document.id
 
 
+async def test_the_deletion_records_who_could_read_the_document(world: World, scene: Scene) -> None:
+    await world.documents.delete(scene.owner.id, scene.document.id)
+    (event,) = world.events()
+    assert isinstance(event, DocumentDeleted)
+    assert set(event.readers) == {scene.owner.id, scene.reader.id, scene.writer.id}
+    assert scene.stranger.id not in event.readers
+
+
+async def test_a_deactivated_user_and_a_document_in_the_inbox_have_fewer_readers(
+    world: World, scene: Scene
+) -> None:
+    admin = await world.user(role=Role.ADMIN)
+    await world.users.set_active(admin.id, scene.reader.id, False)
+    await world.documents.delete(scene.owner.id, scene.document.id)
+    (event,) = world.events()
+    assert isinstance(event, DocumentDeleted)
+    assert set(event.readers) == {scene.owner.id, scene.writer.id}
+
+    world.database.outbox.clear()
+    received = await world.pipeline().receive(
+        scene.owner.id, incoming(b"%PDF-1.7 yellow"), filename="y.pdf", drawer=scene.shared.id
+    )
+    await world.drain(world.pipeline({Step.CLASSIFY: Returns(UNCERTAIN)}))
+    yellow = await world.documents.get(scene.owner.id, received.id)
+    assert yellow.lane is Lane.YELLOW
+    world.database.outbox.clear()
+    await world.documents.delete(scene.owner.id, yellow.id)
+    (event,) = world.events()
+    assert isinstance(event, DocumentDeleted)
+    assert event.readers == (scene.owner.id,)  # only the owner sees yellow documents
+
+
 async def test_only_the_owner_reads_the_processing_log(world: World, scene: Scene) -> None:
     entries = await world.documents.processing_log(scene.owner.id, scene.document.id)
     steps = [entry.step for entry in entries if entry.result.model_version != PERSON_DRAWER]
