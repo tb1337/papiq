@@ -25,7 +25,7 @@ class Session {
 
 	/** Who is signed in, from the server; false without a session. */
 	async load(): Promise<boolean> {
-		const { data, response } = await api.GET('/api/v1/auth/me');
+		const { data, error, response } = await api.GET('/api/v1/auth/me');
 		if (data) {
 			this.user = data.user;
 			this.#csrf = data.csrf_token;
@@ -33,7 +33,7 @@ class Session {
 		}
 		this.clear();
 		if (response.status === 401) return false;
-		throw await apiError(response);
+		throw await apiError(response, error);
 	}
 
 	/** Take over a new session (sign-in answer). */
@@ -49,25 +49,39 @@ class Session {
 
 	/** Sign out on the server, then forget the session; also when the server says it has gone. */
 	async logout(): Promise<void> {
-		const { response } = await api.POST('/api/v1/auth/logout');
+		const { error, response } = await api.POST('/api/v1/auth/logout');
 		this.clear();
-		if (!response.ok && response.status !== 401) throw await apiError(response);
+		if (!response.ok && response.status !== 401) throw await apiError(response, error);
 	}
 }
 
 export const session = new Session();
 
-/** Connect the API client to the session; `unauthorized` leads to the sign-in page. */
-export function connectSession(unauthorized: () => void): void {
+export interface SessionEvents {
+	/** The session ended or never existed: sign in again. */
+	unauthorized(): void;
+	/** Another sign-in in this browser (another tab) replaced the session: start afresh. */
+	replaced(): void;
+}
+
+/** Connect the API client to the session. */
+export function connectSession({ unauthorized, replaced }: SessionEvents): void {
 	setSessionHooks({
 		csrfToken: () => session.csrfToken,
 		refreshCsrfToken: async () => {
+			const before = session.user?.id ?? null;
 			try {
-				return (await session.load()) ? session.csrfToken : null;
+				if (!(await session.load())) return null;
 			} catch (error) {
 				if (error instanceof ApiError) return null;
 				throw error;
 			}
+			// The cookie is shared by all tabs: never repeat a change as someone else.
+			if (before === null || session.user?.id !== before) {
+				if (before !== null) replaced();
+				return null;
+			}
+			return session.csrfToken;
 		},
 		unauthorized: () => {
 			session.clear();

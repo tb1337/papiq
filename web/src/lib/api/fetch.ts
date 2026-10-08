@@ -5,13 +5,16 @@
 
 export const CSRF_HEADER = 'X-CSRF-Token';
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
-// Answers 401 here are part of signing in, not an expired session.
-const SIGN_IN_PATHS = ['/api/v1/auth/login', '/api/v1/auth/me'];
+// Answers 401 here are part of signing in or out, not an expired session to report.
+const SIGN_IN_PATHS = ['/api/v1/auth/login', '/api/v1/auth/me', '/api/v1/auth/logout'];
 
 export interface SessionHooks {
 	/** The CSRF token of the current session, if any. */
 	csrfToken(): string | null;
-	/** Fetch the session's CSRF token anew (after a 403 for a stale one); null if none. */
+	/**
+	 * Fetch the session's CSRF token anew (after a 403 for a stale one); null if there is none or
+	 * the session now belongs to someone else (the change is then not repeated).
+	 */
 	refreshCsrfToken(): Promise<string | null>;
 	/** The session ended or never existed: sign in again. */
 	unauthorized(): void;
@@ -43,8 +46,13 @@ async function isStaleCsrf(response: Response): Promise<boolean> {
 	}
 }
 
+function sameOrigin(url: string): boolean {
+	return typeof location === 'undefined' || new URL(url).origin === location.origin;
+}
+
 function withCsrf(request: Request, token: string | null): Request {
-	if (!token || !isChange(request.method)) return request;
+	// The token belongs to this site only.
+	if (!token || !isChange(request.method) || !sameOrigin(request.url)) return request;
 	const headers = new Headers(request.headers);
 	headers.set(CSRF_HEADER, token);
 	return new Request(request, { headers });
