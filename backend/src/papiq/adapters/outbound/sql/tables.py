@@ -396,3 +396,49 @@ login_failures = Table(
     Column("blocked_until", UtcDateTime, nullable=True),
     Column("version", Integer, nullable=False),
 )
+
+# --- webhooks: rows go with their owner (ON DELETE CASCADE) ---------------------------------------
+
+webhooks = Table(
+    "webhooks",
+    metadata,
+    Column("id", Uuid, primary_key=True),
+    Column(
+        "owner_id", Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    ),
+    Column("name", Text, nullable=False),
+    Column("url", Text, nullable=False),
+    Column("event_types", json_type(), nullable=False),
+    # The signing secrets as `SecretCipher` made them; the previous one only during the grace
+    # period after renewing.
+    Column("secret", LargeBinary, nullable=False),
+    Column("previous_secret", LargeBinary, nullable=True),
+    Column("previous_valid_until", UtcDateTime, nullable=True),
+    Column("active", Boolean, nullable=False),
+    Column("disabled_reason", Text, nullable=True),
+    Column("failed_streak", Integer, nullable=False),
+    Column("created_at", UtcDateTime, nullable=False),
+    Column("updated_at", UtcDateTime, nullable=False),
+    Column("version", Integer, nullable=False),
+)
+
+# The log of delivery attempts. The answer of the receiver is not kept. `document_id` has no
+# foreign key: the document may be deleted while its log lives on.
+webhook_deliveries = Table(
+    "webhook_deliveries",
+    metadata,
+    Column("id", Uuid, primary_key=True),
+    Column("webhook_id", Uuid, ForeignKey("webhooks.id", ondelete="CASCADE"), nullable=False),
+    Column("event_id", Uuid, nullable=False),
+    Column("event_type", Text, nullable=False),
+    Column("document_id", Uuid, nullable=True),
+    Column("attempt", Integer, nullable=False),
+    Column("started_at", UtcDateTime, nullable=False),
+    Column("duration_ms", Integer, nullable=False),
+    Column("outcome", Text, nullable=False),
+    Column("status_code", Integer, nullable=True),
+    Column("error", Text, nullable=True),
+    Column("next_attempt_at", UtcDateTime, nullable=True),
+    Index(None, "webhook_id", "id"),
+    Index(None, "started_at"),
+)

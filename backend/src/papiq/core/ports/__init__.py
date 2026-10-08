@@ -36,6 +36,7 @@ from papiq.core.ports.repository import (
     RuleRepository,
     TagRepository,
     UserRepository,
+    WebhookRepository,
 )
 from papiq.core.ports.search_index import (
     IndexBuild,
@@ -95,4 +96,5 @@ __all__ = [
     "UnitOfWork",
     "UnitOfWorkFactory",
     "UserRepository",
+    "WebhookRepository",
 ]

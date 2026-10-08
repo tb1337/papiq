@@ -15,6 +15,7 @@ Common rules for every adapter:
 
 from collections.abc import Collection
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol
 
 from papiq.core.domain.attributes import AttributeDefinition
@@ -23,6 +24,7 @@ from papiq.core.domain.drawers import Drawer
 from papiq.core.domain.ids import (
     AttributeId,
     ContactId,
+    DeliveryId,
     DocumentId,
     DocumentTypeId,
     DrawerId,
@@ -30,11 +32,13 @@ from papiq.core.domain.ids import (
     RuleId,
     TagId,
     UserId,
+    WebhookId,
 )
 from papiq.core.domain.master_data import Contact, DocumentType, Tag
 from papiq.core.domain.pipeline import Lane, StepRun
 from papiq.core.domain.rules import Rule, RuleApplication, RuleVersion
 from papiq.core.domain.users import User
+from papiq.core.domain.webhooks import Webhook, WebhookDelivery
 
 
 class Repository[K, E](Protocol):
@@ -223,3 +227,52 @@ class RuleApplicationRepository(Protocol):
     async def add(self, application: RuleApplication) -> None: ...
 
     async def update(self, application: RuleApplication) -> None: ...
+
+
+class WebhookRepository(Protocol):
+    """Webhooks with the log of their deliveries."""
+
+    async def get(self, id: WebhookId) -> Webhook: ...
+
+    async def find(self, id: WebhookId) -> Webhook | None: ...
+
+    async def add(self, webhook: Webhook) -> None: ...
+
+    async def update(self, webhook: Webhook) -> None: ...
+
+    async def remove(self, id: WebhookId) -> None:
+        """Delete the webhook with its deliveries; no-op if it does not exist."""
+        ...
+
+    async def remove_for_owner(self, owner: UserId) -> int:
+        """Delete the user's webhooks with their deliveries; returns how many webhooks."""
+        ...
+
+    async def list_for_owner(self, owner: UserId) -> list[Webhook]:
+        """The user's webhooks, oldest first."""
+        ...
+
+    async def list_all(self) -> list[Webhook]:
+        """Everybody's webhooks, oldest first."""
+        ...
+
+    async def count_for_owner(self, owner: UserId) -> int: ...
+
+    async def list_active_for(self, event_type: str) -> list[Webhook]:
+        """The active webhooks that want the event type (it is listed, or they want all)."""
+        ...
+
+    async def add_delivery(self, delivery: WebhookDelivery) -> None:
+        """Log an attempt. The webhook must exist (NotFoundError otherwise): one that was
+        deleted meanwhile has nothing to log for."""
+        ...
+
+    async def deliveries(
+        self, webhook: WebhookId, *, before: DeliveryId | None = None, limit: int = 50
+    ) -> list[WebhookDelivery]:
+        """The log of a webhook, newest first (by id), the page after `before`."""
+        ...
+
+    async def purge_deliveries(self, *, before: datetime) -> int:
+        """Remove deliveries that started before `before`; returns how many."""
+        ...
