@@ -69,7 +69,7 @@ class RulesResult:
         if not rules:
             return StepResult(outcome=Outcome.OK, model_version=RULES, input=input)
         origin = provenance(await uow.processing_log.list_for(document.id), document)
-        definitions = {item.id: item for item in await uow.attributes.list_all()}
+        definitions = {item.id: item for item in await uow.fields.list_all()}
         run = await run_rules(
             uow,
             self.matcher,

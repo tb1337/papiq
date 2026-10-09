@@ -3,19 +3,19 @@ references go away."""
 
 import pytest
 
-from papiq.core.domain.attributes import AttributeType
 from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import NotFoundError, PermissionDeniedError, ValidationError
+from papiq.core.domain.fields import FieldType
 from papiq.core.domain.ids import ContactId, DrawerId, new_id
 from papiq.core.domain.rules import (
     AddTags,
     ForceReview,
     Rule,
     RuleScope,
-    SetAttribute,
     SetContact,
     SetDocumentType,
     SetDrawer,
+    SetField,
     SetTitle,
 )
 from tests.unit.services.conftest import World
@@ -152,9 +152,9 @@ async def test_deleting_master_data_and_drawers_disables_the_rules_that_use_them
     by_type = await r.user_rule(owner, definition("T", channel_api(), SetDocumentType(kind.id)))
     by_tag = await r.global_rule(definition("G", channel_api(), AddTags(frozenset({tag.id}))))
     by_drawer = await r.user_rule(owner, definition("D", channel_api(), SetDrawer(drawer.id)))
-    note = await world.master_data.create_attribute(r.admin.id, "Note", AttributeType.TEXT)
-    by_attribute = await r.user_rule(
-        owner, definition("A", channel_api(), SetAttribute(note.id, "from a rule"))
+    note = await world.master_data.create_field(r.admin.id, "Note", FieldType.TEXT)
+    by_field = await r.user_rule(
+        owner, definition("A", channel_api(), SetField(note.id, "from a rule"))
     )
     unrelated = await r.user_rule(owner, definition("U", channel_api(), SetTitle("Scan")))
 
@@ -162,14 +162,14 @@ async def test_deleting_master_data_and_drawers_disables_the_rules_that_use_them
     await world.master_data.delete_document_type(r.admin.id, kind.id)
     await world.master_data.delete_tag(r.admin.id, tag.id)
     await world.drawers.delete(sharer.id, drawer.id)
-    await world.master_data.delete_attribute(r.admin.id, note.id)
+    await world.master_data.delete_field(r.admin.id, note.id)
 
     expected = {
         by_contact.id: "contact 'ACME' was deleted",
         by_type.id: "document type 'Invoice' was deleted",
         by_tag.id: "tag 'tax' was deleted",
         by_drawer.id: "drawer 'Shared' was deleted",
-        by_attribute.id: "attribute 'Note' was deleted",
+        by_field.id: "field 'Note' was deleted",
     }
     for id, reason in expected.items():
         rule = await r.rules.get(r.admin.id, id)
@@ -184,21 +184,21 @@ async def test_deleting_master_data_and_drawers_disables_the_rules_that_use_them
 async def test_removing_a_choice_a_rule_uses_disables_the_rule(world: World) -> None:
     r = await rule_world(world)
     owner = await world.user()
-    size = await world.master_data.create_attribute(
-        r.admin.id, "Size", AttributeType.CHOICE, choices=["S", "M"]
+    size = await world.master_data.create_field(
+        r.admin.id, "Size", FieldType.CHOICE, choices=["S", "M"]
     )
-    small = await r.user_rule(owner, definition("S", channel_api(), SetAttribute(size.id, "S")))
-    medium = await r.user_rule(owner, definition("M", channel_api(), SetAttribute(size.id, "M")))
+    small = await r.user_rule(owner, definition("S", channel_api(), SetField(size.id, "S")))
+    medium = await r.user_rule(owner, definition("M", channel_api(), SetField(size.id, "M")))
 
-    await world.master_data.change_attribute(r.admin.id, size.id, choices=["S"])
+    await world.master_data.change_field(r.admin.id, size.id, choices=["S"])
     disabled = await r.rules.get(owner.id, medium.id)
     assert disabled.enabled is False
-    assert disabled.disabled_reason == "attribute 'Size' no longer allows a value the rule uses"
+    assert disabled.disabled_reason == "field 'Size' no longer allows a value the rule uses"
     assert (await r.rules.get(owner.id, small.id)).enabled
     with pytest.raises(ValidationError):
         await r.rules.set_enabled(owner.id, medium.id, True)
 
-    await world.master_data.change_attribute(r.admin.id, size.id, choices=["S", "M"])
+    await world.master_data.change_field(r.admin.id, size.id, choices=["S", "M"])
     enabled = await r.rules.set_enabled(owner.id, medium.id, True)
     assert (enabled.enabled, enabled.disabled_reason) == (True, None)
 

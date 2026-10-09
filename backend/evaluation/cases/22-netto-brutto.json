@@ -9,7 +9,7 @@
       "Auto"
     ],
     "document_date": "2026-05-14",
-    "attributes": {
+    "fields": {
       "Betrag": {
         "amount": "1190.00",
         "currency": "EUR"
@@ -35,7 +35,7 @@
         "evidence": "Datum 14.05.2026"
       }
     },
-    "attributes": {
+    "fields": {
       "Betrag": {
         "value": {
           "amount": "1190.00",

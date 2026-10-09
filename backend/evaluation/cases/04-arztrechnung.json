@@ -8,7 +8,7 @@
       "Gesundheit"
     ],
     "document_date": "2026-01-20",
-    "attributes": {
+    "fields": {
       "Betrag": {
         "amount": "128.74",
         "currency": "EUR"
@@ -34,7 +34,7 @@
         "evidence": "Rechnungsdatum: 20.01.2026"
       }
     },
-    "attributes": {
+    "fields": {
       "Betrag": {
         "value": {
           "amount": "128.74",

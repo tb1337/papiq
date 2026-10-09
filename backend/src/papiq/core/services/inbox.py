@@ -12,20 +12,20 @@ from datetime import date
 from typing import Any
 from uuid import UUID
 
-from papiq.core.domain.attributes import AttributeDefinition
 from papiq.core.domain.classification import (
     CONTACT,
     DOCUMENT_DATE,
     DOCUMENT_TYPE,
     TAGS,
     FieldCheck,
-    attribute_from_json,
-    attribute_of,
     checks_from_json,
+    field_from_json,
+    field_id_of,
 )
 from papiq.core.domain.documents import Document, DocumentChanges, Unset
 from papiq.core.domain.errors import OpenFieldsError, ValidationError
-from papiq.core.domain.ids import AttributeId, ContactId, DocumentTypeId, TagId
+from papiq.core.domain.fields import FieldDefinition
+from papiq.core.domain.ids import ContactId, DocumentTypeId, FieldId, TagId
 from papiq.core.domain.json_value import JsonObject, JsonValue
 from papiq.core.domain.pipeline import PIPELINE, Outcome, Step, StepResult, StepRun
 
@@ -50,13 +50,13 @@ OUTSIDE_PIPELINE = frozenset({RULES_CHANGE, RULES_APPLY, PERSON_DRAWER})
 ALWAYS_SET = frozenset({"drawer", "title", "review"})
 """Open fields of the rules that always have a value: confirming keeps it."""
 
-MODEL_STEPS = (Step.CLASSIFY, Step.EXTRACT_ATTRIBUTES)
+MODEL_STEPS = (Step.CLASSIFY, Step.EXTRACT_FIELDS)
 
 
 @dataclass(frozen=True)
 class OpenStep:
     """A step whose result is uncertain or failed: why, and the fields its owner has to decide
-    (uncertain fields of classification or attribute extraction; none for other steps)."""
+    (uncertain fields of classification or field extraction; none for other steps)."""
 
     step: Step
     outcome: Outcome
@@ -116,7 +116,7 @@ def latest_entries(log: Sequence[StepRun], *, by_model: bool = False) -> dict[St
 
 
 def field_checks(log: Sequence[StepRun]) -> dict[str, FieldCheck]:
-    """The field checks of the latest classification and attribute extraction, by field."""
+    """The field checks of the latest classification and field extraction, by field."""
     latest = latest_entries(log, by_model=True)
     checks: dict[str, FieldCheck] = {}
     for step in MODEL_STEPS:
@@ -170,44 +170,44 @@ def decide(
     changes: DocumentChanges,
     *,
     accept_suggestions: bool,
-    definitions: Mapping[AttributeId, AttributeDefinition],
+    definitions: Mapping[FieldId, FieldDefinition],
     given: Collection[str] = (),
 ) -> Decision:
     """Every open field needs a decision: a value (or None) in `changes` (or named in `given`,
     such as the drawer), a value the document has (its owner set it meanwhile; it is kept), or,
     with `accept_suggestions`, a suggestion that can be taken as it is. Suggestions never
-    replace a value. OpenFieldsError lists the fields without a decision. Fields of attributes
+    replace a value. OpenFieldsError lists the fields without a decision. Fields of fields
     that no longer exist need none. The rules' drawer, title and review always have a value:
     confirming keeps them."""
     accepted: dict[Step, list[str]] = {}
     entered: dict[Step, list[str]] = {}
     kept: dict[Step, list[str]] = {}
     suggested: dict[str, Any] = {}
-    attributes = dict(changes.attributes)
+    fields = dict(changes.fields)
     undecided: list[str] = []
     for item in open:
         for check in item.fields:
-            attribute = _attribute_id(check.field)
-            if attribute is not None and attribute not in definitions:
+            field_id = _field_id(check.field)
+            if field_id is not None and field_id not in definitions:
                 continue
-            if check.field in given or _given(changes, check.field, attribute):
+            if check.field in given or _given(changes, check.field, field_id):
                 entered.setdefault(item.step, []).append(check.field)
-            elif _has_value(document, check.field, attribute):
+            elif _has_value(document, check.field, field_id):
                 kept.setdefault(item.step, []).append(check.field)
             elif accept_suggestions and check.suggestion is not None:
-                value = _suggested(check, attribute, definitions)
-                if attribute is not None:
-                    attributes[attribute] = value
+                value = _suggested(check, field_id, definitions)
+                if field_id is not None:
+                    fields[field_id] = value
                 else:
                     suggested[check.field] = value
                 accepted.setdefault(item.step, []).append(check.field)
             else:
-                undecided.append(_label(check.field, attribute, definitions))
+                undecided.append(_label(check.field, field_id, definitions))
     if undecided:
         raise OpenFieldsError(tuple(undecided))
     combined = replace(
         changes,
-        attributes=attributes,
+        fields=fields,
         **{_CHANGE_FIELDS[name]: value for name, value in suggested.items()},
     )
     return Decision(
@@ -264,41 +264,41 @@ def _checks(result: StepResult) -> list[FieldCheck]:
         return []
 
 
-def _attribute_id(field: str) -> AttributeId | None:
-    id = attribute_of(field)
+def _field_id(field: str) -> FieldId | None:
+    id = field_id_of(field)
     if id is None:
         return None
     try:
-        return AttributeId(UUID(id))
+        return FieldId(UUID(id))
     except ValueError:
         return None
 
 
-def _given(changes: DocumentChanges, field: str, attribute: AttributeId | None) -> bool:
-    if attribute is not None:
-        return attribute in changes.attributes
+def _given(changes: DocumentChanges, field: str, field_id: FieldId | None) -> bool:
+    if field_id is not None:
+        return field_id in changes.fields
     name = _CHANGE_FIELDS.get(field)
     return name is not None and not isinstance(getattr(changes, name), Unset)
 
 
-def _has_value(document: Document, field: str, attribute: AttributeId | None) -> bool:
+def _has_value(document: Document, field: str, field_id: FieldId | None) -> bool:
     if field in ALWAYS_SET:
         return True
-    if attribute is not None:
-        return attribute in document.attributes
+    if field_id is not None:
+        return field_id in document.fields
     name = _CHANGE_FIELDS.get(field)
     return name is not None and getattr(document, name) not in (None, set())
 
 
 def _suggested(
     check: FieldCheck,
-    attribute: AttributeId | None,
-    definitions: Mapping[AttributeId, AttributeDefinition],
+    field_id: FieldId | None,
+    definitions: Mapping[FieldId, FieldDefinition],
 ) -> object:
     value: JsonValue = check.suggestion
     try:
-        if attribute is not None:
-            return attribute_from_json(definitions[attribute], value)
+        if field_id is not None:
+            return field_from_json(definitions[field_id], value)
         match check.field:
             case "contact":
                 return ContactId(UUID(str(value)))
@@ -315,9 +315,9 @@ def _suggested(
 
 def _label(
     field: str,
-    attribute: AttributeId | None,
-    definitions: Mapping[AttributeId, AttributeDefinition],
+    field_id: FieldId | None,
+    definitions: Mapping[FieldId, FieldDefinition],
 ) -> str:
-    if attribute is None:
+    if field_id is None:
         return field
-    return f"{field} ({definitions[attribute].name})"
+    return f"{field} ({definitions[field_id].name})"

@@ -110,16 +110,16 @@ def incoming(data: bytes) -> IncomingFile:
 
 
 def skip_classification(pipeline: PipelineService) -> PipelineService:
-    """Let classification and attribute extraction pass as OK, for tests about other things
+    """Let classification and field extraction pass as OK, for tests about other things
     (without a language model, they would make every document yellow)."""
-    for step in (Step.CLASSIFY, Step.EXTRACT_ATTRIBUTES):
+    for step in (Step.CLASSIFY, Step.EXTRACT_FIELDS):
         pipeline._executors[step] = PlaceholderStep()
     return pipeline
 
 
 def index_document(**fields: Any) -> IndexDocument:
     """A green document of a random owner in a random drawer, for the search index; `fields`
-    override any of its attributes."""
+    override any of its fields."""
     values: dict[str, Any] = {
         "id": DocumentId(new_id()),
         "version": 1,

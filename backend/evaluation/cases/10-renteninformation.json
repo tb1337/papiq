@@ -1,5 +1,5 @@
 {
-  "description": "Pension information, a notice without attributes of its own.",
+  "description": "Pension information, a notice without fields of its own.",
   "expected": {
     "lane": "green",
     "contact": "Rentenkasse Musterland",
@@ -8,7 +8,7 @@
       "Rente"
     ],
     "document_date": "2026-07-14",
-    "attributes": {}
+    "fields": {}
   },
   "fake": {
     "classification": {
@@ -27,6 +27,6 @@
         "evidence": "Berlin, 14.07.2026"
       }
     },
-    "attributes": {}
+    "fields": {}
   }
 }

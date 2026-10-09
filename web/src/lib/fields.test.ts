@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { emptyValue, sameValue, toApi, toField } from './attributes.ts';
+import { emptyValue, sameValue, toApi, toInput } from './fields.ts';
 
-describe('attribute values', () => {
+describe('field values', () => {
 	it('keeps text and trims it', () => {
 		expect(toApi('text', '  Hello ')).toBe('Hello');
-		expect(toField('text', 'Hello')).toBe('Hello');
+		expect(toInput('text', 'Hello')).toBe('Hello');
 	});
 
 	it('removes a value when the field is empty', () => {
@@ -18,7 +18,7 @@ describe('attribute values', () => {
 	});
 
 	it('reads and writes yes/no', () => {
-		expect(toField('boolean', false)).toBe('false');
+		expect(toInput('boolean', false)).toBe('false');
 		expect(toApi('boolean', 'false')).toBe(false);
 		expect(toApi('boolean', 'true')).toBe(true);
 	});

@@ -3,12 +3,12 @@ expected of it and, for runs without a model, a fixed answer.
 
 Layout of a set directory:
 
-- `master_data.json`: `contacts`, `document_types`, `tags` (names) and `attributes`
+- `master_data.json`: `contacts`, `document_types`, `tags` (names) and `fields`
   (`name`, `data_type`, `document_types` (names, or null for global), `choices`).
 - `cases/<name>.md`: the document text, as the parse step would produce it.
 - `cases/<name>.json`: `description`, `expected` (`lane`, `contact`, `document_type`, `tags`,
-  `document_date`, `attributes` by name, in the JSON form of the API) and `fake`
-  (`classification`: the answer of the classify step; `attributes`: proposals by attribute
+  `document_date`, `fields` by name, in the JSON form of the API) and `fake`
+  (`classification`: the answer of the classify step; `fields`: proposals by field
   name; `lane`: the lane this answer leads to, if not the expected one).
 """
 
@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from papiq.core.domain.attributes import AttributeType
+from papiq.core.domain.fields import FieldType
 from papiq.core.domain.json_value import JsonObject, JsonValue
 from papiq.core.domain.pipeline import Lane
 from papiq.core.ports import StructuredRequest
@@ -29,9 +29,9 @@ class EvaluationSetError(Exception):
 
 
 @dataclass(frozen=True)
-class AttributeSpec:
+class FieldSpec:
     name: str
-    data_type: AttributeType
+    data_type: FieldType
     document_types: tuple[str, ...] | None
     choices: tuple[str, ...] = ()
 
@@ -41,7 +41,7 @@ class MasterDataSpec:
     contacts: tuple[str, ...]
     document_types: tuple[str, ...]
     tags: tuple[str, ...]
-    attributes: tuple[AttributeSpec, ...]
+    fields: tuple[FieldSpec, ...]
 
 
 @dataclass(frozen=True)
@@ -51,13 +51,13 @@ class Expected:
     document_type: str | None
     tags: frozenset[str]
     document_date: str | None
-    attributes: dict[str, JsonValue] = field(default_factory=dict)
+    fields: dict[str, JsonValue] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class FakeAnswer:
     classification: JsonObject
-    attributes: dict[str, JsonValue]
+    fields: dict[str, JsonValue]
     lane: Lane
 
     def respond(self, request: StructuredRequest) -> JsonObject:
@@ -66,7 +66,7 @@ class FakeAnswer:
             return self.classification
         keys = dict(re.findall(r'^- (a\d+): "([^"\n]*)"', _before_document(request.user), re.M))
         empty: JsonObject = {"value": None, "evidence": None}
-        return {"attributes": {key: self.attributes.get(name, empty) for key, name in keys.items()}}
+        return {"fields": {key: self.fields.get(name, empty) for key, name in keys.items()}}
 
 
 @dataclass(frozen=True)
@@ -113,30 +113,30 @@ def _json(path: Path) -> Any:
 
 def _master_data(data: Any) -> MasterDataSpec:
     try:
-        attributes = tuple(
-            AttributeSpec(
+        fields = tuple(
+            FieldSpec(
                 name=item["name"],
-                data_type=AttributeType(item["data_type"]),
+                data_type=FieldType(item["data_type"]),
                 document_types=(
                     None if item.get("document_types") is None else tuple(item["document_types"])
                 ),
                 choices=tuple(item.get("choices", ())),
             )
-            for item in data["attributes"]
+            for item in data["fields"]
         )
         master = MasterDataSpec(
             contacts=tuple(data["contacts"]),
             document_types=tuple(data["document_types"]),
             tags=tuple(data["tags"]),
-            attributes=attributes,
+            fields=fields,
         )
     except (KeyError, TypeError, ValueError) as error:
         raise EvaluationSetError(f"master_data.json: {error!r}") from None
-    for attribute in attributes:
-        unknown = set(attribute.document_types or ()) - set(master.document_types)
+    for definition in fields:
+        unknown = set(definition.document_types or ()) - set(master.document_types)
         if unknown:
             raise EvaluationSetError(
-                f"master_data.json: attribute {attribute.name!r} names unknown types {unknown}"
+                f"master_data.json: field {definition.name!r} names unknown types {unknown}"
             )
     return master
 
@@ -152,14 +152,14 @@ def _case(markdown: Path, master: MasterDataSpec) -> Case:
             document_type=expected_data.get("document_type"),
             tags=frozenset(expected_data.get("tags", ())),
             document_date=expected_data.get("document_date"),
-            attributes=dict(expected_data.get("attributes", {})),
+            fields=dict(expected_data.get("fields", {})),
         )
         fake = None
         if data.get("fake") is not None:
             fake_data = data["fake"]
             fake = FakeAnswer(
                 classification=fake_data["classification"],
-                attributes=dict(fake_data.get("attributes", {})),
+                fields=dict(fake_data.get("fields", {})),
                 lane=Lane(fake_data.get("lane", expected.lane.value)),
             )
         case = Case(
@@ -184,7 +184,7 @@ def _check_names(case: Case, master: MasterDataSpec) -> None:
     if expected.document_type is not None and expected.document_type not in master.document_types:
         problems.append(f"unknown document type {expected.document_type!r}")
     problems += [f"unknown tag {tag!r}" for tag in sorted(expected.tags - set(master.tags))]
-    names = {attribute.name for attribute in master.attributes}
-    problems += [f"unknown attribute {name!r}" for name in expected.attributes if name not in names]
+    names = {field.name for field in master.fields}
+    problems += [f"unknown field {name!r}" for name in expected.fields if name not in names]
     if problems:
         raise EvaluationSetError(f"{case.name}: {', '.join(problems)}")

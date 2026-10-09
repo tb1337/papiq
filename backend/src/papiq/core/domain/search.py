@@ -59,7 +59,7 @@ class IndexDocument:
     document_type: str | None = None
     tag_ids: tuple[TagId, ...] = ()
     tags: tuple[str, ...] = ()
-    attributes: tuple[str, ...] = ()
+    fields: tuple[str, ...] = ()
     document_date: date | None = None
     created_at: datetime
     vectors: tuple[tuple[float, ...], ...] | None = field(default=(), repr=False)

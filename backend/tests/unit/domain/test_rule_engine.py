@@ -5,14 +5,14 @@ from uuid import UUID
 
 import pytest
 
-from papiq.core.domain.attributes import AttributeDefinition, AttributeType, Money, Url
 from papiq.core.domain.documents import UNSET, Channel, Document, DocumentChanges
 from papiq.core.domain.evidence import DocumentText
+from papiq.core.domain.fields import FieldDefinition, FieldType, Money, Url
 from papiq.core.domain.ids import (
-    AttributeId,
     ContactId,
     DocumentTypeId,
     DrawerId,
+    FieldId,
     TagId,
     UserId,
     new_id,
@@ -48,10 +48,10 @@ from papiq.core.domain.rules import (
     RuleDefinition,
     RuleScope,
     RuleVersion,
-    SetAttribute,
     SetContact,
     SetDocumentType,
     SetDrawer,
+    SetField,
     SetTitle,
 )
 from tests import builders
@@ -86,11 +86,11 @@ def cond(
     op: Operator,
     value: JsonValue = None,
     *,
-    attribute_id: AttributeId | None = None,
+    field_id: FieldId | None = None,
     case_sensitive: bool = False,
 ) -> Condition:
     return Condition(
-        field=field, op=op, value=value, attribute_id=attribute_id, case_sensitive=case_sensitive
+        field=field, op=op, value=value, field_id=field_id, case_sensitive=case_sensitive
     )
 
 
@@ -341,29 +341,29 @@ def test_text_matches_reads_the_pattern_results() -> None:
     assert holds("Invoice") is False  # not computed
 
 
-# --- attributes -------------------------------------------------------------------------------
+# --- fields -------------------------------------------------------------------------------
 
 
-def attribute(data_type: AttributeType, *choices: str) -> AttributeDefinition:
-    return AttributeDefinition.create(
+def field(data_type: FieldType, *choices: str) -> FieldDefinition:
+    return FieldDefinition.create(
         name=data_type.value, data_type=data_type, now=NOW, choices=choices
     )
 
 
-AMOUNT = attribute(AttributeType.AMOUNT)
-DUE = attribute(AttributeType.DATE)
-REFERENCE = attribute(AttributeType.TEXT)
-INTERVAL = attribute(AttributeType.CHOICE, "monthly", "yearly", "weekly")
-COUNT = attribute(AttributeType.NUMBER)
-PAID_FLAG = attribute(AttributeType.BOOLEAN)
-PORTAL = attribute(AttributeType.LINK)
+AMOUNT = field(FieldType.AMOUNT)
+DUE = field(FieldType.DATE)
+REFERENCE = field(FieldType.TEXT)
+INTERVAL = field(FieldType.CHOICE, "monthly", "yearly", "weekly")
+COUNT = field(FieldType.NUMBER)
+PAID_FLAG = field(FieldType.BOOLEAN)
+PORTAL = field(FieldType.LINK)
 DEFINITIONS = {
     item.id: item for item in (AMOUNT, DUE, REFERENCE, INTERVAL, COUNT, PAID_FLAG, PORTAL)
 }
 
-ATTRIBUTE_FACTS = Facts.of(
+FIELD_FACTS = Facts.of(
     doc(
-        attributes={
+        fields={
             AMOUNT.id: Money(Decimal("120.00"), "EUR"),
             DUE.id: date(2026, 3, 31),
             REFERENCE.id: "ACME Contract 7",
@@ -410,26 +410,26 @@ ATTRIBUTE_FACTS = Facts.of(
         (AMOUNT, Operator.MISSING, None, False),
     ],
 )
-def test_attribute_conditions(
-    attr: AttributeDefinition, op: Operator, value: JsonValue, expected: bool
+def test_field_conditions(
+    attr: FieldDefinition, op: Operator, value: JsonValue, expected: bool
 ) -> None:
-    group = all_(cond(ConditionField.ATTRIBUTE, op, value, attribute_id=attr.id))
+    group = all_(cond(ConditionField.FIELD, op, value, field_id=attr.id))
 
-    assert evaluate(group, ATTRIBUTE_FACTS, DEFINITIONS) is expected
+    assert evaluate(group, FIELD_FACTS, DEFINITIONS) is expected
 
 
-def test_attribute_matches_reads_the_pattern_results() -> None:
+def test_field_matches_reads_the_pattern_results() -> None:
     group = all_(
         cond(
-            ConditionField.ATTRIBUTE,
+            ConditionField.FIELD,
             Operator.MATCHES,
             "^ACME",
-            attribute_id=REFERENCE.id,
+            field_id=REFERENCE.id,
             case_sensitive=True,
         )
     )
 
-    assert evaluate(group, ATTRIBUTE_FACTS, DEFINITIONS) is True
+    assert evaluate(group, FIELD_FACTS, DEFINITIONS) is True
 
 
 @pytest.mark.parametrize(
@@ -441,23 +441,23 @@ def test_attribute_matches_reads_the_pattern_results() -> None:
         (Operator.MISSING, None, True),
     ],
 )
-def test_attribute_without_value(op: Operator, value: JsonValue, expected: bool) -> None:
-    group = all_(cond(ConditionField.ATTRIBUTE, op, value, attribute_id=AMOUNT.id))
+def test_field_without_value(op: Operator, value: JsonValue, expected: bool) -> None:
+    group = all_(cond(ConditionField.FIELD, op, value, field_id=AMOUNT.id))
 
     assert evaluate(group, Facts.of(doc()), DEFINITIONS) is expected
 
 
-def test_condition_on_a_deleted_attribute_does_not_hold() -> None:
-    group = all_(cond(ConditionField.ATTRIBUTE, Operator.MISSING, attribute_id=AMOUNT.id))
+def test_condition_on_a_deleted_field_does_not_hold() -> None:
+    group = all_(cond(ConditionField.FIELD, Operator.MISSING, field_id=AMOUNT.id))
 
     assert evaluate(group, Facts.of(doc()), {}) is False
 
 
-def test_attribute_value_that_no_longer_fits_does_not_hold() -> None:
+def test_field_value_that_no_longer_fits_does_not_hold() -> None:
     # The choice was removed from the definition after the rule was written.
-    group = all_(cond(ConditionField.ATTRIBUTE, Operator.IS, "daily", attribute_id=INTERVAL.id))
+    group = all_(cond(ConditionField.FIELD, Operator.IS, "daily", field_id=INTERVAL.id))
 
-    assert evaluate(group, ATTRIBUTE_FACTS, DEFINITIONS) is False
+    assert evaluate(group, FIELD_FACTS, DEFINITIONS) is False
 
 
 @pytest.mark.parametrize(
@@ -790,12 +790,12 @@ def test_global_rule_cannot_change_drawer_or_visibility() -> None:
     ]
 
 
-def test_global_rule_tags_sets_attributes_and_forces_reviews() -> None:
+def test_global_rule_tags_sets_fields_and_forces_reviews() -> None:
     result = run(
         [
             rule(
                 AddTags(frozenset({PAID})),
-                SetAttribute(PAID_FLAG.id, True),
+                SetField(PAID_FLAG.id, True),
                 ForceReview("check"),
                 scope=RuleScope.GLOBAL,
                 name="Paid",
@@ -805,7 +805,7 @@ def test_global_rule_tags_sets_attributes_and_forces_reviews() -> None:
     )
 
     assert result.changes.tag_ids == frozenset({PAID})
-    assert result.changes.attributes == {PAID_FLAG.id: True}
+    assert result.changes.fields == {PAID_FLAG.id: True}
     assert result.reviews == ["rule 'Paid': check"]
 
 
@@ -966,48 +966,48 @@ def test_titles_of_two_rules_conflict() -> None:
     assert check(result, "title").outcome is Outcome.UNCERTAIN
 
 
-# --- attributes -------------------------------------------------------------------------------
+# --- fields -------------------------------------------------------------------------------
 
 
-def test_set_attribute() -> None:
+def test_set_field() -> None:
     value: JsonValue = {"amount": "99.90", "currency": "EUR"}
 
-    result = run([rule(SetAttribute(AMOUNT.id, value))], situation(doc(), definitions=DEFINITIONS))
+    result = run([rule(SetField(AMOUNT.id, value))], situation(doc(), definitions=DEFINITIONS))
 
-    assert result.changes.attributes == {AMOUNT.id: Money(Decimal("99.90"), "EUR")}
-    assert result.reports[0].applied == [Effect(f"attribute:{AMOUNT.id}", None, value)]
+    assert result.changes.fields == {AMOUNT.id: Money(Decimal("99.90"), "EUR")}
+    assert result.reports[0].applied == [Effect(f"field:{AMOUNT.id}", None, value)]
 
 
-def test_attribute_for_another_document_type_is_skipped() -> None:
-    bound = AttributeDefinition.create(
+def test_field_for_another_document_type_is_skipped() -> None:
+    bound = FieldDefinition.create(
         name="invoice number",
-        data_type=AttributeType.TEXT,
+        data_type=FieldType.TEXT,
         now=NOW,
         document_type_ids=[INVOICE],
     )
     definitions = {bound.id: bound}
 
     letter = run(
-        [rule(SetAttribute(bound.id, "R-1"))],
+        [rule(SetField(bound.id, "R-1"))],
         situation(doc(document_type_id=LETTER), definitions=definitions),
     )
     becomes_invoice = run(
-        [rule(SetDocumentType(INVOICE), SetAttribute(bound.id, "R-1"))],
+        [rule(SetDocumentType(INVOICE), SetField(bound.id, "R-1"))],
         situation(doc(document_type_id=LETTER), definitions=definitions),
     )
 
-    assert letter.changes.attributes == {}
-    assert notes(letter) == [(f"attribute:{bound.id}", "skipped")]
-    assert becomes_invoice.changes.attributes == {bound.id: "R-1"}
+    assert letter.changes.fields == {}
+    assert notes(letter) == [(f"field:{bound.id}", "skipped")]
+    assert becomes_invoice.changes.fields == {bound.id: "R-1"}
 
 
-def test_attribute_value_that_no_longer_fits_is_skipped() -> None:
+def test_field_value_that_no_longer_fits_is_skipped() -> None:
     result = run(
-        [rule(SetAttribute(INTERVAL.id, "daily")), rule(SetAttribute(AttributeId(new_id()), "x"))],
+        [rule(SetField(INTERVAL.id, "daily")), rule(SetField(FieldId(new_id()), "x"))],
         situation(doc(), definitions=DEFINITIONS),
     )
 
-    assert result.changes.attributes == {}
+    assert result.changes.fields == {}
     assert [kind for _, kind in notes(result)] == ["skipped", "skipped"]
 
 
@@ -1019,17 +1019,17 @@ def test_pattern_subjects() -> None:
         ForceReview("x"),
         when=all_(cond(ConditionField.TEXT, Operator.MATCHES, "R-\\d+", case_sensitive=True)),
     )
-    by_attribute = rule(
+    by_field = rule(
         ForceReview("x"),
         when=any_(
-            cond(ConditionField.ATTRIBUTE, Operator.MATCHES, "^A", attribute_id=REFERENCE.id),
-            cond(ConditionField.ATTRIBUTE, Operator.MATCHES, "^h", attribute_id=PORTAL.id),
-            cond(ConditionField.ATTRIBUTE, Operator.MATCHES, "^x", attribute_id=DUE.id),
+            cond(ConditionField.FIELD, Operator.MATCHES, "^A", field_id=REFERENCE.id),
+            cond(ConditionField.FIELD, Operator.MATCHES, "^h", field_id=PORTAL.id),
+            cond(ConditionField.FIELD, Operator.MATCHES, "^x", field_id=DUE.id),
         ),
     )
-    document = doc(attributes={REFERENCE.id: "ACME 7", PORTAL.id: Url("https://example.org")})
+    document = doc(fields={REFERENCE.id: "ACME 7", PORTAL.id: Url("https://example.org")})
 
-    assert pattern_subjects([by_text, by_attribute], document, "Invoice R-1") == {
+    assert pattern_subjects([by_text, by_field], document, "Invoice R-1") == {
         ("text", "R-\\d+", True): "Invoice R-1",
         (str(REFERENCE.id), "^A", False): "ACME 7",
         (str(PORTAL.id), "^h", False): "https://example.org",
@@ -1043,11 +1043,11 @@ def test_pattern_text() -> None:
 
 
 def test_changed_fields() -> None:
-    attr = AttributeId(new_id())
+    attr = FieldId(new_id())
 
-    changes = DocumentChanges(title="x", contact_id=None, attributes={attr: None})
+    changes = DocumentChanges(title="x", contact_id=None, fields={attr: None})
 
-    assert changed_fields(changes) == {"title", "contact", f"attribute:{attr}"}
+    assert changed_fields(changes) == {"title", "contact", f"field:{attr}"}
     assert changed_fields(DocumentChanges()) == frozenset()
 
 

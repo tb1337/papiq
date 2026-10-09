@@ -5,18 +5,18 @@
 	import { api } from '#lib/api/client.ts';
 	import { unwrap } from '#lib/api/call.ts';
 	import type { components } from '#lib/api/schema.ts';
-	import AttributeField from '#lib/components/AttributeField.svelte';
+	import FieldValueInput from '#lib/components/FieldValueInput.svelte';
 	import NativeSelect from '#lib/components/NativeSelect.svelte';
 	import RuleEffects from '#lib/components/rules/RuleEffects.svelte';
 	import { Button } from '#lib/components/ui/button/index.ts';
 	import * as Dialog from '#lib/components/ui/dialog/index.ts';
 	import * as Field from '#lib/components/ui/field/index.ts';
 	import { Input } from '#lib/components/ui/input/index.ts';
-	import { sameValue, toApi, toField, type ApiValue, type FieldValue } from '#lib/attributes.ts';
+	import { sameValue, toApi, toInput, type ApiValue, type InputValue } from '#lib/fields.ts';
 	import { BASE } from '#lib/base.ts';
 	import { describeValue, fieldLabel } from '#lib/describe.ts';
 	import { describeError, fieldErrors as fieldMessages } from '#lib/errors.ts';
-	import { attributesFor, type Lookup } from '#lib/masterdata.svelte.ts';
+	import { fieldsFor, type Lookup } from '#lib/masterdata.svelte.ts';
 	import { m } from '#lib/paraglide/messages.js';
 	import X from '@lucide/svelte/icons/x';
 
@@ -37,7 +37,7 @@
 	let contact = $state('');
 	let documentType = $state('');
 	let tags = $state<string[]>([]);
-	let values = $state<Record<string, FieldValue>>({});
+	let values = $state<Record<string, InputValue>>({});
 	let busy = $state(false);
 	let preview = $state<Preview | null>(null);
 	let patch = $state<Patch>({});
@@ -56,29 +56,26 @@
 		documentType = document.document_type_id ?? '';
 		tags = [...document.tag_ids];
 		values = Object.fromEntries(
-			lookup.attributes.map((attribute) => [
-				attribute.id,
-				toField(attribute.data_type, document.attributes[attribute.id])
-			])
+			lookup.fields.map((field) => [field.id, toInput(field.data_type, document.fields[field.id])])
 		);
 		baseline = { id: document.id, form: snapshot() };
 	}
 
 	$effect(() => {
 		void document;
-		void lookup.attributes;
+		void lookup.fields;
 		untrack(() => {
 			const edited = baseline?.id === document.id && snapshot() !== baseline.form;
 			if (!edited) fromDocument();
 		});
 	});
 
-	// Attributes that fit the chosen type, and those the document already has.
+	// Fields that fit the chosen type, and those the document already has.
 	const shown = $derived(
-		lookup.attributes.filter(
-			(attribute) =>
-				attributesFor([attribute], documentType || null).length > 0 ||
-				document.attributes[attribute.id] !== undefined
+		lookup.fields.filter(
+			(field) =>
+				fieldsFor([field], documentType || null).length > 0 ||
+				document.fields[field.id] !== undefined
 		)
 	);
 	const tagName = $derived(new Map(lookup.tags.map((tag) => [tag.id, tag.name])));
@@ -101,11 +98,11 @@
 			next.tag_ids = tags;
 		}
 		const changed: Record<string, ApiValue | null> = {};
-		for (const attribute of shown) {
-			const value = toApi(attribute.data_type, values[attribute.id]);
-			if (!sameValue(value, document.attributes[attribute.id])) changed[attribute.id] = value;
+		for (const field of shown) {
+			const value = toApi(field.data_type, values[field.id]);
+			if (!sameValue(value, document.fields[field.id])) changed[field.id] = value;
 		}
-		if (Object.keys(changed).length > 0) next.attributes = changed;
+		if (Object.keys(changed).length > 0) next.fields = changed;
 		return next;
 	}
 
@@ -219,12 +216,12 @@
 		{/key}
 	</Field.Field>
 
-	{#each shown as attribute (attribute.id)}
-		<AttributeField
-			{attribute}
-			bind:value={values[attribute.id]}
-			id="attr-{attribute.id}"
-			error={fieldErrors[`attribute:${attribute.id}`]}
+	{#each shown as field (field.id)}
+		<FieldValueInput
+			{field}
+			bind:value={values[field.id]}
+			id="field-def-{field.id}"
+			error={fieldErrors[`field:${field.id}`]}
 		/>
 	{/each}
 

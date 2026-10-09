@@ -17,10 +17,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
 
-from papiq.core.domain.attributes import AttributeDefinition
 from papiq.core.domain.classification import TAGS
 from papiq.core.domain.documents import Document, DocumentChanges
-from papiq.core.domain.ids import AttributeId
+from papiq.core.domain.fields import FieldDefinition
+from papiq.core.domain.ids import FieldId
 from papiq.core.domain.json_value import JsonValue
 from papiq.core.domain.pipeline import Outcome, ProcessingStatus, Step, StepResult, StepRun
 from papiq.core.domain.rule_engine import Mode, changed_fields
@@ -33,9 +33,9 @@ from papiq.core.services.rules.running import (
     RuleRun,
     active_rules,
     apply_plan,
-    attribute_patterns,
     checked_rules,
     drawer_choice,
+    field_patterns,
     person_record,
     prepare,
     provenance,
@@ -90,7 +90,7 @@ class ChangeRules:
         document: Document,
         changes: DocumentChanges,
         prepared: Prepared,
-        definitions: Mapping[AttributeId, AttributeDefinition],
+        definitions: Mapping[FieldId, FieldDefinition],
         now: datetime,
         log: bool = True,
     ) -> RuleRun | None:
@@ -127,7 +127,7 @@ class ChangeRules:
                 tags_removed=(origin.tags_removed - document.tag_ids)
                 | (before.tag_ids - document.tag_ids),
             )
-            before_patterns, _ = await attribute_patterns(self._matcher, rules, before)
+            before_patterns, _ = await field_patterns(self._matcher, rules, before)
             run = await run_rules(
                 uow,
                 self._matcher,

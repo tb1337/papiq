@@ -1,4 +1,4 @@
-"""Prompts for classification and attribute extraction.
+"""Prompts for classification and field extraction.
 
 The document text is untrusted: it is framed by markers that contain a hash of the text (it
 cannot contain its own closing marker), and the instructions say it is data. Long texts are
@@ -10,7 +10,7 @@ import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from papiq.core.domain.attributes import AttributeDefinition, AttributeType
+from papiq.core.domain.fields import FieldDefinition, FieldType
 
 CLASSIFY_PROMPT = "classify-1"
 EXTRACT_PROMPT = "extract-1"
@@ -40,25 +40,25 @@ as YYYY-MM-DD; not a due date or a period."""
 
 EXTRACT_SYSTEM = f"""\
 You read one document for a document management system and extract the values of the \
-listed attributes.
+listed fields.
 
 Rules:
 {_COMMON_RULES}
-- attributes: one entry per listed key, with the value in the listed form, or null if the \
+- fields: one entry per listed key, with the value in the listed form, or null if the \
 document does not show it. If the document shows several candidates (for example net and \
-gross amounts), take the one the attribute's name asks for."""
+gross amounts), take the one the field's name asks for."""
 
 _VALUE_FORMS = {
-    AttributeType.TEXT: "text as written in the document",
-    AttributeType.NUMBER: 'number as text, "." as decimal separator, e.g. "1234.5"',
-    AttributeType.AMOUNT: (
+    FieldType.TEXT: "text as written in the document",
+    FieldType.NUMBER: 'number as text, "." as decimal separator, e.g. "1234.5"',
+    FieldType.AMOUNT: (
         'object with amount (text, "." as decimal separator, e.g. "1234.50") and currency '
         "(ISO 4217 code, e.g. EUR)"
     ),
-    AttributeType.DATE: "date as YYYY-MM-DD",
-    AttributeType.BOOLEAN: "true or false",
-    AttributeType.CHOICE: "one of the options",
-    AttributeType.LINK: "absolute http(s) URL as written in the document",
+    FieldType.DATE: "date as YYYY-MM-DD",
+    FieldType.BOOLEAN: "true or false",
+    FieldType.CHOICE: "one of the options",
+    FieldType.LINK: "absolute http(s) URL as written in the document",
 }
 
 
@@ -100,17 +100,17 @@ def classify_message(document_types: Sequence[str], tags: Sequence[str], text: S
 
 
 def extract_message(
-    document_type: str | None, keys: dict[str, AttributeDefinition], text: Shortened
+    document_type: str | None, keys: dict[str, FieldDefinition], text: Shortened
 ) -> str:
     lines = []
     for key, definition in keys.items():
         line = f'- {key}: "{definition.name}" ({_VALUE_FORMS[definition.data_type]})'
-        if definition.data_type is AttributeType.CHOICE:
+        if definition.data_type is FieldType.CHOICE:
             line += ": " + ", ".join(f'"{choice}"' for choice in definition.choices)
         lines.append(line)
     kind = f'The document is of type "{document_type}".' if document_type else ""
     return "\n\n".join(
-        part for part in (kind, "Attributes:\n" + "\n".join(lines), _document(text)) if part
+        part for part in (kind, "Fields:\n" + "\n".join(lines), _document(text)) if part
     )
 
 

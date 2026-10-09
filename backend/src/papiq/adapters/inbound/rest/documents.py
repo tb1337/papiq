@@ -43,16 +43,16 @@ from papiq.adapters.inbound.rest.schemas import (
     VisibilityOut,
 )
 from papiq.adapters.inbound.rest.upload import FILE_FIELD, read_upload
-from papiq.adapters.inbound.values import attribute_value
+from papiq.adapters.inbound.values import field_value
 from papiq.core.domain.documents import UNSET, Channel, Document, DocumentChanges
 from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import ValidationError
 from papiq.core.domain.ids import (
-    AttributeId,
     ContactId,
     DocumentId,
     DocumentTypeId,
     DrawerId,
+    FieldId,
     TagId,
     UserId,
 )
@@ -145,7 +145,7 @@ _UPLOAD_BODY: dict[str, Any] = {
                             "description": (
                                 "Admins only, with `channel=migration`: JSON of the metadata "
                                 "the document comes with (up to 48 KiB), as `ImportedMetadataIn`. "
-                                "Classification and attribute extraction apply it instead of "
+                                "Classification and field extraction apply it instead of "
                                 "asking the language model; the other steps and the rules run "
                                 "as usual."
                             ),
@@ -276,7 +276,7 @@ async def get_document(id: UUID, user: CurrentUser, context: Context) -> Documen
     summary="Change a document's metadata",
     description=(
         "Needs write access (owner or a `read_write` share). Referenced contact, type, tags "
-        "and attributes must exist; attribute values must fit their type and apply to the "
+        "and fields must exist; field values must fit their type and apply to the "
         "document type. On a filed document, the change sets off the owner's rules and the "
         "global ones with trigger `change` that hold after it and did not before; fields set "
         "in the change stay as they are. The owner sees what the rules did in `rules`. If the "
@@ -449,7 +449,7 @@ async def reprocess(
     summary="What the model proposed for a document",
     description=(
         "The owner and admins. The open steps and fields, and the latest classification and "
-        "attribute extraction by the model: each field as proposed, checked and applied."
+        "field extraction by the model: each field as proposed, checked and applied."
     ),
     response_model=ReviewOut,
     responses=problem_responses(401, 403, 404, 422),
@@ -472,7 +472,7 @@ async def review(id: UUID, user: CurrentUser, context: Context) -> ReviewOut:
         "`review` always have a value: confirming keeps it, `drawer_id` moves the document. The "
         "results before `resume_at` count as confirmed; processing continues from there up to "
         "filing, and the rules leave what the owner decided or changed as it is. From "
-        "`extract_attributes` on, the extracted attributes replace the ones the document has."
+        "`extract_fields` on, the extracted fields replace the ones the document has."
     ),
     response_model=DocumentDetails,
     responses=problem_responses(401, 403, 404, 409, 422),
@@ -528,10 +528,10 @@ def _differences(before: Document, after: Document) -> list[str]:
         "document_date": (before.document_date, after.document_date),
         "drawer": (before.drawer_id, after.drawer_id),
     }
-    for attribute in sorted(set(before.attributes) | set(after.attributes)):
-        fields[f"attribute:{attribute}"] = (
-            before.attributes.get(attribute),
-            after.attributes.get(attribute),
+    for field in sorted(set(before.fields) | set(after.fields)):
+        fields[f"field:{field}"] = (
+            before.fields.get(field),
+            after.fields.get(field),
         )
     return [name for name, (old, new) in fields.items() if old != new]
 
@@ -553,13 +553,13 @@ def _details(document: Any) -> DocumentDetails:
 
 async def _changes(body: DocumentPatch, user: UserId, context: Context) -> DocumentChanges:
     given = body.model_fields_set
-    attributes: dict[AttributeId, object] = {}
-    if body.attributes:
-        definitions = {a.id: a for a in await context.master_data.list_attributes(user)}
-        for attribute_id, value in body.attributes.items():
-            definition = definitions.get(AttributeId(attribute_id))
-            attributes[AttributeId(attribute_id)] = (
-                value if definition is None else attribute_value(definition, value)
+    fields: dict[FieldId, object] = {}
+    if body.fields:
+        definitions = {a.id: a for a in await context.master_data.list_fields(user)}
+        for field_id, value in body.fields.items():
+            definition = definitions.get(FieldId(field_id))
+            fields[FieldId(field_id)] = (
+                value if definition is None else field_value(definition, value)
             )
     if "title" in given and body.title is None:
         raise ValidationError("title: must not be null")
@@ -571,7 +571,7 @@ async def _changes(body: DocumentPatch, user: UserId, context: Context) -> Docum
             frozenset(TagId(tag) for tag in body.tag_ids or ()) if "tag_ids" in given else UNSET
         ),
         document_date=body.document_date if "document_date" in given else UNSET,
-        attributes=attributes,
+        fields=fields,
     )
 
 
@@ -613,7 +613,7 @@ def _owner(value: str | None) -> UserId | None:
 
 
 async def _imported(value: str | None, user: UserId, context: Context) -> ImportedMetadata | None:
-    """The metadata field as domain values (attribute values by their definitions)."""
+    """The metadata field as domain values (field values by their definitions)."""
     if value is None or not value.strip():
         return None
     try:
@@ -624,15 +624,15 @@ async def _imported(value: str | None, user: UserId, context: Context) -> Import
         raise ValidationError(
             f"metadata.{place}: {first['msg']}" if place else "metadata: invalid"
         ) from None
-    definitions = {a.id: a for a in await context.master_data.list_attributes(user)}
-    attributes = {}
-    for attribute_id, raw in body.attributes.items():
-        definition = definitions.get(AttributeId(attribute_id))
+    definitions = {a.id: a for a in await context.master_data.list_fields(user)}
+    fields = {}
+    for field_id, raw in body.fields.items():
+        definition = definitions.get(FieldId(field_id))
         if definition is None:
-            raise ValidationError(f"metadata.attributes: attribute {attribute_id} does not exist")
+            raise ValidationError(f"metadata.fields: field {field_id} does not exist")
         if raw is None:
-            raise ValidationError(f"metadata.attributes.{attribute_id}: must not be null")
-        attributes[AttributeId(attribute_id)] = attribute_value(definition, raw)
+            raise ValidationError(f"metadata.fields.{field_id}: must not be null")
+        fields[FieldId(field_id)] = field_value(definition, raw)
     try:
         return ImportedMetadata(
             title=body.title,
@@ -642,7 +642,7 @@ async def _imported(value: str | None, user: UserId, context: Context) -> Import
             ),
             tag_ids=frozenset(TagId(tag) for tag in body.tag_ids),
             document_date=body.document_date,
-            attributes={key: definitions[key].validate(value) for key, value in attributes.items()},
+            fields={key: definitions[key].validate(value) for key, value in fields.items()},
         )
     except ValidationError as error:
         raise ValidationError(f"metadata: {error}") from None

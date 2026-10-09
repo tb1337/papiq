@@ -79,7 +79,7 @@
 		if (!review || !lookup) return;
 		const next: Record<string, ReviewValue> = {};
 		for (const check of review.open.flatMap((step) => step.fields)) {
-			next[check.field] = initialValue(check, review.document, lookup.attributes);
+			next[check.field] = initialValue(check, review.document, lookup.fields);
 		}
 		const fresh = review.document.drawer_id;
 		const documentId = review.document.id;
@@ -119,7 +119,7 @@
 			await unwrap(
 				api.POST('/api/v1/documents/{id}/confirm', {
 					params: { path: { id } },
-					body: buildConfirm(checks, values, review.document, lookup.attributes, drawerId)
+					body: buildConfirm(checks, values, review.document, lookup.fields, drawerId)
 				})
 			);
 			toast.success(m.review_confirmed());

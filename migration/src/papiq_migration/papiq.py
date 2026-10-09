@@ -121,16 +121,16 @@ class Papiq:
     async def create_named(self, path: str, name: str) -> dict[str, Any]:
         return await self._object("POST", path, json={"name": name})
 
-    async def create_attribute(
+    async def create_field(
         self, name: str, data_type: str, choices: tuple[str, ...]
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"name": name, "data_type": data_type}
         if choices:
             body["choices"] = list(choices)
-        return await self._object("POST", "/attributes", json=body)
+        return await self._object("POST", "/fields", json=body)
 
     async def set_choices(self, id: str, choices: list[str]) -> dict[str, Any]:
-        return await self._object("PATCH", f"/attributes/{id}", json={"choices": choices})
+        return await self._object("PATCH", f"/fields/{id}", json={"choices": choices})
 
     async def create_drawer(self, name: str, owner_id: str) -> dict[str, Any]:
         return await self._object("POST", "/drawers", json={"name": name, "owner_id": owner_id})

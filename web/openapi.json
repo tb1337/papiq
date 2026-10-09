@@ -4564,13 +4564,13 @@
         ]
       }
     },
-    "/api/v1/attributes": {
+    "/api/v1/fields": {
       "get": {
         "tags": [
           "master data"
         ],
-        "summary": "List attribute definitions",
-        "operationId": "list_attributes_api_v1_attributes_get",
+        "summary": "List field definitions",
+        "operationId": "list_fields_api_v1_fields_get",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -4578,10 +4578,10 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/AttributeOut"
+                    "$ref": "#/components/schemas/FieldOut"
                   },
                   "type": "array",
-                  "title": "Response List Attributes Api V1 Attributes Get"
+                  "title": "Response List Fields Api V1 Fields Get"
                 }
               }
             }
@@ -4632,14 +4632,14 @@
         "tags": [
           "master data"
         ],
-        "summary": "Create an attribute definition",
+        "summary": "Create a field definition",
         "description": "Admins only. Global (`document_type_ids` null) or for some document types; `choice` needs `choices`.",
-        "operationId": "create_attribute_api_v1_attributes_post",
+        "operationId": "create_field_api_v1_fields_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AttributeCreate"
+                "$ref": "#/components/schemas/FieldCreate"
               }
             }
           },
@@ -4651,7 +4651,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AttributeOut"
+                  "$ref": "#/components/schemas/FieldOut"
                 }
               }
             }
@@ -4779,13 +4779,13 @@
         ]
       }
     },
-    "/api/v1/attributes/{id}": {
+    "/api/v1/fields/{id}": {
       "get": {
         "tags": [
           "master data"
         ],
-        "summary": "An attribute definition",
-        "operationId": "get_attribute_api_v1_attributes__id__get",
+        "summary": "A field definition",
+        "operationId": "get_field_api_v1_fields__id__get",
         "parameters": [
           {
             "name": "id",
@@ -4804,7 +4804,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AttributeOut"
+                  "$ref": "#/components/schemas/FieldOut"
                 }
               }
             }
@@ -4887,9 +4887,9 @@
         "tags": [
           "master data"
         ],
-        "summary": "Change an attribute definition",
+        "summary": "Change a field definition",
         "description": "Admins only. Name, choices and scope; the data type stays. Values documents use are never changed: removing a used choice or narrowing the scope past documents with values is a conflict (409).",
-        "operationId": "change_attribute_api_v1_attributes__id__patch",
+        "operationId": "change_field_api_v1_fields__id__patch",
         "parameters": [
           {
             "name": "id",
@@ -4907,7 +4907,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AttributePatch"
+                "$ref": "#/components/schemas/FieldPatch"
               }
             }
           }
@@ -4918,7 +4918,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AttributeOut"
+                  "$ref": "#/components/schemas/FieldOut"
                 }
               }
             }
@@ -5049,9 +5049,9 @@
         "tags": [
           "master data"
         ],
-        "summary": "Delete an attribute definition",
+        "summary": "Delete a field definition",
         "description": "Admins only. Only while no document has a value for it (409).",
-        "operationId": "delete_attribute_api_v1_attributes__id__delete",
+        "operationId": "delete_field_api_v1_fields__id__delete",
         "parameters": [
           {
             "name": "id",
@@ -6217,7 +6217,7 @@
           "rules"
         ],
         "summary": "Create a rule",
-        "description": "Global rules: admins only (403). The content is checked: operators fit the field and the attribute's data type, patterns compile, a global rule only tags, sets attributes and forces reviews (422, the message names the place, such as `conditions.all[1].any[0]` or `actions[2]`); contacts, types, tags, attributes and drawers exist (404); a user rule files only into drawers its owner may write to (403).",
+        "description": "Global rules: admins only (403). The content is checked: operators fit the field and the field's data type, patterns compile, a global rule only tags, sets fields and forces reviews (422, the message names the place, such as `conditions.all[1].any[0]` or `actions[2]`); contacts, types, tags, fields and drawers exist (404); a user rule files only into drawers its owner may write to (403).",
         "operationId": "create_rule_api_v1_rules_post",
         "requestBody": {
           "required": true,
@@ -6457,7 +6457,7 @@
           "rules"
         ],
         "summary": "Change a rule",
-        "description": "Makes a new version; earlier ones stay readable. A user rule: its owner and admins (its references are checked for its owner). A global rule: admins. The content is checked: operators fit the field and the attribute's data type, patterns compile, a global rule only tags, sets attributes and forces reviews (422, the message names the place, such as `conditions.all[1].any[0]` or `actions[2]`); contacts, types, tags, attributes and drawers exist (404); a user rule files only into drawers its owner may write to (403).",
+        "description": "Makes a new version; earlier ones stay readable. A user rule: its owner and admins (its references are checked for its owner). A global rule: admins. The content is checked: operators fit the field and the field's data type, patterns compile, a global rule only tags, sets fields and forces reviews (422, the message names the place, such as `conditions.all[1].any[0]` or `actions[2]`); contacts, types, tags, fields and drawers exist (404); a user rule files only into drawers its owner may write to (403).",
         "operationId": "change_rule_api_v1_rules__id__put",
         "parameters": [
           {
@@ -8103,7 +8103,7 @@
                   },
                   "metadata": {
                     "type": "string",
-                    "description": "Admins only, with `channel=migration`: JSON of the metadata the document comes with (up to 48 KiB), as `ImportedMetadataIn`. Classification and attribute extraction apply it instead of asking the language model; the other steps and the rules run as usual."
+                    "description": "Admins only, with `channel=migration`: JSON of the metadata the document comes with (up to 48 KiB), as `ImportedMetadataIn`. Classification and field extraction apply it instead of asking the language model; the other steps and the rules run as usual."
                   }
                 }
               }
@@ -8459,7 +8459,7 @@
           "documents"
         ],
         "summary": "Change a document's metadata",
-        "description": "Needs write access (owner or a `read_write` share). Referenced contact, type, tags and attributes must exist; attribute values must fit their type and apply to the document type. On a filed document, the change sets off the owner's rules and the global ones with trigger `change` that hold after it and did not before; fields set in the change stay as they are. The owner sees what the rules did in `rules`. If the rules filed the document where the caller can no longer read it, the answer has only its `id` and `access: null`.",
+        "description": "Needs write access (owner or a `read_write` share). Referenced contact, type, tags and fields must exist; field values must fit their type and apply to the document type. On a filed document, the change sets off the owner's rules and the global ones with trigger `change` that hold after it and did not before; fields set in the change stay as they are. The owner sees what the rules did in `rules`. If the rules filed the document where the caller can no longer read it, the answer has only its `id` and `access: null`.",
         "operationId": "update_document_api_v1_documents__id__patch",
         "parameters": [
           {
@@ -9798,7 +9798,7 @@
           "documents"
         ],
         "summary": "What the model proposed for a document",
-        "description": "The owner and admins. The open steps and fields, and the latest classification and attribute extraction by the model: each field as proposed, checked and applied.",
+        "description": "The owner and admins. The open steps and fields, and the latest classification and field extraction by the model: each field as proposed, checked and applied.",
         "operationId": "review_api_v1_documents__id__review_get",
         "parameters": [
           {
@@ -9920,7 +9920,7 @@
           "documents"
         ],
         "summary": "Confirm a document from the inbox",
-        "description": "The owner and admins, for yellow and red documents that are not being processed. `drawer_id` must be a drawer the owner may write to; an admin chooses any drawer. Every open field of the steps before `resume_at` (and of `apply_rules` when processing resumes with it) needs a decision: a value or null in `changes`, a value the document already has (it is kept), or its suggestion with `accept_suggestions`. Otherwise 422 lists the open fields in `open_fields`. The rules' fields `drawer`, `title` and `review` always have a value: confirming keeps it, `drawer_id` moves the document. The results before `resume_at` count as confirmed; processing continues from there up to filing, and the rules leave what the owner decided or changed as it is. From `extract_attributes` on, the extracted attributes replace the ones the document has.",
+        "description": "The owner and admins, for yellow and red documents that are not being processed. `drawer_id` must be a drawer the owner may write to; an admin chooses any drawer. Every open field of the steps before `resume_at` (and of `apply_rules` when processing resumes with it) needs a decision: a value or null in `changes`, a value the document already has (it is kept), or its suggestion with `accept_suggestions`. Otherwise 422 lists the open fields in `open_fields`. The rules' fields `drawer`, `title` and `review` always have a value: confirming keeps it, `drawer_id` moves the document. The results before `resume_at` count as confirmed; processing continues from there up to filing, and the rules leave what the owner decided or changed as it is. From `extract_fields` on, the extracted fields replace the ones the document has.",
         "operationId": "confirm_api_v1_documents__id__confirm_post",
         "parameters": [
           {
@@ -11826,208 +11826,6 @@
           }
         ]
       },
-      "AttributeCreate": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Name",
-            "examples": [
-              "ACME Energy"
-            ]
-          },
-          "data_type": {
-            "$ref": "#/components/schemas/AttributeType"
-          },
-          "document_type_ids": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Document Type Ids",
-            "description": "null: global; otherwise only for these document types."
-          },
-          "choices": {
-            "items": {
-              "type": "string",
-              "maxLength": 200,
-              "minLength": 1
-            },
-            "type": "array",
-            "maxItems": 200,
-            "title": "Choices",
-            "description": "For `choice` only."
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "name",
-          "data_type"
-        ],
-        "title": "AttributeCreate",
-        "examples": [
-          {
-            "data_type": "amount",
-            "document_type_ids": [
-              "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b"
-            ],
-            "name": "Amount"
-          }
-        ]
-      },
-      "AttributeOut": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Id"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "data_type": {
-            "$ref": "#/components/schemas/AttributeType"
-          },
-          "document_type_ids": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Document Type Ids"
-          },
-          "choices": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Choices"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "name",
-          "data_type",
-          "document_type_ids",
-          "choices",
-          "created_at"
-        ],
-        "title": "AttributeOut",
-        "examples": [
-          {
-            "choices": [],
-            "created_at": "2026-01-10T09:00:00Z",
-            "data_type": "amount",
-            "id": "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b",
-            "name": "Amount"
-          }
-        ]
-      },
-      "AttributePatch": {
-        "properties": {
-          "name": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200,
-                "minLength": 1,
-                "examples": [
-                  "ACME Energy"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Name"
-          },
-          "choices": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string",
-                  "maxLength": 200,
-                  "minLength": 1
-                },
-                "type": "array",
-                "maxItems": 200
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Choices",
-            "description": "All choices; removing one that documents use is a conflict (409)."
-          },
-          "document_type_ids": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Document Type Ids",
-            "description": "null: global. Narrowing is a conflict (409) while documents outside the new scope have values."
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "AttributePatch",
-        "description": "Fields left out stay. The data type cannot change.",
-        "examples": [
-          {
-            "choices": [
-              "Card",
-              "Transfer",
-              "Cash"
-            ],
-            "name": "Payment method"
-          }
-        ]
-      },
-      "AttributeType": {
-        "type": "string",
-        "enum": [
-          "text",
-          "number",
-          "amount",
-          "date",
-          "boolean",
-          "choice",
-          "link"
-        ],
-        "title": "AttributeType"
-      },
       "AuthorizationUrl": {
         "properties": {
           "authorization_url": {
@@ -12082,7 +11880,7 @@
           "tags",
           "channel",
           "text",
-          "attribute",
+          "field",
           "document_date"
         ],
         "title": "ConditionField"
@@ -12117,9 +11915,9 @@
               }
             ],
             "title": "Value",
-            "description": "None for `present` and `missing`, a list for `in`, otherwise one value: an id, a channel, a text or pattern, a date `YYYY-MM-DD`, or an attribute value as in `attributes` of a document."
+            "description": "None for `present` and `missing`, a list for `in`, otherwise one value: an id, a channel, a text or pattern, a date `YYYY-MM-DD`, or a field value as in `fields` of a document."
           },
-          "attribute_id": {
+          "field_id": {
             "anyOf": [
               {
                 "type": "string",
@@ -12129,8 +11927,8 @@
                 "type": "null"
               }
             ],
-            "title": "Attribute Id",
-            "description": "For `field` `attribute` only."
+            "title": "Field Id",
+            "description": "For `field` `field` only."
           },
           "case_sensitive": {
             "type": "boolean",
@@ -12146,7 +11944,7 @@
           "op"
         ],
         "title": "ConditionSchema",
-        "description": "`field` `op` `value`. Operators by field: contact, document_type: `is`, `in`, `present`,\n`missing`; tags: `contains` (this tag), `in` (one of), `present` (any), `missing` (none);\nchannel: `is`, `in`; text: `contains`, `matches` (regular expression); document_date and\nnumber, amount, date attributes: `is`, `gt`, `lt`, `present`, `missing`; text and link\nattributes: `is`, `in`, `contains`, `matches`, `present`, `missing`; choice: `is`, `in`,\n`present`, `missing`; boolean: `is`, `present`, `missing`.",
+        "description": "`field` `op` `value`. Operators by field: contact, document_type: `is`, `in`, `present`,\n`missing`; tags: `contains` (this tag), `in` (one of), `present` (any), `missing` (none);\nchannel: `is`, `in`; text: `contains`, `matches` (regular expression); document_date and\nnumber, amount, date fields: `is`, `gt`, `lt`, `present`, `missing`; text and link\nfields: `is`, `in`, `contains`, `matches`, `present`, `missing`; choice: `is`, `in`,\n`present`, `missing`; boolean: `is`, `present`, `missing`.",
         "examples": [
           {
             "field": "contact",
@@ -12175,7 +11973,7 @@
           },
           "resume_at": {
             "$ref": "#/components/schemas/ResumeStep",
-            "description": "`extract_attributes` after correcting the document type, so the attributes of the new type are extracted.",
+            "description": "`extract_fields` after correcting the document type, so the fields of the new type are extracted.",
             "default": "apply_rules"
           },
           "drawer_id": {
@@ -12433,7 +12231,7 @@
             ],
             "title": "Document Date"
           },
-          "attributes": {
+          "fields": {
             "additionalProperties": {
               "anyOf": [
                 {
@@ -12452,8 +12250,8 @@
               "format": "uuid"
             },
             "type": "object",
-            "title": "Attributes",
-            "description": "Values by attribute id."
+            "title": "Fields",
+            "description": "Values by field id."
           },
           "lane": {
             "anyOf": [
@@ -12510,7 +12308,7 @@
           "document_type_id",
           "tag_ids",
           "document_date",
-          "attributes",
+          "fields",
           "lane",
           "processing",
           "created_at",
@@ -12520,17 +12318,17 @@
         "examples": [
           {
             "access": "read_write",
-            "attributes": {
-              "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b": {
-                "amount": "84.20",
-                "currency": "EUR"
-              }
-            },
             "channel": "web",
             "contact_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b",
             "created_at": "2026-04-02T08:15:00Z",
             "document_date": "2026-03-31",
             "drawer_id": "01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b",
+            "fields": {
+              "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b": {
+                "amount": "84.20",
+                "currency": "EUR"
+              }
+            },
             "id": "01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b",
             "lane": "green",
             "media_type": "application/pdf",
@@ -12643,7 +12441,7 @@
             ],
             "title": "Document Date"
           },
-          "attributes": {
+          "fields": {
             "additionalProperties": {
               "anyOf": [
                 {
@@ -12662,8 +12460,8 @@
               "format": "uuid"
             },
             "type": "object",
-            "title": "Attributes",
-            "description": "Values by attribute id."
+            "title": "Fields",
+            "description": "Values by field id."
           },
           "lane": {
             "anyOf": [
@@ -12705,7 +12503,7 @@
           "document_type_id",
           "tag_ids",
           "document_date",
-          "attributes",
+          "fields",
           "lane",
           "processing",
           "created_at",
@@ -12716,17 +12514,17 @@
         "examples": [
           {
             "access": "read_write",
-            "attributes": {
-              "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b": {
-                "amount": "84.20",
-                "currency": "EUR"
-              }
-            },
             "channel": "web",
             "contact_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b",
             "created_at": "2026-04-02T08:15:00Z",
             "document_date": "2026-03-31",
             "drawer_id": "01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b",
+            "fields": {
+              "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b": {
+                "amount": "84.20",
+                "currency": "EUR"
+              }
+            },
             "id": "01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b",
             "lane": "green",
             "media_type": "application/pdf",
@@ -12863,7 +12661,7 @@
             ],
             "title": "Document Date"
           },
-          "attributes": {
+          "fields": {
             "anyOf": [
               {
                 "additionalProperties": true,
@@ -12876,8 +12674,8 @@
                 "type": "null"
               }
             ],
-            "title": "Attributes",
-            "description": "Values by attribute id, in the form of `attributes` above; null removes."
+            "title": "Fields",
+            "description": "Values by field id, in the form of `fields` above; null removes."
           }
         },
         "additionalProperties": false,
@@ -12886,14 +12684,14 @@
         "description": "Fields left out stay as they are; null removes a value.",
         "examples": [
           {
-            "attributes": {
+            "contact_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b",
+            "document_date": "2026-03-31",
+            "fields": {
               "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b": {
                 "amount": "84.20",
                 "currency": "EUR"
               }
             },
-            "contact_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b",
-            "document_date": "2026-03-31",
             "tag_ids": [
               "01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b"
             ],
@@ -12920,7 +12718,7 @@
             },
             "type": "array",
             "title": "Changed",
-            "description": "Fields that would change: `title`, `contact`, `document_type`, `tags`, `document_date`, `attribute:<id>`, `drawer`."
+            "description": "Fields that would change: `title`, `contact`, `document_type`, `tags`, `document_date`, `field:<id>`, `drawer`."
           },
           "rules": {
             "anyOf": [
@@ -13061,7 +12859,7 @@
           "field": {
             "type": "string",
             "title": "Field",
-            "description": "`contact`, `document_type`, `tags`, `document_date`, or `attribute:<id>`."
+            "description": "`contact`, `document_type`, `tags`, `document_date`, or `field:<id>`."
           },
           "outcome": {
             "$ref": "#/components/schemas/Outcome",
@@ -13102,7 +12900,7 @@
           },
           "value": {
             "title": "Value",
-            "description": "The checked value, applied to the document (`ok` only): an id, a list of tag ids, a date, or an attribute value."
+            "description": "The checked value, applied to the document (`ok` only): an id, a list of tag ids, a date, or a field value."
           },
           "suggestion": {
             "title": "Suggestion",
@@ -13145,6 +12943,208 @@
             "suggestion": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b"
           }
         ]
+      },
+      "FieldCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "examples": [
+              "ACME Energy"
+            ]
+          },
+          "data_type": {
+            "$ref": "#/components/schemas/FieldType"
+          },
+          "document_type_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Type Ids",
+            "description": "null: global; otherwise only for these document types."
+          },
+          "choices": {
+            "items": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 200,
+            "title": "Choices",
+            "description": "For `choice` only."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "data_type"
+        ],
+        "title": "FieldCreate",
+        "examples": [
+          {
+            "data_type": "amount",
+            "document_type_ids": [
+              "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b"
+            ],
+            "name": "Amount"
+          }
+        ]
+      },
+      "FieldOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "data_type": {
+            "$ref": "#/components/schemas/FieldType"
+          },
+          "document_type_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Type Ids"
+          },
+          "choices": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Choices"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "data_type",
+          "document_type_ids",
+          "choices",
+          "created_at"
+        ],
+        "title": "FieldOut",
+        "examples": [
+          {
+            "choices": [],
+            "created_at": "2026-01-10T09:00:00Z",
+            "data_type": "amount",
+            "id": "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b",
+            "name": "Amount"
+          }
+        ]
+      },
+      "FieldPatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1,
+                "examples": [
+                  "ACME Energy"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "choices": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1
+                },
+                "type": "array",
+                "maxItems": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Choices",
+            "description": "All choices; removing one that documents use is a conflict (409)."
+          },
+          "document_type_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Type Ids",
+            "description": "null: global. Narrowing is a conflict (409) while documents outside the new scope have values."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "FieldPatch",
+        "description": "Fields left out stay. The data type cannot change.",
+        "examples": [
+          {
+            "choices": [
+              "Card",
+              "Transfer",
+              "Cash"
+            ],
+            "name": "Payment method"
+          }
+        ]
+      },
+      "FieldType": {
+        "type": "string",
+        "enum": [
+          "text",
+          "number",
+          "amount",
+          "date",
+          "boolean",
+          "choice",
+          "link"
+        ],
+        "title": "FieldType"
       },
       "ForceReviewAction": {
         "properties": {
@@ -13708,7 +13708,7 @@
             },
             "type": "array",
             "title": "Fields",
-            "description": "Uncertain fields of classification, attribute extraction and the rules (also `drawer`, `title`, `review`), and of filing (`drawer`)."
+            "description": "Uncertain fields of classification, field extraction and the rules (also `drawer`, `title`, `review`), and of filing (`drawer`)."
           }
         },
         "type": "object",
@@ -13951,7 +13951,7 @@
           "ocr",
           "parse",
           "classify",
-          "extract_attributes",
+          "extract_fields",
           "apply_rules",
           "file"
         ],
@@ -13960,7 +13960,7 @@
       "ResumeStep": {
         "type": "string",
         "enum": [
-          "extract_attributes",
+          "extract_fields",
           "apply_rules"
         ],
         "title": "ResumeStep"
@@ -14152,7 +14152,7 @@
                   "$ref": "#/components/schemas/RemoveTagsAction"
                 },
                 {
-                  "$ref": "#/components/schemas/SetAttributeAction"
+                  "$ref": "#/components/schemas/SetFieldAction"
                 },
                 {
                   "$ref": "#/components/schemas/ForceReviewAction"
@@ -14164,10 +14164,10 @@
                   "add_tags": "#/components/schemas/AddTagsAction",
                   "force_review": "#/components/schemas/ForceReviewAction",
                   "remove_tags": "#/components/schemas/RemoveTagsAction",
-                  "set_attribute": "#/components/schemas/SetAttributeAction",
                   "set_contact": "#/components/schemas/SetContactAction",
                   "set_document_type": "#/components/schemas/SetDocumentTypeAction",
                   "set_drawer": "#/components/schemas/SetDrawerAction",
+                  "set_field": "#/components/schemas/SetFieldAction",
                   "set_title": "#/components/schemas/SetTitleAction"
                 }
               }
@@ -14179,7 +14179,7 @@
           },
           "scope": {
             "$ref": "#/components/schemas/RuleScope",
-            "description": "`user`: the caller's rule, for their documents. `global` (admins): for every document, but only tags, attributes and reviews.",
+            "description": "`user`: the caller's rule, for their documents. `global` (admins): for every document, but only tags, fields and reviews.",
             "default": "user"
           }
         },
@@ -14288,7 +14288,7 @@
                   "$ref": "#/components/schemas/RemoveTagsAction"
                 },
                 {
-                  "$ref": "#/components/schemas/SetAttributeAction"
+                  "$ref": "#/components/schemas/SetFieldAction"
                 },
                 {
                   "$ref": "#/components/schemas/ForceReviewAction"
@@ -14300,10 +14300,10 @@
                   "add_tags": "#/components/schemas/AddTagsAction",
                   "force_review": "#/components/schemas/ForceReviewAction",
                   "remove_tags": "#/components/schemas/RemoveTagsAction",
-                  "set_attribute": "#/components/schemas/SetAttributeAction",
                   "set_contact": "#/components/schemas/SetContactAction",
                   "set_document_type": "#/components/schemas/SetDocumentTypeAction",
                   "set_drawer": "#/components/schemas/SetDrawerAction",
+                  "set_field": "#/components/schemas/SetFieldAction",
                   "set_title": "#/components/schemas/SetTitleAction"
                 }
               }
@@ -14463,7 +14463,7 @@
                   "$ref": "#/components/schemas/RemoveTagsAction"
                 },
                 {
-                  "$ref": "#/components/schemas/SetAttributeAction"
+                  "$ref": "#/components/schemas/SetFieldAction"
                 },
                 {
                   "$ref": "#/components/schemas/ForceReviewAction"
@@ -14475,10 +14475,10 @@
                   "add_tags": "#/components/schemas/AddTagsAction",
                   "force_review": "#/components/schemas/ForceReviewAction",
                   "remove_tags": "#/components/schemas/RemoveTagsAction",
-                  "set_attribute": "#/components/schemas/SetAttributeAction",
                   "set_contact": "#/components/schemas/SetContactAction",
                   "set_document_type": "#/components/schemas/SetDocumentTypeAction",
                   "set_drawer": "#/components/schemas/SetDrawerAction",
+                  "set_field": "#/components/schemas/SetFieldAction",
                   "set_title": "#/components/schemas/SetTitleAction"
                 }
               }
@@ -14680,7 +14680,7 @@
                   "$ref": "#/components/schemas/RemoveTagsAction"
                 },
                 {
-                  "$ref": "#/components/schemas/SetAttributeAction"
+                  "$ref": "#/components/schemas/SetFieldAction"
                 },
                 {
                   "$ref": "#/components/schemas/ForceReviewAction"
@@ -14692,10 +14692,10 @@
                   "add_tags": "#/components/schemas/AddTagsAction",
                   "force_review": "#/components/schemas/ForceReviewAction",
                   "remove_tags": "#/components/schemas/RemoveTagsAction",
-                  "set_attribute": "#/components/schemas/SetAttributeAction",
                   "set_contact": "#/components/schemas/SetContactAction",
                   "set_document_type": "#/components/schemas/SetDocumentTypeAction",
                   "set_drawer": "#/components/schemas/SetDrawerAction",
+                  "set_field": "#/components/schemas/SetFieldAction",
                   "set_title": "#/components/schemas/SetTitleAction"
                 }
               }
@@ -14866,43 +14866,6 @@
         ],
         "title": "SessionsEnded"
       },
-      "SetAttributeAction": {
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "set_attribute",
-            "title": "Type"
-          },
-          "attribute_id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Attribute Id"
-          },
-          "value": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "boolean"
-              },
-              {
-                "$ref": "#/components/schemas/MoneyValue"
-              }
-            ],
-            "title": "Value",
-            "description": "By data type: text, choice and link: string; number: decimal as string; date: `YYYY-MM-DD`; boolean: true/false; amount: `{amount, currency}`."
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "type",
-          "attribute_id",
-          "value"
-        ],
-        "title": "SetAttributeAction"
-      },
       "SetContactAction": {
         "properties": {
           "type": {
@@ -14966,6 +14929,43 @@
           "drawer_id"
         ],
         "title": "SetDrawerAction"
+      },
+      "SetFieldAction": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "set_field",
+            "title": "Type"
+          },
+          "field_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Field Id"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "$ref": "#/components/schemas/MoneyValue"
+              }
+            ],
+            "title": "Value",
+            "description": "By data type: text, choice and link: string; number: decimal as string; date: `YYYY-MM-DD`; boolean: true/false; amount: `{amount, currency}`."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "field_id",
+          "value"
+        ],
+        "title": "SetFieldAction"
       },
       "SetTitleAction": {
         "properties": {
@@ -15081,7 +15081,7 @@
           "ocr",
           "parse",
           "classify",
-          "extract_attributes",
+          "extract_fields",
           "apply_rules",
           "file"
         ],
@@ -15156,7 +15156,7 @@
           "fields"
         ],
         "title": "StepReviewOut",
-        "description": "The latest run of classification or attribute extraction by the model."
+        "description": "The latest run of classification or field extraction by the model."
       },
       "TokenCreate": {
         "properties": {

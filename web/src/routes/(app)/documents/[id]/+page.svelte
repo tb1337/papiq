@@ -72,7 +72,7 @@
 		'ocr',
 		'parse',
 		'classify',
-		'extract_attributes',
+		'extract_fields',
 		'apply_rules',
 		'file'
 	];
@@ -80,7 +80,7 @@
 		ocr: m.step_ocr,
 		parse: m.step_parse,
 		classify: m.step_classify,
-		extract_attributes: m.step_extract_attributes,
+		extract_fields: m.step_extract_fields,
 		apply_rules: m.step_apply_rules,
 		file: m.step_file
 	};

@@ -16,7 +16,7 @@ from papiq_migration.mapping import (
     ASN_SPEC,
     NAME_LIMIT,
     NOTES_SPEC,
-    AttributeSpec,
+    FieldSpec,
     drawer_name,
     field_key,
     field_spec,
@@ -107,7 +107,7 @@ class Migration:
         phase = self._clock()
         await self._users(snapshot)
         await self._master_data(snapshot)
-        await self._attributes(snapshot)
+        await self._fields(snapshot)
         self.totals.seconds["master_data"] = self._clock() - phase
         self._note_unmapped(snapshot)
         users = {int(user["id"]): user for user in snapshot.users}
@@ -307,11 +307,11 @@ class Migration:
                 mapping[int(item["id"])] = id
                 self._record(kind, str(item["id"]), name, id, status, notes)
 
-    # --- attributes --------------------------------------------------------------------------
+    # --- fields --------------------------------------------------------------------------
 
-    async def _attributes(self, snapshot: Snapshot) -> None:
-        existing = {norm(item["name"]): item for item in await self._list("/attributes")}
-        specs: list[tuple[str, str, AttributeSpec | None, list[str]]] = []
+    async def _fields(self, snapshot: Snapshot) -> None:
+        existing = {norm(item["name"]): item for item in await self._list("/fields")}
+        specs: list[tuple[str, str, FieldSpec | None, list[str]]] = []
         for custom_field in snapshot.custom_fields:
             spec, notes = field_spec(custom_field)
             specs.append((str(custom_field["id"]), str(custom_field["name"]), spec, notes))
@@ -323,7 +323,7 @@ class Migration:
             specs.append(("notes", NOTES_SPEC.name, NOTES_SPEC, ["the notes of the documents"]))
         for source_id, name, spec, notes in specs:
             if spec is None:
-                self._record("attribute", source_id, name, None, OMITTED, notes)
+                self._record("field", source_id, name, None, OMITTED, notes)
                 continue
             found = existing.get(norm(spec.name))
             status, id = NEW, None
@@ -332,7 +332,7 @@ class Migration:
                     status, id = EXISTING, found["id"]
                     problem = _conflict(spec, found)
                     if problem:
-                        self._record("attribute", source_id, name, None, OMITTED, [*notes, problem])
+                        self._record("field", source_id, name, None, OMITTED, [*notes, problem])
                         continue
                     missing = [c for c in spec.choices if c not in found.get("choices", [])]
                     if missing:
@@ -340,19 +340,19 @@ class Migration:
                         if not self._dry and self._target is not None:
                             await self._target.set_choices(id, [*found["choices"], *missing])
                 elif self._dry or self._target is None:
-                    id = f"new:attribute:{spec.key}"
+                    id = f"new:field:{spec.key}"
                 else:
-                    created = await self._target.create_attribute(
+                    created = await self._target.create_field(
                         spec.name, spec.data_type, spec.choices
                     )
                     id = created["id"]
             except ApiError as error:
-                self._record("attribute", source_id, name, None, FAILED, [*notes, str(error)])
+                self._record("field", source_id, name, None, FAILED, [*notes, str(error)])
                 continue
             assert id is not None
-            self.ids.attributes[spec.key] = id
+            self.ids.fields[spec.key] = id
             self.ids.specs[spec.key] = spec
-            self._record("attribute", source_id, name, id, status, notes)
+            self._record("field", source_id, name, id, status, notes)
 
     def _note_unmapped(self, snapshot: Snapshot) -> None:
         counts: dict[str, int] = {}
@@ -382,9 +382,9 @@ class Migration:
                 OMITTED,
                 [f"not taken over for the {len(snapshot.documents)} documents"],
             )
-        # Make sure the ids of attributes that could not be created do not linger.
+        # Make sure the ids of fields that could not be created do not linger.
         for key in list(self.ids.specs):
-            if key not in self.ids.attributes:
+            if key not in self.ids.fields:
                 del self.ids.specs[key]
 
     # --- drawers -----------------------------------------------------------------------------
@@ -677,14 +677,14 @@ def _named_notes(kind: str, item: dict[str, Any]) -> list[str]:
     return notes
 
 
-def _conflict(spec: AttributeSpec, found: dict[str, Any]) -> str | None:
+def _conflict(spec: FieldSpec, found: dict[str, Any]) -> str | None:
     if found.get("data_type") != spec.data_type:
         return (
-            f"an attribute '{found['name']}' of type {found.get('data_type')} exists already; "
+            f"a field '{found['name']}' of type {found.get('data_type')} exists already; "
             f"the values (type {spec.data_type}) are not taken over"
         )
     if found.get("document_type_ids") is not None:
-        return f"the attribute '{found['name']}' exists but applies only to some document types"
+        return f"the field '{found['name']}' exists but applies only to some document types"
     return None
 
 

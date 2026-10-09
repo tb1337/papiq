@@ -8,7 +8,7 @@
       "Arbeit"
     ],
     "document_date": "2026-03-31",
-    "attributes": {
+    "fields": {
       "Nettolohn": {
         "amount": "2987.45",
         "currency": "EUR"
@@ -32,7 +32,7 @@
         "evidence": "erstellt am 31.03.2026"
       }
     },
-    "attributes": {
+    "fields": {
       "Nettolohn": {
         "value": {
           "amount": "2987.45",

@@ -36,7 +36,6 @@ from datetime import timedelta
 from decimal import Decimal
 from uuid import UUID
 
-from papiq.core.domain.attributes import AttributeValue, Money, Url
 from papiq.core.domain.documents import Document
 from papiq.core.domain.errors import (
     ConcurrencyError,
@@ -46,6 +45,7 @@ from papiq.core.domain.errors import (
     SearchIndexError,
 )
 from papiq.core.domain.events import DocumentEvent, DomainEvent
+from papiq.core.domain.fields import FieldValue, Money, Url
 from papiq.core.domain.ids import ContactId, DocumentId, DocumentTypeId, TagId, UserId
 from papiq.core.domain.jobs import Job
 from papiq.core.domain.search import EmbeddingStamp, IndexDocument, IndexState
@@ -374,7 +374,7 @@ class IndexingService:
             document_type=snapshot.document_type,
             tag_ids=tuple(tag for tag, _ in snapshot.tags),
             tags=tuple(name for _, name in snapshot.tags),
-            attributes=_attribute_texts(document),
+            fields=_field_texts(document),
             document_date=document.document_date,
             created_at=document.created_at,
             vectors=vectors,
@@ -520,18 +520,18 @@ def _digest(model: str, sections: list[str]) -> str:
     return hashlib.sha256("\0".join([model, *sections]).encode()).hexdigest()[:16]
 
 
-def _attribute_texts(document: Document) -> tuple[str, ...]:
+def _field_texts(document: Document) -> tuple[str, ...]:
     texts = []
-    for value in document.attributes.values():
-        text = _attribute_text(value)
+    for value in document.fields.values():
+        text = _field_text(value)
         if text:
             texts.append(text)
     return tuple(texts)
 
 
-def _attribute_text(value: AttributeValue) -> str:
+def _field_text(value: FieldValue) -> str:
     """A value as the words a person would search for. Yes/no values say nothing without
-    their attribute's name."""
+    their field's name."""
     match value:
         case bool():
             return ""

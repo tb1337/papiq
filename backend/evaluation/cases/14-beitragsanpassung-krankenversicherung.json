@@ -9,7 +9,7 @@
       "Versicherung"
     ],
     "document_date": "2025-11-15",
-    "attributes": {
+    "fields": {
       "Versicherungsnummer": "K123456789",
       "Beitrag": {
         "amount": "512.34",
@@ -35,7 +35,7 @@
         "evidence": "Musterstadt, 15.11.2025"
       }
     },
-    "attributes": {
+    "fields": {
       "Versicherungsnummer": {
         "value": "K123456789",
         "evidence": "Versichertennummer: K123456789"

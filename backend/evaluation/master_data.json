@@ -48,7 +48,7 @@
     "Krankenversicherung",
     "Wichtig"
   ],
-  "attributes": [
+  "fields": [
     {
       "name": "Betrag",
       "data_type": "amount",
