@@ -149,7 +149,7 @@
 			<Dialog.Header><Dialog.Title>{m.token_new()}</Dialog.Title></Dialog.Header>
 			<Field.Field>
 				<Field.Label for="token-name">{m.field_name()}</Field.Label>
-				<Input id="token-name" bind:value={name} maxlength={200} required />
+				<Input id="token-name" bind:value={name} maxlength={100} required />
 			</Field.Field>
 			<Field.Field>
 				<Field.Label for="token-scope">{m.token_scope()}</Field.Label>

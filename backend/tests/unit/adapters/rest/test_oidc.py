@@ -95,6 +95,22 @@ async def test_the_callback_needs_the_browser_that_started(
     )
 
 
+async def test_a_denied_callback_clears_the_flow_cookie(
+    oidc_api: tuple[Api, FakeOidcProvider],
+) -> None:
+    """1-07 (M13): the sealed flow (state, nonce, verifier) is gone after the provider said no,
+    as after every other failure."""
+    api, _ = oidc_api
+    start = await api.client.get(f"{OIDC}/login")
+    assert start.headers["set-cookie"].startswith("__Host-papiq_oidc=")
+    back = await api.client.get(f"{OIDC}/callback", params={"error": "access_denied"})
+    assert back.status_code == 303
+    assert back.headers["location"] == "/ui/login?error=denied"
+    cleared = [c for c in back.headers.get_list("set-cookie") if c.startswith("__Host-papiq_oidc=")]
+    assert cleared and ("max-age=0" in cleared[0].lower() or "expires=" in cleared[0].lower())
+    assert "__Host-papiq_oidc" not in api.client.cookies
+
+
 async def test_unlinked_accounts_are_refused(oidc_api: tuple[Api, FakeOidcProvider]) -> None:
     api, provider = oidc_api
     await api.user("alice")

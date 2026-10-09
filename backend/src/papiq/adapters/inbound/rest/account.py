@@ -375,7 +375,7 @@ async def oidc_callback(
     # as a code in the page's address (`/ui/login?error=<code>`, or the settings while linking).
     failed = f"{UI_PREFIX}/settings" if caller is not None else f"{UI_PREFIX}/login"
     if error is not None or code is None or state is None:
-        return _oidc_failure(failed, "denied")
+        return _oidc_failure(failed, "denied", context)
     try:
         outcome = await oidc.complete(
             request.cookies.get(flow_cookie_name(context)),

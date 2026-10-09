@@ -162,8 +162,16 @@ class WebhookDeliveryService:
         now = self._clock.now()
         self._count_test_request(actor, now)
         event_id = EventId(new_id())
-        secrets = self._decrypt(webhook, now)
-        response = await self._send(webhook, secrets, event_id, TEST_EVENT, now, None)
+        try:
+            secrets = self._decrypt(webhook, now)
+            response = await self._send(webhook, secrets, event_id, TEST_EVENT, now, None)
+        except (DecryptionError, ValueError):
+            log.error("webhook secret unusable", extra={"webhook_id": str(id)})
+            response = WebhookResponse(
+                status_code=None,
+                duration_ms=0,
+                error="the secret cannot be used (was the secret key changed?)",
+            )
         outcome = DeliveryOutcome.DELIVERED if _is_success(response) else DeliveryOutcome.GAVE_UP
         delivery = _row(webhook, event_id, TEST_EVENT, None, 1, now, response, outcome)
         async with self._uow() as uow:
