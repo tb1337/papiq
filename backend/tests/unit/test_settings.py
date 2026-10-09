@@ -339,6 +339,15 @@ def test_unknown_variables_are_listed(monkeypatch: pytest.MonkeyPatch) -> None:
     assert find_unknown_variables() == ["PAPIQ_DB_TYPO"]
 
 
+def test_variables_of_the_migration_client_are_not_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The development instance shares its environment with `papiq-migration`."""
+    set_env(
+        monkeypatch,
+        {"PAPIQ_MIGRATION_PAPERLESS_URL": "http://paperless:8000", "PAPIQ_MIGRATION_TYPO": "x"},
+    )
+    assert find_unknown_variables() == []
+
+
 def test_variables_of_the_image_are_not_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
     """`PUID`, `PGID` and the `S6_` variables belong to the container, not to Papiq."""
     set_env(
