@@ -1272,7 +1272,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Send a test request
-		 * @description Sends a `webhook.test` request to the URL now, signed like any other, without repetition; works for a switched-off webhook too. The answer is the entry of the delivery log: `delivered` for a 2xx answer, else `gave_up` with status or error. Its owner, or an admin (who also changes, deletes and tests other users' webhooks and sees the secret only when renewing it). Other users' webhooks are not found (404).
+		 * @description Sends a `webhook.test` request to the URL now, signed like any other, without repetition; works for a switched-off webhook too. The answer is the entry of the delivery log: `delivered` for a 2xx answer, else `gave_up` with status or error. At most 10 test requests per user and minute; beyond that `429` with `Retry-After`. Its owner, or an admin (who also changes, deletes and tests other users' webhooks and sees the secret only when renewing it). Other users' webhooks are not found (404).
 		 */
 		post: operations['test_webhook_api_v1_webhooks__id__test_post'];
 		delete?: never;
@@ -13319,6 +13319,23 @@ export interface operations {
 					 *       "title": "Unprocessable Content",
 					 *       "status": 422,
 					 *       "detail": "from_step: Input should be 'ocr', 'parse', ..."
+					 *     }
+					 */
+					'application/problem+json': components['schemas']['Problem'];
+				};
+			};
+			/** @description Too Many Requests */
+			429: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					/**
+					 * @example {
+					 *       "type": "about:blank",
+					 *       "title": "Too Many Requests",
+					 *       "status": 429,
+					 *       "detail": "too many failed attempts; try again later"
 					 *     }
 					 */
 					'application/problem+json': components['schemas']['Problem'];
