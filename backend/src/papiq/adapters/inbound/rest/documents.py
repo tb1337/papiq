@@ -17,6 +17,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import FileResponse
+from pydantic import ValidationError as PydanticValidationError
 from starlette.background import BackgroundTask
 
 from papiq.adapters.inbound.rest.auth import PROTECTED, Authenticated, CurrentUser
@@ -31,6 +32,7 @@ from papiq.adapters.inbound.rest.schemas import (
     DocumentPage,
     DocumentPatch,
     DocumentPreviewOut,
+    ImportedMetadataIn,
     InboxItemOut,
     InboxPage,
     LogEntry,
@@ -54,6 +56,7 @@ from papiq.core.domain.ids import (
     TagId,
     UserId,
 )
+from papiq.core.domain.imports import ImportedMetadata
 from papiq.core.domain.pipeline import Lane, Step
 from papiq.core.ports import DocumentFilter
 from papiq.core.services.documents import MAX_PAGE, DocumentFile, MetadataChange
@@ -78,6 +81,9 @@ _LANES: dict[LaneFilter, Lane | None] = {
 
 DRAWER_FIELD = "drawer_id"
 CHANNEL_FIELD = "channel"
+OWNER_FIELD = "owner"
+METADATA_FIELD = "metadata"
+METADATA_LIMIT = 48 * 1024  # bytes of the metadata field
 
 
 def document_filter(
@@ -125,6 +131,25 @@ _UPLOAD_BODY: dict[str, Any] = {
                                 "system."
                             ),
                         },
+                        OWNER_FIELD: {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": (
+                                "Admins only: the active user who owns the document. Default: "
+                                "the caller. The duplicate check, the default drawer and the "
+                                "write access to `drawer_id` are the owner's."
+                            ),
+                        },
+                        METADATA_FIELD: {
+                            "type": "string",
+                            "description": (
+                                "Admins only, with `channel=migration`: JSON of the metadata "
+                                "the document comes with (up to 48 KiB), as `ImportedMetadataIn`. "
+                                "Classification and attribute extraction apply it instead of "
+                                "asking the language model; the other steps and the rules run "
+                                "as usual."
+                            ),
+                        },
                     },
                 }
             }
@@ -169,13 +194,24 @@ async def upload(
     request: Request, response: Response, principal: Authenticated, context: Context
 ) -> DocumentAccepted:
     received = await read_upload(
-        request, max_size=context.max_upload_size, fields=[DRAWER_FIELD, CHANNEL_FIELD]
+        request,
+        max_size=context.max_upload_size,
+        fields=[DRAWER_FIELD, CHANNEL_FIELD, OWNER_FIELD, METADATA_FIELD],
+        limits={METADATA_FIELD: METADATA_LIMIT},
     )
     try:
         drawer = _drawer(received.fields.get(DRAWER_FIELD))
         channel = _channel(received.fields.get(CHANNEL_FIELD), session=principal.session)
+        owner = _owner(received.fields.get(OWNER_FIELD))
+        imported = await _imported(received.fields.get(METADATA_FIELD), principal.id, context)
         document = await context.pipeline.receive(
-            principal.id, received.file, filename=received.filename, drawer=drawer, channel=channel
+            principal.id,
+            received.file,
+            filename=received.filename,
+            drawer=drawer,
+            channel=channel,
+            owner=owner,
+            imported=imported,
         )
     finally:
         await asyncio.shield(asyncio.to_thread(received.file.path.unlink, missing_ok=True))
@@ -565,6 +601,51 @@ def _drawer(value: str | None) -> DrawerId | None:
         return DrawerId(UUID(value.strip()))
     except ValueError:
         raise ValidationError(f"drawer_id: not a UUID: {value!r}") from None
+
+
+def _owner(value: str | None) -> UserId | None:
+    if value is None or not value.strip():
+        return None
+    try:
+        return UserId(UUID(value.strip()))
+    except ValueError:
+        raise ValidationError(f"owner: not a UUID: {value!r}") from None
+
+
+async def _imported(value: str | None, user: UserId, context: Context) -> ImportedMetadata | None:
+    """The metadata field as domain values (attribute values by their definitions)."""
+    if value is None or not value.strip():
+        return None
+    try:
+        body = ImportedMetadataIn.model_validate_json(value)
+    except PydanticValidationError as error:
+        first = error.errors()[0]
+        place = ".".join(str(part) for part in first["loc"])
+        raise ValidationError(
+            f"metadata.{place}: {first['msg']}" if place else "metadata: invalid"
+        ) from None
+    definitions = {a.id: a for a in await context.master_data.list_attributes(user)}
+    attributes = {}
+    for attribute_id, raw in body.attributes.items():
+        definition = definitions.get(AttributeId(attribute_id))
+        if definition is None:
+            raise ValidationError(f"metadata.attributes: attribute {attribute_id} does not exist")
+        if raw is None:
+            raise ValidationError(f"metadata.attributes.{attribute_id}: must not be null")
+        attributes[AttributeId(attribute_id)] = attribute_value(definition, raw)
+    try:
+        return ImportedMetadata(
+            title=body.title,
+            contact_id=None if body.contact_id is None else ContactId(body.contact_id),
+            document_type_id=(
+                None if body.document_type_id is None else DocumentTypeId(body.document_type_id)
+            ),
+            tag_ids=frozenset(TagId(tag) for tag in body.tag_ids),
+            document_date=body.document_date,
+            attributes={key: definitions[key].validate(value) for key, value in attributes.items()},
+        )
+    except ValidationError as error:
+        raise ValidationError(f"metadata: {error}") from None
 
 
 def _channel(value: str | None, *, session: object | None) -> Channel:

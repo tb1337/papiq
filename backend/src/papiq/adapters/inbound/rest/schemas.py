@@ -110,6 +110,7 @@ class DocumentDetails(BaseModel):
                     "original_filename": "scan_0042.pdf",
                     "media_type": "application/pdf",
                     "channel": "web",
+                    "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
                     "owner_id": "01999d5e-1111-7c1e-b6a3-2f4d5e6f7a8b",
                     "drawer_id": "01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b",
                     "access": "read_write",
@@ -144,6 +145,10 @@ class DocumentDetails(BaseModel):
     channel: Channel = Field(
         description="How the document arrived: `web` (web UI), `api`, `migration`."
     )
+    sha256: str = Field(
+        description="SHA-256 of the original file, in lower-case hex.",
+        examples=["9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"],
+    )
     owner_id: UUID
     drawer_id: UUID
     access: ShareLevel = Field(description="What the caller may do: read, or read and write.")
@@ -166,6 +171,7 @@ class DocumentDetails(BaseModel):
             original_filename=document.original_filename,
             media_type=document.media_type,
             channel=document.channel,
+            sha256=document.sha256.hex,
             owner_id=document.owner_id,
             drawer_id=document.drawer_id,
             access=access,
@@ -260,6 +266,35 @@ class DocumentPatch(BaseModel):
     attributes: dict[UUID, Any] | None = Field(
         default=None,
         description="Values by attribute id, in the form of `attributes` above; null removes.",
+    )
+
+
+class ImportedMetadataIn(BaseModel):
+    """The metadata a document taken over from another system comes with (form field
+    `metadata` of `POST /documents`, as JSON)."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {
+                    "title": "Electricity bill March",
+                    "contact_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b",
+                    "tag_ids": ["01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b"],
+                    "document_date": "2026-03-31",
+                    "attributes": {"01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b": "84.20"},
+                }
+            ]
+        },
+    )
+
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+    contact_id: UUID | None = None
+    document_type_id: UUID | None = None
+    tag_ids: list[UUID] = Field(default_factory=list, max_length=500)
+    document_date: date | None = None
+    attributes: dict[UUID, Any] = Field(
+        default_factory=dict, description="Values by attribute id, as in `PATCH /documents/{id}`."
     )
 
 
@@ -810,6 +845,18 @@ class NameIn(BaseModel):
     )
 
     name: Name
+
+
+class DrawerCreate(NameIn):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"name": "Household"}]},
+    )
+
+    owner_id: UUID | None = Field(
+        default=None,
+        description="Admins only: the user who will own the drawer. Default: the caller.",
+    )
 
 
 class MasterDataOut(BaseModel):

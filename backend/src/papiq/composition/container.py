@@ -77,6 +77,7 @@ from papiq.core.services.classification.steps import (
 )
 from papiq.core.services.documents import DocumentService
 from papiq.core.services.drawers import DrawerService
+from papiq.core.services.imports import ImportedClassifyStep, ImportedExtractStep
 from papiq.core.services.indexing import IndexingPolicy, IndexingService
 from papiq.core.services.maintenance import MaintenanceService
 from papiq.core.services.master_data import MasterDataService
@@ -461,8 +462,12 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
     executors[Step.PARSE] = ParseStep(store, container.parser)
     policy = policy_of(settings)
     model = container.language_model
-    executors[Step.CLASSIFY] = ClassifyStep(uow, store, model, clock, policy)
-    executors[Step.EXTRACT_ATTRIBUTES] = ExtractAttributesStep(uow, store, model, clock, policy)
+    executors[Step.CLASSIFY] = ImportedClassifyStep(
+        uow, ClassifyStep(uow, store, model, clock, policy)
+    )
+    executors[Step.EXTRACT_ATTRIBUTES] = ImportedExtractStep(
+        uow, ExtractAttributesStep(uow, store, model, clock, policy)
+    )
     executors[Step.APPLY_RULES] = ApplyRulesStep(
         uow, store, container.patterns, max_text=settings.rules_max_text
     )

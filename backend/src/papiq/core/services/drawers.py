@@ -46,9 +46,17 @@ class DrawerService:
             )
             await uow.commit()
 
-    async def create(self, actor: UserId, name: str) -> Drawer:
+    async def create(self, actor: UserId, name: str, *, owner: UserId | None = None) -> Drawer:
+        """A drawer owned by the caller; an admin may create one for another active user."""
         async with self._uow() as uow:
             user = await load_actor(uow, actor)
+            if owner is not None and owner != actor:
+                if not user.is_active_admin:
+                    raise PermissionDeniedError("only admins create drawers for other users")
+                target = await uow.users.find(owner)
+                if target is None or not target.active:
+                    raise NotFoundError("user", owner)
+                user = target
             drawer = Drawer.create(owner_id=user.id, name=name, now=self._clock.now())
             await _check_name_free(uow, drawer)
             await uow.drawers.add(drawer)

@@ -48,6 +48,7 @@ jobs:
       devcontainer: ${{ steps.diff.outputs.devcontainer }}
       image: ${{ steps.diff.outputs.image }}
       web: ${{ steps.diff.outputs.web }}
+      migration: ${{ steps.diff.outputs.migration }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -70,6 +71,9 @@ jobs:
           lock='^backend/(pyproject\.toml|uv\.lock)$'
           # web/openapi.json: a backend test compares it with the API.
           code="^backend/|^web/openapi\.json$|^\.devcontainer/(compose\.yml|dev\.env|garage)|$ci"
+          migration="^migration/|^web/openapi\.json$|$ci"
+          # The backend's unit tests run the migration client against the API, too.
+          backend_tests="$code|^migration/"
           web="^web/|^\.github/workflows/ci\.yml$"
           pipeline="^backend/src/papiq/adapters/outbound/(docling|ocrmypdf|pdfium)/"
           pipeline="$pipeline|^backend/src/papiq/core/(services/(pipeline|steps|objects)\.py|domain/pipeline)"
@@ -89,9 +93,11 @@ jobs:
             matches "^backend/uv\.lock$|$ci" && echo "heavy=true" >> "$GITHUB_OUTPUT"
             matches "$image|$lock" && echo "devcontainer=true" >> "$GITHUB_OUTPUT"
             matches "^web/pnpm-lock\.yaml$|$ci" && echo "web=true" >> "$GITHUB_OUTPUT"
+            matches "$migration" && echo "migration=true" >> "$GITHUB_OUTPUT"
           else
-            matches "$code" && echo "backend=true" >> "$GITHUB_OUTPUT"
+            matches "$backend_tests" && echo "backend=true" >> "$GITHUB_OUTPUT"
             matches "$web" && echo "web=true" >> "$GITHUB_OUTPUT"
+            matches "$migration" && echo "migration=true" >> "$GITHUB_OUTPUT"
             if [ "$DRAFT" != true ]; then
               matches "$code" && echo "integration=true" >> "$GITHUB_OUTPUT"
               matches "$pipeline|$lock|$ci" && echo "heavy=true" >> "$GITHUB_OUTPUT"
@@ -132,6 +138,28 @@ jobs:
           key: ${{ steps.mypy-cache.outputs.cache-primary-key }}
       - run: uv run lint-imports
       - run: uv run pytest -m unit -n logical
+
+  # The migration client (Paperless-ngx to Papiq): lint, types and tests against stand-ins for both
+  # APIs. Fast on purpose (httpx2 is its only dependency); its tests against the real API run
+  # in `backend`.
+  migration:
+    needs: changes
+    if: needs.changes.outputs.migration == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: migration
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run pytest
 
   # The web UI: lint, format, types, unit tests (Vitest in jsdom), the generated API client
   # against web/openapi.json, and the build. Playwright runs locally only (no browsers here).
