@@ -359,6 +359,35 @@ async def test_an_admin_token_cannot_reset_the_admins_own_password(api: Api) -> 
     assert totp_off.status_code == 403, totp_off.text
 
 
+async def test_an_admin_token_promotes_nobody_and_keeps_the_admins_active(api: Api) -> None:
+    """1-01 (M13 review): promoting another account with a token, then signing in with that
+    account's password, would be the admin session M4-03 denies the token."""
+    admin, other, second = await api.admin("root"), await api.user("bob"), await api.admin("eve")
+    promoted = await api.client.patch(
+        f"{PREFIX}/users/{other.id}", json={"role": "admin"}, headers=auth(admin)
+    )
+    assert promoted.status_code == 403, promoted.text
+    assert "session" in promoted.json()["detail"]
+    locked = await api.client.patch(
+        f"{PREFIX}/users/{second.id}", json={"active": False}, headers=auth(admin)
+    )
+    assert locked.status_code == 403, locked.text
+    # A migration deactivates users with a token; that still works.
+    off = await api.client.patch(
+        f"{PREFIX}/users/{other.id}", json={"active": False}, headers=auth(admin)
+    )
+    assert off.status_code == 200 and off.json()["active"] is False
+    on = await api.client.patch(
+        f"{PREFIX}/users/{other.id}", json={"active": True, "role": "user"}, headers=auth(admin)
+    )
+    assert on.status_code == 200 and on.json()["role"] == "user"
+    async with api.sign_in(admin) as session:
+        response = await session.client.patch(
+            f"{PREFIX}/users/{other.id}", json={"role": "admin"}, headers=session.headers
+        )
+        assert response.status_code == 200, response.text
+
+
 async def test_an_admin_token_does_not_lead_to_a_session(api: Api) -> None:
     """M4-03, the chain: token -> password reset -> session -> new tokens, TOTP, everything."""
     admin = await api.admin("root")

@@ -103,13 +103,17 @@ async def get_user(id: UUID, principal: Authenticated, context: Context) -> Acco
     summary="Change role or state",
     description=(
         ADMINS_ONLY + " Deactivating ends the user's sessions and blocks their API tokens. "
-        "The last active admin stays an active admin (409)."
+        "The last active admin stays an active admin (409). Changing a role, or deactivating an "
+        "admin, needs a session, as for `/auth/*`: an API token only deactivates and "
+        "reactivates users (e.g. a migration)."
     ),
     response_model=UserOut,
     responses=problem_responses(401, 403, 404, 409, 422),
 )
-async def update_user(id: UUID, body: UserPatch, user: CurrentUser, context: Context) -> UserOut:
-    changed = await context.users.update(user, UserId(id), role=body.role, active=body.active)
+async def update_user(id: UUID, body: UserPatch, admin: Authenticated, context: Context) -> UserOut:
+    changed = await context.users.update(
+        admin.id, UserId(id), role=body.role, active=body.active, session=admin.session is not None
+    )
     return UserOut.of(changed)
 
 

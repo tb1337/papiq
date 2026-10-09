@@ -23,11 +23,15 @@ class Session {
 		return this.#csrf;
 	}
 
-	/** Who is signed in, from the server; false without a session. */
+	/**
+	 * Who is signed in, from the server; false without a session. Every navigation calls this:
+	 * the user object is replaced only when something about the user changed, so that effects
+	 * reading `session.user` (the event stream, the uploads) do not run again for nothing.
+	 */
 	async load(): Promise<boolean> {
 		const { data, error, response } = await api.GET('/api/v1/auth/me');
 		if (data) {
-			this.user = data.user;
+			if (JSON.stringify(this.user) !== JSON.stringify(data.user)) this.user = data.user;
 			this.#csrf = data.csrf_token;
 			return true;
 		}

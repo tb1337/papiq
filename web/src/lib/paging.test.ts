@@ -86,4 +86,22 @@ describe('PagedList', () => {
 		expect(items.error).toBeNull();
 		expect(items.items).toEqual([1, 2]);
 	});
+
+	it('takes the total only from a page it keeps', async () => {
+		let release: (() => void) | undefined;
+		const paged = new PagedList<number>(async (after) => {
+			if (after === null && release === undefined) {
+				await new Promise<void>((resolve) => (release = resolve));
+				return { items: [1], next: null, total: 1000 };
+			}
+			return { items: [2, 3], next: null, total: 2 };
+		});
+		const slow = paged.reload(); // the first answer is late ...
+		await paged.reload(); // ... and this one wins
+		expect(paged.total).toBe(2);
+		release?.();
+		await slow;
+		expect(paged.total).toBe(2);
+		expect(paged.items).toEqual([2, 3]);
+	});
 });

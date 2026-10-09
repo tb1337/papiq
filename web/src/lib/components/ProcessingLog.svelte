@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { api } from '#lib/api/client.ts';
 	import { unwrap } from '#lib/api/call.ts';
 	import type { components } from '#lib/api/schema.ts';
@@ -32,19 +33,28 @@
 		failed: m.outcome_failed
 	};
 
+	// An answer for a document the page has left behind must not replace the current one.
 	async function load() {
+		const wanted = documentId;
 		try {
-			entries = await unwrap(
-				api.GET('/api/v1/documents/{id}/log', { params: { path: { id: documentId } } })
+			const loaded = await unwrap(
+				api.GET('/api/v1/documents/{id}/log', { params: { path: { id: wanted } } })
 			);
-			problem = null;
+			if (wanted === documentId) {
+				entries = loaded;
+				problem = null;
+			}
 		} catch (error) {
-			problem = describeError(error);
+			if (wanted === documentId) problem = describeError(error);
 		}
 	}
 
 	$effect(() => {
 		void documentId;
+		untrack(() => {
+			entries = null;
+			problem = null;
+		});
 		void events.generation;
 		void load();
 		return events.subscribe((event) => {

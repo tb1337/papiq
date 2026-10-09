@@ -49,14 +49,28 @@
 	// The owner confirms into drawers they may write to; an admin into any drawer.
 	const drawers = $derived(writableDrawers(lookup?.drawers ?? [], session.user));
 
+	// An answer for a document the page has left behind must not replace the current one.
 	async function load() {
+		const wanted = id;
 		try {
-			review = await unwrap(api.GET('/api/v1/documents/{id}/review', { params: { path: { id } } }));
-			problem = null;
+			const loaded = await unwrap(
+				api.GET('/api/v1/documents/{id}/review', { params: { path: { id: wanted } } })
+			);
+			if (wanted === id) {
+				review = loaded;
+				problem = null;
+			}
 		} catch (error) {
-			problem = error;
+			if (wanted === id) problem = error;
 		}
 	}
+
+	$effect(() => {
+		void id;
+		untrack(() => {
+			if (review && review.document.id !== id) review = null;
+		});
+	});
 
 	// The form starts from the document and the model's suggestions; a new state of the document
 	// (after an event) starts it again, unless the user has changed something meanwhile.

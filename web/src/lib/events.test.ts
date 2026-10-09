@@ -56,4 +56,16 @@ describe('event stream', () => {
 		expect(closed).toHaveBeenCalledOnce();
 		expect(source.closed).toBe(true);
 	});
+
+	it('reloads after a stream the server closed was started again', () => {
+		events.start(() => {});
+		FakeSource.last.onopen?.();
+		const before = events.generation;
+		FakeSource.last.readyState = 2;
+		FakeSource.last.onerror?.(); // the API restarted: 502 from the proxy, the browser gave up
+		events.start(() => {});
+		FakeSource.last.onopen?.();
+		expect(events.generation).toBe(before + 1);
+		events.stop();
+	});
 });

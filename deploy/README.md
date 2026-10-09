@@ -69,7 +69,9 @@ openssl rand -base64 32 > secrets/papiq_secret_key   # PAPIQ_SECRET_KEY: 32 rand
 ```
 
 `PAPIQ_SECRET_KEY` is required by every service (it encrypts TOTP and webhook secrets). Losing it
-means losing both. The key from `.devcontainer/dev.env` is public and refused. Meilisearch has no
+means losing both. The key from `.devcontainer/dev.env` is public and refused with secure cookies
+(the default; the example stacks run with `PAPIQ_COOKIE_SECURE=false` and would take it, so never
+copy it). Meilisearch has no
 `*_FILE` variable: its key reaches it through `secrets/meilisearch.env`, the one secret that is an
 environment variable of a container (visible in `docker inspect` of Meilisearch, not of Papiq).
 

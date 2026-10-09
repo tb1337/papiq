@@ -31,7 +31,9 @@ class EventStream {
 	connected = $state(false);
 	#source: EventSource | null = null;
 	#handlers = new Set<Handler>();
-	#failed = false;
+	// Whether a stream was open before: every later `onopen` is a reconnect (after a network
+	// break, or after the server closed the stream and the caller started it again).
+	#opened = false;
 	#factory: (url: string) => EventSource = (url) => new EventSource(url);
 
 	/** For tests. */
@@ -55,14 +57,11 @@ class EventStream {
 		this.#source = source;
 		source.onopen = () => {
 			this.connected = true;
-			if (this.#failed) {
-				this.#failed = false;
-				this.generation++;
-			}
+			if (this.#opened) this.generation++;
+			this.#opened = true;
 		};
 		source.onerror = () => {
 			this.connected = false;
-			this.#failed = true;
 			// Network breaks are retried by the browser itself; a closed source is not.
 			if (source.readyState === 2) {
 				this.stop();
@@ -85,7 +84,6 @@ class EventStream {
 		this.#source?.close();
 		this.#source = null;
 		this.connected = false;
-		this.#failed = false;
 	}
 }
 
