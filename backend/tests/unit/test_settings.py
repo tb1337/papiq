@@ -1,3 +1,4 @@
+import re
 from datetime import timedelta
 from pathlib import Path
 
@@ -6,6 +7,7 @@ import pytest
 from papiq.composition.errors import ConfigurationError
 from papiq.composition.settings import (
     DEVELOPMENT_SECRET_KEY,
+    ENV_PREFIX,
     Settings,
     find_unknown_variables,
     load_settings,
@@ -678,3 +680,20 @@ def test_invalid_search_settings(monkeypatch: pytest.MonkeyPatch, name: str, val
         return
     with pytest.raises(ConfigurationError, match=name):
         load_settings()
+
+
+README = Path(__file__).parents[2] / "README.md"
+_DOCUMENTED = re.compile(r"^\| `(PAPIQ_[A-Z0-9_]+)` \| (API|Worker|both) \| ", re.MULTILINE)
+
+
+def test_every_setting_is_documented_with_its_role() -> None:
+    """backend/README.md, section Configuration, is the one place for all `PAPIQ_` variables:
+    one row per setting with its role (API, Worker or both), default and meaning."""
+    documented = _DOCUMENTED.findall(README.read_text(encoding="utf-8"))
+    names = [name for name, _ in documented]
+    expected = [ENV_PREFIX + name.upper() for name in Settings.model_fields]
+    assert sorted(names) == sorted(expected), (
+        f"missing in README: {sorted(set(expected) - set(names))}; "
+        f"unknown in README: {sorted(set(names) - set(expected))}"
+    )
+    assert len(names) == len(set(names)), "a variable is documented twice"
