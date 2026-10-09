@@ -4,7 +4,7 @@ Datum: 2026-10-09. Entscheidung 6 (`prompts/M13.md`): zehn Originale aus der Pap
 (Auszug der Produktion), quer über Dokumenttypen und Kontakte, in eine Wegwerf-Umgebung
 (Datenbank `papiq_trial`, Dateisystem-Speicher, Index `papiq-trial-documents`, ein Worker) normal
 per API hochgeladen (Kanal `web`, ohne Metadaten). Die Paperless-Werte sind das Soll. Vorher wurden
-die Stammdaten aus Paperless angelegt (86 Kontakte, 16 Dokumenttypen, 10 Tags, 14 Attribute, alle
+die Stammdaten aus Paperless angelegt (86 Kontakte, 16 Dokumenttypen, 10 Tags, 14 Felder, alle
 global), wie es nach einer Übernahme der Fall wäre. Keine Titel und keine Personennamen in diesem
 Bericht; die Auswahl steht als Paperless-IDs.
 
@@ -15,7 +15,7 @@ Bericht; die Auswahl steht als Paperless-IDs.
   Anfragen (auch Embeddings) mit **502 Bad Gateway**, zwei parallele Klassifizierungen liefen in
   das Zeitlimit von 600 s. Wiederholung mit einem Worker: zwei weitere 502-Ausfälle (12:40, 13:09,
   jeweils länger als die drei Versuche mit 30/60 s Abstand), dazwischen normale Antworten
-  (Klassifizierung 219 s und 349 s, Attribute 390 s je Dokument). Ursache nicht geklärt
+  (Klassifizierung 219 s und 349 s, Felder 390 s je Dokument). Ursache nicht geklärt
   (Neustart von Ollama auf dem NUC?); ein Dokument wurde so gelb, der Rest blieb hängen.
 - **Groq (`openai/gpt-oss-120b`, ab 13:21 Uhr, Tobis Entscheidung):** Antworten in 2 bis 4 s je
   Anfrage. Zwei Dinge waren nötig: `PAPIQ_LLM_RESPONSE_FORMAT=json_schema` (mit `json_object`
@@ -32,7 +32,7 @@ Bericht; die Auswahl steht als Paperless-IDs.
 | Lane | Anzahl | Gründe |
 | --- | --- | --- |
 | grün | 1 | Kontoauszug: Kontakt und Typ erkannt, Datum geprüft |
-| gelb | 9 | 7× Kontakt: kein bestehender Kontakt passt zum vorgeschlagenen Namen (neuer Kontakt vorgeschlagen) oder kein Kontakt erkannt; 1× Kontakt kommt nicht im Text vor; 1× Dokumenttyp: neuer Typ vorgeschlagen; 1× Datum nicht erkannt; 2× Datumsattribut gleich Dokumentdatum (nur Vorschlag); 1× Betrag in deutscher Schreibweise abgelehnt (`2.111,68`) |
+| gelb | 9 | 7× Kontakt: kein bestehender Kontakt passt zum vorgeschlagenen Namen (neuer Kontakt vorgeschlagen) oder kein Kontakt erkannt; 1× Kontakt kommt nicht im Text vor; 1× Dokumenttyp: neuer Typ vorgeschlagen; 1× Datum nicht erkannt; 2× Datumsfeld gleich Dokumentdatum (nur Vorschlag); 1× Betrag in deutscher Schreibweise abgelehnt (`2.111,68`) |
 | rot | 0 | (vorübergehend 5 durch Ollama-Ausfall, 1 durch das Groq-Limit; nach Wiederholung gelb) |
 
 ## Trefferquote je Feld gegen Paperless
@@ -43,7 +43,7 @@ Bericht; die Auswahl steht als Paperless-IDs.
 | Kontakt | 2 | 10 | Vorschläge sind meist richtig, aber nicht der Paperless-Name: „ING-DiBa AG“ statt „ING“, „Scalable Capital GmbH“ statt des Kurznamens; bei Gehalts- und Zeitnachweisen nennt das Modell den Empfänger statt den Absender; der Abgleich ist buchstabengenau mit Ähnlichkeitsschwelle 0,75 |
 | Dokumentdatum | 5 | 10 | drei Abweichungen um einen Tag (Paperless „erstellt“ gegen das Datum im Dokument), zwei nicht erkannt |
 | Tags | 1 | 3 | nur drei Dokumente haben Tags in Paperless |
-| Attribute | 0 | 16 | nicht aussagekräftig: die Testinstanz trägt Testwerte („Das ist ein Text“, Zufallstext, Verweise auf andere Dokumente), die kein Modell aus dem Dokument lesen kann; siehe Befund unten |
+| Felder | 0 | 16 | nicht aussagekräftig: die Testinstanz trägt Testwerte („Das ist ein Text“, Zufallstext, Verweise auf andere Dokumente), die kein Modell aus dem Dokument lesen kann; siehe Befund unten |
 | Titel | 0 | 10 | Papiqs Titel kommt vom Modell, Paperless-Titel sind von Hand; kein Maß |
 
 ## Laufzeit je Schritt (Sekunden, alle Läufe)
@@ -53,18 +53,18 @@ Bericht; die Auswahl steht als Paperless-IDs.
 | OCR | 1,6 | 7,5 | 10 |
 | Parsen (Docling) | 22,8 | 48,7 | 10 |
 | Klassifizieren | 3,1 (Groq) | 600 (Ollama, Zeitlimit) | 16 |
-| Attribute | 2,2 (Groq) | 390 (Ollama) | 14 |
+| Felder | 2,2 (Groq) | 390 (Ollama) | 14 |
 
 Ollama auf der CPU: 219 bis 390 s je Modellanfrage. Groq: 2 bis 4 s, Durchsatz durch 8000
 Token/min begrenzt.
 
 ## Befunde
 
-1. **Globale Attribute werden aus jedem Dokument extrahiert.** Alle 14 Attribute sind global (so
+1. **Globale Felder werden aus jedem Dokument extrahiert.** Alle 14 Felder sind global (so
    legt die Migration Paperless-Custom-Fields an, Paperless kennt keine Zuordnung zum Typ). Das
    Modell füllte deshalb „Langer Text“, „Text“, „Währung“, „Zahl“, „LA_Brutto“ auch bei
    Rechnungen und Kontoauszügen mit irgendeinem Wert aus dem Text, geprüft und „ok“, weil der
-   Wert im Text vorkommt. Für den Betrieb: Attribute nach der Übernahme Dokumenttypen zuordnen,
+   Wert im Text vorkommt. Für den Betrieb: Felder nach der Übernahme Dokumenttypen zuordnen,
    sonst entstehen bei jedem Upload Werte in allen Feldern. Vorschlag für die Übergabe: die
    Migration könnte Custom Fields, die in Paperless nur bei einem Typ vorkommen, diesem Typ
    zuordnen (Nach 0.1).

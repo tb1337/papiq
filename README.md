@@ -16,7 +16,7 @@ three lanes: green (done), yellow (confirm), red (intervene).
   attached to drawers (filing units that can be shared), never to single documents; admins see
   and manage everything.
 - **Explainable ingest.** Receive → OCR (OCRmyPDF, PDF/A) → parse (Docling) → classify
-  (language model, OpenAI-compatible: Ollama or cloud) → extract attributes → apply rules → file.
+  (language model, OpenAI-compatible: Ollama or cloud) → extract fields → apply rules → file.
   Every step is logged with input, result, confidence, model version and duration, and can be
   repeated. A value the model proposes counts only if it occurs in the text; an unknown contact
   or type makes the document yellow, never a silent guess.
@@ -81,9 +81,9 @@ migration from Paperless: [.devcontainer/README.md](.devcontainer/README.md).
 | --- | --- |
 | Document | A file with metadata. Has an owner, exactly one drawer, at most one contact and one type. |
 | Contact | The other party of a document (Paperless: correspondent). Global. |
-| Document type | Kind of document. Global; brings its own attributes. |
+| Document type | Kind of document. Global; brings its own fields. |
 | Tag | Free classification, any number per document. Carries no permissions. |
-| Attribute | User-defined field (Paperless: custom field). Scope: global or per document type. |
+| Field | User-defined field (Paperless: custom field). Scope: global or per document type. |
 | Drawer | Filing and permission unit. Has an owner, can be shared with other users. |
 | Inbox | Where yellow and red documents wait for their owner. |
 | Lane | Processing outcome: green, yellow or red. |
