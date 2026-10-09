@@ -45,3 +45,6 @@ migration-reports/
 
 # pnpm store created by runs from the repository root
 .pnpm-store/
+
+# Backups of the development instance (.devcontainer/README.md)
+backup/

@@ -121,8 +121,14 @@ instance:
 
 Run the migration with the embedding variables commented out in `live.env` (restart API and
 worker after changing it): the pipeline then does not call Ollama for every document. Afterwards
-switch them on again, restart, and run **Papiq: Suche neu aufbauen** once (about 0.7 s per
-document) to get the vectors, in one go while under 40 minutes.
+switch them on again, restart, and run **Papiq: Suche neu aufbauen** once to get the vectors.
+The rebuild runs in one go and cannot be split: measured in M13 over the reverse proxy it took
+about 10 s per document (1525 documents: over four hours), not the 0.7 s of the M6 measurement
+on the NUC itself, so check the model's machine first or plan the time. Switching embeddings
+**off** again while the index exists makes every indexing job fail (`vector_embedding_error`:
+the index keeps its `userProvided` embedder); delete the index in Meilisearch then (`curl -X
+DELETE -H "Authorization: Bearer $PAPIQ_MEILISEARCH_API_KEY" $PAPIQ_MEILISEARCH_URL/indexes/papiq-live-documents`),
+the worker recreates it at its next reconcile.
 
 ## Backup and restore
 
@@ -131,12 +137,14 @@ index is derived; `reindex` rebuilds it). Database first, then the objects (orig
 change; an object that arrived after the database copy is only an unused file). Keep
 `PAPIQ_SECRET_KEY` in your password manager.
 
-The devcontainer can talk to Docker on the host (`docker-outside-of-docker`), so the backup uses
-the Postgres container and an `rclone` image; `BACKUP` is a folder on the host or in the
-workspace (outside the repository, or add it to `.gitignore`).
+The backup uses the Postgres container and an `rclone` image. Run the commands **on the host**,
+in the repository folder (the paths of `-v` are host paths); from inside the devcontainer they
+work as well, since it talks to the host's Docker, but `BACKUP` must then be the host's path of
+the workspace (for example `/Users/you/papiq/backup/...`, not `/workspaces/papiq/...`). The
+folder `backup/` in the repository is ignored by Git.
 
 ```sh
-BACKUP=/workspaces/papiq/backup/$(date +%Y-%m-%d)
+BACKUP=$PWD/backup/$(date +%Y-%m-%d)
 mkdir -p "$BACKUP"
 docker exec papiq-dev-postgres-1 pg_dump -U papiq -Fc papiq_live > "$BACKUP/papiq_live.dump"
 docker run --rm --network papiq-dev_default -v "$BACKUP:/backup" \
