@@ -9,7 +9,9 @@
 #   GARAGE_ADMIN_TOKEN         admin API token
 #   PAPIQ_S3_ACCESS_KEY_ID     access key to import (GK + 24 hex digits)
 #   PAPIQ_S3_SECRET_ACCESS_KEY its secret (64 hex digits)
-#   PAPIQ_S3_BUCKET            bucket to create
+#   PAPIQ_S3_BUCKET            bucket to create (development and tests)
+#   PAPIQ_S3_EXTRA_BUCKETS     further buckets, space-separated (the development instance,
+#                              see .devcontainer/README.md); the same key gets access
 set -eu
 
 : "${GARAGE_ADMIN_URL:?}" "${GARAGE_ADMIN_TOKEN:?}"
@@ -67,18 +69,19 @@ else
     >/dev/null
 fi
 
-# Bucket.
-if [ "$(status GET "/v2/GetBucketInfo?globalAlias=$PAPIQ_S3_BUCKET")" = "200" ]; then
-  echo "Bucket already exists"
-else
-  echo "Creating bucket $PAPIQ_S3_BUCKET"
-  api POST /v2/CreateBucket "{\"globalAlias\": \"$PAPIQ_S3_BUCKET\"}" >/dev/null
-fi
+# Buckets; the key gets full access to each. Permissions are set, not toggled, so repeating this
+# changes nothing.
+for bucket in $PAPIQ_S3_BUCKET ${PAPIQ_S3_EXTRA_BUCKETS:-}; do
+  if [ "$(status GET "/v2/GetBucketInfo?globalAlias=$bucket")" = "200" ]; then
+    echo "Bucket $bucket already exists"
+  else
+    echo "Creating bucket $bucket"
+    api POST /v2/CreateBucket "{\"globalAlias\": \"$bucket\"}" >/dev/null
+  fi
+  bucket_id=$(api GET "/v2/GetBucketInfo?globalAlias=$bucket" | jq -r '.id')
+  api POST /v2/AllowBucketKey \
+    "{\"bucketId\": \"$bucket_id\", \"accessKeyId\": \"$PAPIQ_S3_ACCESS_KEY_ID\", \"permissions\": {\"read\": true, \"write\": true, \"owner\": true}}" \
+    >/dev/null
+done
 
-# Permissions are set, not toggled, so repeating this changes nothing.
-bucket_id=$(api GET "/v2/GetBucketInfo?globalAlias=$PAPIQ_S3_BUCKET" | jq -r '.id')
-api POST /v2/AllowBucketKey \
-  "{\"bucketId\": \"$bucket_id\", \"accessKeyId\": \"$PAPIQ_S3_ACCESS_KEY_ID\", \"permissions\": {\"read\": true, \"write\": true, \"owner\": true}}" \
-  >/dev/null
-
-echo "Garage is ready: bucket $PAPIQ_S3_BUCKET, key $PAPIQ_S3_ACCESS_KEY_ID"
+echo "Garage is ready: buckets $PAPIQ_S3_BUCKET ${PAPIQ_S3_EXTRA_BUCKETS:-}, key $PAPIQ_S3_ACCESS_KEY_ID"
