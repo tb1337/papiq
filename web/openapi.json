@@ -1875,7 +1875,7 @@
           "users"
         ],
         "summary": "Create a user",
-        "description": "Admins only. Creates the user's private default drawer, too. Changes sign-in data, so it needs a session; API tokens are refused (403), as for `/auth/*`.",
+        "description": "Admins only. Creates the user's private default drawer, too. A user with the role `user` and no password can be created with an admin's API token (`read_write`), e.g. by a migration; a password or the role `admin` needs a session, as for `/auth/*`.",
         "operationId": "create_user_api_v1_users_post",
         "requestBody": {
           "content": {
@@ -1998,6 +1998,9 @@
         "security": [
           {
             "session": []
+          },
+          {
+            "token": []
           }
         ]
       }
@@ -5242,13 +5245,13 @@
           "drawers"
         ],
         "summary": "Create a drawer",
-        "description": "Names are unique per owner regardless of case.",
+        "description": "Names are unique per owner regardless of case. The caller owns the drawer; admins may give `owner_id` to create one for another active user (others: 403, an unknown or deactivated user: 404).",
         "operationId": "create_drawer_api_v1_drawers_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/NameIn"
+                "$ref": "#/components/schemas/DrawerCreate"
               }
             }
           },
@@ -5277,6 +5280,38 @@
                   "title": "Unauthorized",
                   "status": 401,
                   "detail": "authentication is required"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Forbidden",
+                  "status": 403,
+                  "detail": "only the owner controls processing of this document"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Not Found",
+                  "status": 404,
+                  "detail": "document 01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b not found"
                 }
               }
             }
@@ -5341,22 +5376,6 @@
                   "title": "Content Too Large",
                   "status": 413,
                   "detail": "the request body is larger than 1048576 bytes"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                },
-                "example": {
-                  "type": "about:blank",
-                  "title": "Forbidden",
-                  "status": 403,
-                  "detail": "only the owner controls processing of this document"
                 }
               }
             }
@@ -8076,6 +8095,15 @@
                       "migration"
                     ],
                     "description": "The intake channel, for rules. Default: `web` with a session, `api` with an API token; `migration` for imports from another system."
+                  },
+                  "owner": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "Admins only: the active user who owns the document. Default: the caller. The duplicate check, the default drawer and the write access to `drawer_id` are the owner's."
+                  },
+                  "metadata": {
+                    "type": "string",
+                    "description": "Admins only, with `channel=migration`: JSON of the metadata the document comes with (up to 48 KiB), as `ImportedMetadataIn`. Classification and attribute extraction apply it instead of asking the language model; the other steps and the rules run as usual."
                   }
                 }
               }
@@ -12323,6 +12351,14 @@
             "$ref": "#/components/schemas/Channel",
             "description": "How the document arrived: `web` (web UI), `api`, `migration`."
           },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256",
+            "description": "SHA-256 of the original file, in lower-case hex.",
+            "examples": [
+              "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+            ]
+          },
           "owner_id": {
             "type": "string",
             "format": "uuid",
@@ -12450,6 +12486,7 @@
           "original_filename",
           "media_type",
           "channel",
+          "sha256",
           "owner_id",
           "drawer_id",
           "access",
@@ -12491,6 +12528,7 @@
               "run": 1,
               "status": "completed"
             },
+            "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
             "tag_ids": [],
             "title": "Electricity bill March",
             "updated_at": "2026-04-02T08:16:10Z"
@@ -12522,6 +12560,14 @@
           "channel": {
             "$ref": "#/components/schemas/Channel",
             "description": "How the document arrived: `web` (web UI), `api`, `migration`."
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256",
+            "description": "SHA-256 of the original file, in lower-case hex.",
+            "examples": [
+              "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+            ]
           },
           "owner_id": {
             "type": "string",
@@ -12635,6 +12681,7 @@
           "original_filename",
           "media_type",
           "channel",
+          "sha256",
           "owner_id",
           "drawer_id",
           "access",
@@ -12677,6 +12724,7 @@
               "run": 1,
               "status": "completed"
             },
+            "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
             "tag_ids": [],
             "title": "Electricity bill March",
             "updated_at": "2026-04-02T08:16:10Z"
@@ -12894,6 +12942,43 @@
         ],
         "title": "DocumentPreviewOut",
         "description": "What a change would do; nothing is stored."
+      },
+      "DrawerCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "examples": [
+              "ACME Energy"
+            ]
+          },
+          "owner_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Id",
+            "description": "Admins only: the user who will own the drawer. Default: the caller."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "DrawerCreate",
+        "examples": [
+          {
+            "name": "Household"
+          }
+        ]
       },
       "DrawerOut": {
         "properties": {

@@ -22,7 +22,9 @@ from papiq.adapters.inbound.rest.schemas import (
     UserOut,
     UserPatch,
 )
+from papiq.core.domain.errors import PermissionDeniedError
 from papiq.core.domain.ids import UserId
+from papiq.core.domain.users import Role
 from papiq.core.services.users import Account
 
 router = APIRouter(prefix="/users", tags=["users"], dependencies=PROTECTED)
@@ -61,11 +63,20 @@ async def list_users(principal: Authenticated, context: Context) -> list[UserOut
     "",
     status_code=201,
     summary="Create a user",
-    description=ADMINS_ONLY + " Creates the user's private default drawer, too." + SESSION_ONLY,
+    description=(
+        ADMINS_ONLY + " Creates the user's private default drawer, too. A user with the role "
+        "`user` and no password can be created with an admin's API token (`read_write`), e.g. "
+        "by a migration; a password or the role `admin` needs a session, as for `/auth/*`."
+    ),
     response_model=UserOut,
     responses=problem_responses(401, 403, 409, 422),
 )
-async def create_user(body: UserCreate, admin: SessionPrincipal, context: Context) -> UserOut:
+async def create_user(body: UserCreate, admin: Authenticated, context: Context) -> UserOut:
+    if admin.session is None and (body.password is not None or body.role is not Role.USER):
+        raise PermissionDeniedError(
+            "this needs a signed-in session: an API token can only create users with the "
+            "role 'user' and no password"
+        )
     password = None if body.password is None else body.password.get_secret_value()
     created = await context.users.create_user(admin.id, body.username, body.role, password)
     return UserOut.of(created)

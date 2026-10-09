@@ -12,7 +12,7 @@ import hashlib
 import os
 import re
 import tempfile
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, BinaryIO, cast
@@ -51,9 +51,16 @@ class Upload:
     fields: dict[str, str]
 
 
-async def read_upload(request: Request, *, max_size: int, fields: Collection[str] = ()) -> Upload:
-    """Read the multipart body of `request`, keeping the text fields named in `fields`. The
-    caller removes `upload.file.path` when done; on error nothing is left behind."""
+async def read_upload(
+    request: Request,
+    *,
+    max_size: int,
+    fields: Collection[str] = (),
+    limits: Mapping[str, int] | None = None,
+) -> Upload:
+    """Read the multipart body of `request`, keeping the text fields named in `fields` (each up
+    to 1 KiB, or its limit in `limits`, which must stay well below `_OVERHEAD`). The caller
+    removes `upload.file.path` when done; on error nothing is left behind."""
     content_type, options = parse_options_header(request.headers.get("content-type"))
     boundary = options.get(b"boundary")
     if content_type != b"multipart/form-data" or not boundary:
@@ -66,7 +73,7 @@ async def read_upload(request: Request, *, max_size: int, fields: Collection[str
     path = Path(name)
     try:
         with os.fdopen(descriptor, "wb") as target:
-            state = _State(target, max_size, frozenset(fields))
+            state = _State(target, max_size, frozenset(fields), dict(limits or {}))
             parser = MultipartParser(boundary, cast("MultipartCallbacks", state.callbacks()))
             received = 0
             async for chunk in request.stream():
@@ -100,6 +107,7 @@ class _State:
     target: BinaryIO
     max_size: int
     wanted: frozenset[str]
+    limits: dict[str, int]
     digest: Any = field(default_factory=hashlib.sha256)
     size: int = 0
     filename: str | None = None
@@ -147,7 +155,9 @@ class _State:
 
     def _header_end(self) -> None:
         name = self._header_field.decode("latin-1").lower()
-        self._headers[name] = self._header_value.decode("utf-8", errors="replace")
+        # As latin-1 the bytes survive `parse_options_header`, which encodes them as latin-1 again;
+        # names and file names are decoded as UTF-8 afterwards (a file name may hold any letter).
+        self._headers[name] = self._header_value.decode("latin-1")
         self._header_field, self._header_value = bytearray(), bytearray()
 
     def _headers_finished(self) -> None:
@@ -181,7 +191,7 @@ class _State:
             self._pending.append(chunk)
         else:
             self._value += chunk
-            if len(self._value) > _FIELD_LIMIT:
+            if len(self._value) > self.limits.get(self._part, _FIELD_LIMIT):
                 self._fail(MalformedUploadError(f"the field '{self._part}' is too long"))
 
     def _part_end(self) -> None:
