@@ -44,6 +44,21 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
+describe('loading the session', () => {
+	it('keeps the user object while nothing about the user changed', async () => {
+		fetchMock.mockResolvedValueOnce(me('alice', 'one')).mockResolvedValueOnce(me('alice', 'two'));
+		await session.load();
+		const first = session.user;
+		await session.load();
+		expect(session.user).toBe(first); // effects on `session.user` do not run again
+		expect(session.csrfToken).toBe('two');
+		fetchMock.mockResolvedValueOnce(me('bob', 'three'));
+		await session.load();
+		expect(session.user).not.toBe(first);
+		expect(session.user?.username).toBe('bob');
+	});
+});
+
 describe('a stale CSRF token', () => {
 	it('is fetched anew for the same user, and the change is repeated', async () => {
 		fetchMock.mockResolvedValueOnce(me('alice', 'old'));
