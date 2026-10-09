@@ -1,7 +1,8 @@
 """Housekeeping as jobs.
 
-- The recurring cleanup removes finished jobs, delivered events, ended sessions and stale
-  counts of failed sign-ins.
+- The recurring cleanup removes finished jobs, delivered events, ended sessions, stale counts
+  of failed sign-ins, old webhook deliveries and the previous secrets of webhooks whose grace
+  period is over.
 - `documents.remove_files`, queued with the deletion of a document, removes its derivatives
   and its original, unless another document (of any owner) has the same file. Deleting the
   original and storing it for a new upload lock the original's key (`UnitOfWork.lock`), so an
@@ -13,7 +14,7 @@ that completes the current run.
 """
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from papiq.core.domain.documents import Sha256
@@ -21,7 +22,7 @@ from papiq.core.domain.errors import ConcurrencyError, ValidationError
 from papiq.core.domain.identity import ACCOUNT_THROTTLE, SOURCE_THROTTLE
 from papiq.core.domain.ids import DocumentId
 from papiq.core.domain.jobs import Job
-from papiq.core.ports import Clock, EventBus, ObjectStore, UnitOfWorkFactory
+from papiq.core.ports import Clock, EventBus, ObjectStore, UnitOfWork, UnitOfWorkFactory
 from papiq.core.services.objects import derivative_keys, original_key
 
 log = logging.getLogger(__name__)
@@ -138,6 +139,7 @@ class MaintenanceService:
                 sessions = await uow.sessions.purge(now=now, idle_before=now - self._session_idle)
                 failures = await uow.login_failures.purge(before=now - _FAILURE_RETENTION)
                 deliveries = await uow.webhooks.purge_deliveries(before=before)
+                secrets = await _drop_expired_secrets(uow, now)
                 await uow.jobs.complete(job)
                 await uow.jobs.enqueue(CLEANUP_JOB, {}, run_at=next_run, dedup_key=CLEANUP_JOB)
                 await uow.commit()
@@ -158,5 +160,18 @@ class MaintenanceService:
                 "sessions_removed": sessions,
                 "login_failures_removed": failures,
                 "webhook_deliveries_removed": deliveries,
+                "webhook_secrets_dropped": secrets,
             },
         )
+
+
+async def _drop_expired_secrets(uow: UnitOfWork, now: datetime) -> int:
+    """A renewed webhook secret's predecessor signs until the grace period ends; after that it
+    is removed from the database (webhooks are few, so they are simply read)."""
+    dropped = 0
+    for webhook in await uow.webhooks.list_all():
+        if webhook.drop_expired_secret(now):
+            webhook.updated_at = now
+            await uow.webhooks.update(webhook)
+            dropped += 1
+    return dropped

@@ -186,3 +186,28 @@ async def test_cleanup_removes_old_webhook_deliveries(world: World) -> None:
     assert await service.run_next_job()
     async with world.uow() as uow:
         assert [d.id for d in await uow.webhooks.deliveries(hook.id)] == [recent.id]
+
+
+async def test_cleanup_drops_previous_webhook_secrets_after_the_grace_period(world: World) -> None:
+    service = maintenance(world)
+    user = await world.user()
+    grace = timedelta(hours=24)
+    first = (
+        await world.webhooks.create(user.id, name="a", url="http://x.lan/a", event_types=["*"])
+    ).webhook
+    second = (
+        await world.webhooks.create(user.id, name="b", url="http://x.lan/b", event_types=["*"])
+    ).webhook
+    await world.webhooks.renew_secret(user.id, first.id)
+    world.clock.advance(grace / 2)
+    await world.webhooks.renew_secret(user.id, second.id)
+    world.clock.advance(grace / 2)  # the first grace period is over, the second half-way
+    await service.schedule()
+    assert await service.run_next_job()
+    first, second = (
+        await world.webhooks.get(user.id, first.id),
+        await world.webhooks.get(user.id, second.id),
+    )
+    assert first.previous_secret is None and first.previous_valid_until is None
+    assert second.previous_secret is not None
+    assert first.updated_at == world.clock.now()
