@@ -99,14 +99,33 @@ class UserService:
         return await self.update(actor, id, active=active)
 
     async def update(
-        self, actor: UserId, id: UserId, *, role: Role | None = None, active: bool | None = None
+        self,
+        actor: UserId,
+        id: UserId,
+        *,
+        role: Role | None = None,
+        active: bool | None = None,
+        session: bool = True,
     ) -> User:
         """Admins only; role and state in one transaction. Rights follow the role at once,
         since every request reads the user anew; sessions and tokens stay. Deactivating ends
-        the user's sessions; their API tokens are refused while the account is inactive."""
+        the user's sessions; their API tokens are refused while the account is inactive.
+
+        `session`: whether the caller is signed in with a session. An API token (a leaked one
+        above all) must not make anyone an admin, since that account then signs in with a
+        session and has everything the token was not meant to give; nor may it deactivate the
+        admins. A token only deactivates and reactivates users, as a migration does."""
         async with self._uow() as uow:
             await _require_admin(uow, actor)
             user = await uow.users.get(id)
+            if not session and (
+                (role is not None and role is not user.role)
+                or (user.is_admin and active is not None and active is not user.active)
+            ):
+                raise PermissionDeniedError(
+                    "this needs a signed-in session: an API token cannot change a role or the "
+                    "state of an admin"
+                )
             new_role = user.role if role is None else role
             new_active = user.active if active is None else active
             if (new_role, new_active) != (user.role, user.active):
@@ -218,20 +237,21 @@ class UserService:
     # --- first admin ----------------------------------------------------------------------------
 
     async def bootstrap_admin(self, username: str, password: str) -> User | None:
-        """Create the first admin, if there is no admin yet; otherwise do nothing and return
-        None (an existing account is never changed). ConflictError if the name belongs to a
-        user who is not an admin."""
+        """Create the first admin, if there is no active admin; otherwise do nothing and return
+        None (an existing account is never changed, also not a deactivated admin: the operator
+        names a new one to get back in). ConflictError if the name belongs to an existing
+        user."""
         async with self._uow() as uow:
-            if any(user.is_admin for user in await uow.users.list_all()):
+            if any(user.is_active_admin for user in await uow.users.list_all()):
                 return None
         password_hash = await self._hash(username, password)
         assert password_hash is not None
         now = self._clock.now()
         async with self._uow() as uow:
-            if any(user.is_admin for user in await uow.users.list_all()):
+            if any(user.is_active_admin for user in await uow.users.list_all()):
                 return None
             if await uow.users.find_by_username(username) is not None:
-                raise ConflictError(f"username '{username}' belongs to a user who is no admin")
+                raise ConflictError(f"username '{username}' belongs to an existing user")
             user = await add_user(uow, username, Role.ADMIN, now)
             await uow.credentials.add(
                 Credential(user_id=user.id, password_hash=password_hash, password_changed_at=now)

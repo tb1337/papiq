@@ -219,6 +219,20 @@ async def test_the_first_admin_is_created_once(world: World) -> None:
         await world.auth.login("root", NEW_PASSWORD)
 
 
+async def test_the_first_admin_is_created_while_all_admins_are_inactive(world: World) -> None:
+    """A token that deactivated the admins (1-01) must not lock the operator out for good."""
+    locked = await world.account("root", Role.ADMIN)
+    assert await world.users.bootstrap_admin("rescue", NEW_PASSWORD) is None
+    locked.active = False
+    async with world.uow() as uow:
+        await uow.users.update(locked)
+        await uow.commit()
+    with pytest.raises(ConflictError):
+        await world.users.bootstrap_admin("root", NEW_PASSWORD)  # never changes an account
+    rescue = await world.users.bootstrap_admin("rescue", NEW_PASSWORD)
+    assert rescue is not None and rescue.is_active_admin
+
+
 async def test_the_first_admin_does_not_take_over_a_user(world: World) -> None:
     await world.account("alice")
     with pytest.raises(ConflictError):
@@ -237,6 +251,27 @@ async def test_admins_do_not_reset_their_own_sign_in_here(world: World) -> None:
     with pytest.raises(PermissionDeniedError):
         await world.users.disable_totp(admin.id, admin.id)
     await world.auth.login("root", PASSWORD)
+
+
+async def test_a_token_changes_no_role_and_no_admins_state(world: World) -> None:
+    """1-01: a leaked admin token must not make an account an admin (that account then signs in
+    with a session) nor lock the admins out."""
+    admin, other, second = (
+        await world.user(role=Role.ADMIN),
+        await world.user(),
+        await world.user(role=Role.ADMIN),
+    )
+    with pytest.raises(PermissionDeniedError, match="session"):
+        await world.users.update(admin.id, other.id, role=Role.ADMIN, session=False)
+    with pytest.raises(PermissionDeniedError, match="session"):
+        await world.users.update(admin.id, second.id, active=False, session=False)
+    assert (await world.users.get(admin.id, other.id)).role is Role.USER
+    assert (await world.users.get(admin.id, second.id)).active
+    # What a migration does: deactivating and reactivating users, and no-ops.
+    assert not (await world.users.update(admin.id, other.id, active=False, session=False)).active
+    assert (await world.users.update(admin.id, other.id, active=True, session=False)).active
+    await world.users.update(admin.id, other.id, role=Role.USER, session=False)
+    await world.users.update(admin.id, second.id, active=True, session=False)
 
 
 async def test_role_and_state_change_together(world: World) -> None:

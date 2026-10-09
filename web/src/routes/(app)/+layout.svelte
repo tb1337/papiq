@@ -10,10 +10,14 @@
 
 	let { children } = $props();
 
+	// The effects below follow the signed-in user, not the user object: a reload of the session
+	// (every navigation) must not restart the stream or drop the uploads.
+	const userId = $derived(session.user?.id ?? null);
+
 	// After a reconnect the counter may be stale.
 	$effect(() => {
 		void events.generation;
-		if (session.user) {
+		if (userId) {
 			void inbox.refresh();
 			uploads.recheck();
 		}
@@ -21,7 +25,7 @@
 
 	// One event stream while someone is signed in; it closes with the session (sign-out, 401).
 	$effect(() => {
-		if (!session.user) return;
+		if (!userId) return;
 		let retry: ReturnType<typeof setTimeout> | undefined;
 		let ended = false;
 		const open = () =>
