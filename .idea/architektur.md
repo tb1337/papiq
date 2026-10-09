@@ -72,8 +72,15 @@ Papiq ist hexagonal aufgebaut: Der fachliche Kern kennt keine Datenbank, kein S3
 | Job-Queue | Job-Tabelle in der Datenbank | Valkey/Redis-basierte Queue |
 | Event-Bus | Outbox-Tabelle in der Datenbank, Verteilung im Prozess | Valkey Streams, NATS |
 | Identität | nativer Login, OIDC | weitere Anbieter |
+| Vorschau | PDFium (erste Seite als WebP) | anderer Renderer |
+| Mustersuche (Regeln) | `regex` mit Zeitlimit | eigener Dienst |
+| Webhook-Versand | httpx2 | andere HTTP-Bibliothek |
+| Uhr | Systemuhr | feste Uhr in Tests |
+| Passwort-Hash, Geheimnis-Verschlüsselung, TOTP | Argon2id, AES-GCM, pyotp | andere Verfahren |
 
-Webhook-Versand ist ein ausgehender Adapter, der Ereignisse vom Event-Bus abonniert.
+Webhook-Versand ist ein ausgehender Adapter, der Ereignisse vom Event-Bus abonniert. Jeder Port
+hat einen In-Memory-Adapter für die Kern-Tests (M13-Review: der Mustersuche fehlt er noch, der
+Speicher-Container nutzt den `regex`-Adapter, der ohne Dienst läuft).
 
 Hexagonal betrifft den inneren Aufbau, nicht die Zahl der Container: Ein Adapter kann lokal laufen oder einen entfernten Dienst ansprechen, ohne dass sich der Kern ändert.
 
@@ -123,7 +130,7 @@ Drei Speicher mit klarer Aufgabe: Datenbank für Metadaten, Objektspeicher für 
 
 - Hybride Suche: Volltext und Vektoren in einem Aufruf.
 - Index ist abgeleitet und jederzeit aus Datenbank und S3 neu aufbaubar; Aktualisierung per Job, daher kurz verzögert.
-- Nur die API spricht mit Meilisearch; jede Suche wird auf die Reichweite des Nutzers gefiltert (Admins mit `all_users`: alle Dokumente).
+- Nur API und Worker sprechen mit Meilisearch: der Worker schreibt den Index (Jobs, Abgleich, Neuaufbau), die API sucht; jede Suche wird auf die Reichweite des Nutzers gefiltert (Admins mit `all_users`: alle Dokumente).
 - Deutsche Komposita werden zerlegt; Stemming nach Kenntnisstand nicht vorhanden, die semantische Suche fängt das ab ([Quelle](https://www.meilisearch.com/docs/resources/internals/typo_tolerance.md)).
 
 ## Datenmodell
@@ -132,8 +139,8 @@ Angelehnt an Paperless-ngx, ohne Speicherpfade, mit Schubladen als Ablage- und R
 
 | Begriff | Bedeutung | Regeln |
 | --- | --- | --- |
-| Dokument | Datei mit Metadaten | Besitzer, genau eine Schublade, ein Kontakt, ein Typ, Hash, Dokumentdatum |
-| Kontakt | Gegenseite des Dokuments (Paperless: Korrespondent) | genau einer pro Dokument; global, ohne Besitzer |
+| Dokument | Datei mit Metadaten | Besitzer, genau eine Schublade, höchstens ein Kontakt, höchstens ein Typ, Hash, Dokumentdatum |
+| Kontakt | Gegenseite des Dokuments (Paperless: Korrespondent) | höchstens einer pro Dokument (leer, bis die Klassifizierung oder eine Person einen setzt); global, ohne Besitzer |
 | Dokumenttyp | Art des Dokuments | global; bringt zugeordnete Attribute mit |
 | Tag | Klassifizierung | beliebig viele pro Dokument; global; trägt keine Rechte |
 | Attribut | frei definierbares Feld (Paperless: Custom Field) | Geltungsbereich global oder je Dokumenttyp; fester Datentyp |
@@ -360,4 +367,4 @@ Ein eigener CLI-Client (`migration/`) liest die Paperless-REST-API und schreibt 
 - [x] Attribut-Datentypen bestätigen
 - [x] Embedding-Modell für die semantische Suche bestätigen (`snowflake-arctic-embed2`, Tobi 07.10.2026; Bewertung unter „Suche“)
 - [x] Migration: Paperless-Speicherpfade und -Berechtigungen auf Schubladen abbilden (Speicherpfade entfallen, Berechtigungen: eine Schublade des Besitzers je Kombination aus Lesern und Schreibern; Tobi 08.10.2026)
-- [ ] Verfügbarkeit des Namens „Papiq“ prüfen (GitHub, PyPI, Docker Hub, Marken)
+- [x] Verfügbarkeit des Namens „Papiq“ prüfen (GitHub, PyPI, Docker Hub, Marken) – geprüft 09.10.2026 (M13): PyPI, npm, Docker Hub, GHCR und papiq.de/.io/.app/.dev frei; GitHub-Nutzer `PapiQ` belegt (keine Organisation `papiq`, Repo bleibt `tb1337/papiq`); keine Marke „PAPIQ“ für Software in DE/EU (TMview), nahe Zeichen „papique“ (Papierwaren) und „Paper IQ“/„PaperIQ“ (Papiermaschinen, KI-Dokumentensuche). Der Name bleibt; die Entscheidung vor dem Tag `v0.1.0` liegt bei Tobi.
