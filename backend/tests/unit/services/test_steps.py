@@ -10,7 +10,7 @@ from papiq.adapters.outbound.memory.processing import FAKE_PDF
 from papiq.core.domain.documents import Document
 from papiq.core.domain.pipeline import Lane, Outcome, Step
 from papiq.core.domain.users import User
-from papiq.core.ports import OcrResult
+from papiq.core.ports import OcrResult, ParseResult
 from papiq.core.services.objects import (
     archive_key,
     markdown_key,
@@ -135,8 +135,35 @@ async def test_a_document_without_text_goes_red(world: World) -> None:
     assert document.lane is Lane.RED
     assert document.processing.current_step is Step.PARSE
     entry = (await world.documents.processing_log(owner.id, document.id))[-1]
-    assert entry.result.reason == "no text recognised"
+    assert entry.result.reason == "no text recognised: the pages are blank or hold only pictures"
     assert await world.object_store.exists(markdown_key(document.id))  # kept for inspection
+
+
+class TextLayer(FakeParser):
+    """A parser whose layout analysis found nothing and that fell back to the text layer."""
+
+    async def parse(self, source: Path, *, markdown: Path, structure: Path) -> ParseResult:
+        result = await super().parse(source, markdown=markdown, structure=structure)
+        return ParseResult(pages=result.pages, parser=result.parser, note="text layer used")
+
+
+async def test_a_parser_that_fell_back_to_the_text_layer_is_uncertain(world: World) -> None:
+    store = world.object_store
+    service = world.pipeline(
+        {
+            Step.OCR: OcrStep(store, FakeOcr(), FakePreviewRenderer()),
+            Step.PARSE: ParseStep(store, TextLayer("Lohnabrechnung Februar")),
+        }
+    )
+    owner, document = await ingest(world, service, "scan.pdf")
+    assert document.lane is Lane.YELLOW
+    assert document.processing.outcomes[Step.PARSE] is Outcome.UNCERTAIN
+    entry = (await world.documents.processing_log(owner.id, document.id))[2]
+    assert entry.step is Step.PARSE
+    assert entry.result.reason == "text layer used"
+    assert entry.result.output["note"] == "text layer used"
+    text = await world.object_store.get(markdown_key(document.id))
+    assert text == b"Lohnabrechnung Februar"
 
 
 async def test_reprocessing_from_parse_reuses_the_archive(world: World) -> None:

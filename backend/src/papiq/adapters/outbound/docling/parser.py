@@ -52,13 +52,19 @@ class DoclingParser:
                 raise RuntimeError(
                     f"docling failed with exit code {completed.returncode}: {reason}"
                 )
-            pages = int(json.loads(completed.stdout.strip().splitlines()[-1])["pages"])
+            report = json.loads(completed.stdout.strip().splitlines()[-1])
+            pages = int(report["pages"])
+            note = report.get("note")
             await asyncio.to_thread(markdown_tmp.replace, markdown)
             await asyncio.to_thread(structure_tmp.replace, structure)
         finally:
             for path in (markdown_tmp, structure_tmp):
                 await asyncio.to_thread(path.unlink, missing_ok=True)
-        return ParseResult(pages=pages, parser=f"docling {importlib.metadata.version('docling')}")
+        return ParseResult(
+            pages=pages,
+            parser=f"docling {importlib.metadata.version('docling')}",
+            note=None if note is None else str(note),
+        )
 
 
 def _last_line(text: str) -> str:
