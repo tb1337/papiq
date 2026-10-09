@@ -86,7 +86,7 @@ environment variable of a container (visible in `docker inspect` of Meilisearch,
 | `PAPIQ_COOKIE_SECURE`, `PAPIQ_FORWARDED_ALLOW_IPS`, `PAPIQ_PUBLIC_URL` | `true`, –, – | behind a proxy, see below |
 | `PAPIQ_UPLOAD_MAX_SIZE` | 100 MiB | the proxy's body limit must allow it |
 | `PAPIQ_UI_DIR` | `/opt/papiq/ui` | the web UI's files; unset it to serve the API only |
-| `PAPIQ_WORKER_CONCURRENCY`, `PAPIQ_WORKER_SHUTDOWN_TIMEOUT` | 2, 30 s | see [Stopping](#stopping) |
+| `PAPIQ_WORKER_CONCURRENCY`, `PAPIQ_WORKER_SHUTDOWN_TIMEOUT` | 2, 30 s | about 2 GB of RAM per job for Docling, plus 1 GB: 1 on 4 GB, 3 on 8 GB, 6 on 16 GB; see [Stopping](#stopping) |
 | `PAPIQ_MCP_ENABLED`, `PAPIQ_MCP_TEXT_MAX` | `true`, 20000 | the MCP endpoint and the characters one `get_text` returns |
 | `PAPIQ_WEBHOOKS_PER_USER` | 20 | webhooks per user |
 | `PAPIQ_WEBHOOK_TIMEOUT`, `_MAX_ATTEMPTS`, `_RETRY_DELAY` | 10 s, 10, 30 s | per attempt; attempts per event; first delay, doubling up to one hour |
@@ -150,7 +150,7 @@ seconds, so a crash loop shows, and past its wait for the schema). The worker ha
 its own: a hung worker that is still a process is not detected. Compose `depends_on` can use `condition: service_healthy`.
 
 All services write to stdout/stderr of the container (`docker compose logs papiq`), as JSON by
-default. s6's own messages (`s6-rc: info: …`) are there as well. If an init service fails (invalid
+default; the health check's own requests are left out of the access log. s6's own messages (`s6-rc: info: …`) are there as well. If an init service fails (invalid
 configuration, failed migration), the container stops with exit code 1 and the reason is the last
 thing in the log.
 

@@ -156,7 +156,7 @@ Receive → OCR → parse → classify → extract attributes → apply rules �
 
 | Step | Input | Derivatives (object store) | Outcome |
 | --- | --- | --- | --- |
-| OCR (`OcrStep`) | `originals/<sha256>` | `documents/<id>/archive.pdf` (PDF/A with text layer), `documents/<id>/preview.webp` (first page, 400 px wide) | uncertain if the archive is not PDF/A |
+| OCR (`OcrStep`) | `originals/<sha256>` | `documents/<id>/archive.pdf` (PDF/A with text layer), `documents/<id>/preview.webp` (first page, 400 px wide) | uncertain if the archive is not PDF/A, with the reason; OK with a note if the original's digital signature is not in the archive |
 | Parse (`ParseStep`) | the archive PDF | `documents/<id>/content.md`, `documents/<id>/content.json` (Docling) | failed if no text was recognised |
 | Classify (`ClassifyStep`) | `content.md`, master data | contact, document type, tags, document date (applied if checked) | see below |
 | Extract attributes (`ExtractAttributesStep`) | `content.md`, the attributes of the type | attribute values (applied if checked) | see below |
@@ -179,6 +179,15 @@ Receive → OCR → parse → classify → extract attributes → apply rules �
   size (none, or 72 dpi from a phone) are scaled to the long edge of A4; transparency is put on
   white, CMYK is converted, all pages of a TIFF are kept. OCRmyPDF and Docling share the CPU
   cores among `PAPIQ_WORKER_CONCURRENCY` jobs.
+- Two kinds of file get a second OCRmyPDF run. A digitally signed PDF is processed with
+  `--invalidate-digital-signatures`: the original keeps its signature (originals never change),
+  the archive has none, and the OCR entry of the log says so (outcome OK, `note`). A file whose
+  PDF/A conversion fails outright (OCRmyPDF exit code 1, for example an unusual colour space) is
+  written as a plain PDF (`--output-type pdf`); the step is uncertain with the reason. When
+  Ghostscript itself refuses a construct of the file (overprint mode, a font with CID 0; exit
+  code 10), the archive is a plain PDF as well and the reason comes from Ghostscript's
+  messages. Such a document is yellow until its owner confirms it; the file cannot be made
+  PDF/A without changing its content.
 - Docling uses the text layer of the archive (no OCR of its own) and the layout and table
   models in `PAPIQ_DOCLING_MODELS_PATH`; it never downloads models (`HF_HUB_OFFLINE=1`). The
   image stage `docling-models` downloads the models of the locked Docling version to
@@ -446,7 +455,7 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
 | `GET /events` | Server-sent events of the documents the caller may read; `?document_id=` |
 | `GET/POST /webhooks`, `GET/PATCH/DELETE /webhooks/{id}` | Webhooks: the caller's own (admins read everybody's, `?owner=`); create (the answer shows the secret once), change, switch on or off, delete; see Webhooks |
 | `POST /webhooks/{id}/secret`, `POST /webhooks/{id}/test`, `GET /webhooks/{id}/deliveries` | Renew the secret (the old one signs 24 hours longer), send a test request, the delivery log (`before`, `limit`) |
-| `GET /health` | Database, bucket or storage directory and, if configured, the search index reachable; `200` (`ok`, or `degraded` if only the search is down) or `503`, no authentication |
+| `GET /health` | Database, bucket or storage directory and, if configured, the search index reachable; `200` (`ok`, or `degraded` if only the search is down) or `503`, no authentication; not written to the access log |
 
 - Uploads are streamed into a temporary file and hashed on the way; the limit
   `PAPIQ_UPLOAD_MAX_SIZE` applies while receiving (`413`). The type is recognised from the
@@ -487,12 +496,27 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
   `PAPIQ_WORKER_POLL_INTERVAL` when nothing is due. One loop delivers outbox events
   (`EventBus.dispatch`) every `PAPIQ_EVENTS_POLL_INTERVAL`. Postgres `LISTEN/NOTIFY` is not
   used.
+- Memory: every loop may run one Docling process, and Docling needs about 1.1 GB of RAM for a
+  one-page document and 1.8 to 2.0 GB for ten pages (measured on real scans, CPU build of
+  PyTorch; the number of threads changes nothing). OCRmyPDF takes about 150 MB per job, the
+  worker itself about 0.5 GB. A Docling process that the operating system kills for lack of
+  memory ends with exit code -9; the step is repeated and the document goes red after
+  `PAPIQ_STEP_MAX_ATTEMPTS`. Choose `PAPIQ_WORKER_CONCURRENCY` by the RAM of the machine
+  (about 2 GB per loop plus 1 GB; API and worker in one container share it):
+
+  | RAM | `PAPIQ_WORKER_CONCURRENCY` |
+  | --- | --- |
+  | 4 GB | 1 |
+  | 8 GB | 3 (4 was killed in a run of 1500 documents) |
+  | 16 GB | 6 |
+  | 32 GB | 12 |
 - The cleanup (`maintenance.cleanup`, one job with a fixed dedup key; it goes before pipeline
   steps when due) runs every
   `PAPIQ_CLEANUP_INTERVAL` and removes finished jobs and delivered events older than
-  `PAPIQ_RETENTION`, webhook delivery log rows of that age, ended sessions and stale counts of
-  failed sign-ins. The same loop runs
-  the removal of a deleted document's files.
+  `PAPIQ_RETENTION`, webhook delivery log rows of that age, ended sessions, stale counts of
+  failed sign-ins and the previous secrets of webhooks whose grace period
+  (`PAPIQ_WEBHOOK_SECRET_GRACE`) is over. The same loop runs the removal of a deleted
+  document's files.
 - Rule applications (`rules.apply`) run 25 documents per job, then queue the next job, so
   pipeline steps do not wait behind them.
 - `PAPIQ_WEBHOOK_CONCURRENCY` further loops deliver webhooks (see Webhooks); a receiver that
@@ -536,7 +560,9 @@ of its own:
 
 `id` is the event id: it is the same in every repeated attempt, so a receiver can recognise
 events it has handled. Delivery is at least once and not in order; sort by `occurred_at`. The
-test request (`POST /webhooks/{id}/test`) has `type: "webhook.test"` and `document_id: null`.
+test request (`POST /webhooks/{id}/test`) has `type: "webhook.test"` and `document_id: null`;
+it goes out at once, to whatever address the webhook names, so a user may send at most ten per
+minute (`429` with `Retry-After` beyond that; counted per API process).
 
 **Signature** ([Standard Webhooks](https://www.standardwebhooks.com), so ready-made verification
 libraries work). Three headers: `webhook-id` (the event id), `webhook-timestamp` (Unix seconds
@@ -686,7 +712,7 @@ Durations are seconds (`30`, `1.5`) or ISO 8601 (`PT1H`, `P7D`) and must be posi
 | `PAPIQ_OIDC_DISPLAY_NAME` | `Single sign-on` | Name of the provider for the sign-in page |
 | `PAPIQ_OIDC_AUTO_CREATE` | `false` | Create a user at the first sign-in of an unknown provider account |
 | `PAPIQ_OIDC_USERNAME_CLAIM` | `preferred_username` | ID token claim that names such a user |
-| `PAPIQ_WORKER_CONCURRENCY` | `2` | Jobs at the same time |
+| `PAPIQ_WORKER_CONCURRENCY` | `2` | Jobs at the same time; about 2 GB of RAM each (Docling), see Worker |
 | `PAPIQ_WORKER_POLL_INTERVAL` | `1` | Seconds between looks for due jobs |
 | `PAPIQ_WORKER_SHUTDOWN_TIMEOUT` | `30` | Seconds running jobs get to finish on SIGTERM |
 | `PAPIQ_STEP_MAX_ATTEMPTS` | `3` | Attempts of a pipeline step that raises |
