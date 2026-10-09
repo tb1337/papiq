@@ -9,7 +9,6 @@ from enum import Enum, StrEnum
 from pathlib import PurePath
 from typing import Self
 
-from papiq.core.domain.attributes import AttributeDefinition, AttributeValue
 from papiq.core.domain.errors import InvalidTransitionError, NotFoundError, ValidationError
 from papiq.core.domain.events import (
     DocumentDeleted,
@@ -20,12 +19,13 @@ from papiq.core.domain.events import (
     LaneChanged,
     StepCompleted,
 )
+from papiq.core.domain.fields import FieldDefinition, FieldValue
 from papiq.core.domain.ids import (
-    AttributeId,
     ContactId,
     DocumentId,
     DocumentTypeId,
     DrawerId,
+    FieldId,
     TagId,
     UserId,
     new_id,
@@ -82,7 +82,7 @@ UNSET = Unset.UNSET
 class DocumentChanges:
     """A metadata change. Fields left UNSET stay unchanged.
 
-    `attributes` maps attribute ids to new raw values (checked against the definition) or to
+    `fields` maps field ids to new raw values (checked against the definition) or to
     None to remove the value.
     """
 
@@ -91,15 +91,15 @@ class DocumentChanges:
     document_type_id: DocumentTypeId | Unset | None = UNSET
     tag_ids: frozenset[TagId] | Unset = UNSET
     document_date: date | Unset | None = UNSET
-    attributes: Mapping[AttributeId, object] = field(default_factory=dict)
+    fields: Mapping[FieldId, object] = field(default_factory=dict)
 
 
 @dataclass(kw_only=True)
 class Document:
     """A file with metadata.
 
-    Invariants: exactly one drawer; at most one contact and one document type; attribute values
-    fit their definition, and type-bound attributes only exist while the document has a matching
+    Invariants: exactly one drawer; at most one contact and one document type; field values
+    fit their definition, and type-bound fields only exist while the document has a matching
     type. `lane` is None while the pipeline runs and is set when it completes or fails.
 
     State changes record domain events; `pull_events()` hands them over for the outbox.
@@ -115,7 +115,7 @@ class Document:
     contact_id: ContactId | None = None
     document_type_id: DocumentTypeId | None = None
     tag_ids: set[TagId] = field(default_factory=set)
-    attributes: dict[AttributeId, AttributeValue] = field(default_factory=dict)
+    fields: dict[FieldId, FieldValue] = field(default_factory=dict)
     document_date: date | None = None
     channel: Channel = Channel.API
     lane: Lane | None = None
@@ -256,11 +256,11 @@ class Document:
     def confirm(self, resume_at: Step, now: datetime) -> tuple[Step, ...]:
         """The owner has decided what was uncertain or failed (the inbox): the results before
         `resume_at` count as OK from now on, processing runs again from `resume_at` (applying
-        rules, or extracting attributes after a type correction) up to filing. Returns the
+        rules, or extracting fields after a type correction) up to filing. Returns the
         steps whose results the owner overruled.
 
         Only for documents in the inbox (yellow or red, not being processed). Extracting
-        attributes needs a parsed text."""
+        fields needs a parsed text."""
         processing = self.processing
         if self.lane not in (Lane.YELLOW, Lane.RED) or processing.status not in (
             ProcessingStatus.REVIEW,
@@ -268,12 +268,12 @@ class Document:
             ProcessingStatus.COMPLETED,
         ):
             raise InvalidTransitionError(f"document {self.id} is not waiting for confirmation")
-        if resume_at not in (Step.EXTRACT_ATTRIBUTES, Step.APPLY_RULES):
+        if resume_at not in (Step.EXTRACT_FIELDS, Step.APPLY_RULES):
             raise InvalidTransitionError(
-                f"processing resumes with {Step.EXTRACT_ATTRIBUTES} or {Step.APPLY_RULES}, "
+                f"processing resumes with {Step.EXTRACT_FIELDS} or {Step.APPLY_RULES}, "
                 f"not {resume_at}"
             )
-        if resume_at is Step.EXTRACT_ATTRIBUTES and processing.outcomes.get(Step.PARSE) not in (
+        if resume_at is Step.EXTRACT_FIELDS and processing.outcomes.get(Step.PARSE) not in (
             Outcome.OK,
             Outcome.UNCERTAIN,
         ):
@@ -304,14 +304,14 @@ class Document:
     def apply_changes(
         self,
         changes: DocumentChanges,
-        definitions: Mapping[AttributeId, AttributeDefinition],
+        definitions: Mapping[FieldId, FieldDefinition],
         now: datetime,
     ) -> tuple[str, ...]:
         """Apply a metadata change; returns the names of the changed fields.
 
-        `definitions` must contain the definitions of all attributes in the change and of all
-        attributes the document has. References to contacts, types and tags are checked by the
-        caller. Values of type-bound attributes that no longer apply after a type change are
+        `definitions` must contain the definitions of all fields in the change and of all
+        fields the document has. References to contacts, types and tags are checked by the
+        caller. Values of type-bound fields that no longer apply after a type change are
         removed.
         """
         title = require_name(_pick(changes.title, self.title), "title")
@@ -320,21 +320,21 @@ class Document:
         tag_ids = set(_pick(changes.tag_ids, frozenset(self.tag_ids)))
         document_date = _pick(changes.document_date, self.document_date)
 
-        attributes = dict(self.attributes)
-        for attribute_id, raw in changes.attributes.items():
-            definition = _definition(definitions, attribute_id)
+        fields = dict(self.fields)
+        for field_id, raw in changes.fields.items():
+            definition = _definition(definitions, field_id)
             if raw is None:
-                attributes.pop(attribute_id, None)
+                fields.pop(field_id, None)
             elif not definition.applies_to(document_type_id):
                 raise ValidationError(
-                    f"attribute '{definition.name}' does not apply to this document type"
+                    f"field '{definition.name}' does not apply to this document type"
                 )
             else:
-                attributes[attribute_id] = definition.validate(raw)
-        attributes = {
-            attribute_id: value
-            for attribute_id, value in attributes.items()
-            if _definition(definitions, attribute_id).applies_to(document_type_id)
+                fields[field_id] = definition.validate(raw)
+        fields = {
+            field_id: value
+            for field_id, value in fields.items()
+            if _definition(definitions, field_id).applies_to(document_type_id)
         }
 
         # Everything is valid; apply it.
@@ -344,7 +344,7 @@ class Document:
             "document_type_id": document_type_id,
             "tag_ids": tag_ids,
             "document_date": document_date,
-            "attributes": attributes,
+            "fields": fields,
         }
         changed = [name for name, value in new_values.items() if getattr(self, name) != value]
         self.title = title
@@ -352,7 +352,7 @@ class Document:
         self.document_type_id = document_type_id
         self.tag_ids = tag_ids
         self.document_date = document_date
-        self.attributes = attributes
+        self.fields = fields
         if changed:
             self._record(
                 DocumentUpdated(document_id=self.id, occurred_at=now, fields=tuple(changed))
@@ -402,9 +402,9 @@ def _pick[T](change: T | Unset, current: T) -> T:
 
 
 def _definition(
-    definitions: Mapping[AttributeId, AttributeDefinition], attribute_id: AttributeId
-) -> AttributeDefinition:
+    definitions: Mapping[FieldId, FieldDefinition], field_id: FieldId
+) -> FieldDefinition:
     try:
-        return definitions[attribute_id]
+        return definitions[field_id]
     except KeyError:
-        raise NotFoundError("attribute", attribute_id) from None
+        raise NotFoundError("field", field_id) from None

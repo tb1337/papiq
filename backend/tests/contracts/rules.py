@@ -7,11 +7,11 @@ import pytest
 
 from papiq.core.domain.errors import ConcurrencyError, ConflictError, NotFoundError
 from papiq.core.domain.ids import (
-    AttributeId,
     ContactId,
     DocumentId,
     DocumentTypeId,
     DrawerId,
+    FieldId,
     RuleApplicationId,
     RuleId,
     TagId,
@@ -30,10 +30,10 @@ from papiq.core.domain.rules import (
     RuleApplication,
     RuleDefinition,
     RuleScope,
-    SetAttribute,
     SetContact,
     SetDocumentType,
     SetDrawer,
+    SetField,
     SetTitle,
     Trigger,
     definition_to_json,
@@ -61,9 +61,9 @@ def simple(name: str = "Tag API uploads", *, priority: int = 100) -> RuleDefinit
 
 
 def full() -> RuleDefinition:
-    """Every action type, nested and negated groups, attribute conditions, values of every
+    """Every action type, nested and negated groups, field conditions, values of every
     JSON kind and text beyond ASCII."""
-    amount, flag, note = AttributeId(new_id()), AttributeId(new_id()), AttributeId(new_id())
+    amount, flag, note = FieldId(new_id()), FieldId(new_id()), FieldId(new_id())
     return RuleDefinition(
         name="Stromrechnung Größe",
         priority=7,
@@ -104,21 +104,19 @@ def full() -> RuleDefinition:
                     ),
                 ),
                 Condition(
-                    field=ConditionField.ATTRIBUTE,
+                    field=ConditionField.FIELD,
                     op=Operator.GT,
                     value={"amount": "100.50", "currency": "EUR"},
-                    attribute_id=amount,
+                    field_id=amount,
                 ),
-                Condition(field=ConditionField.ATTRIBUTE, op=Operator.PRESENT, attribute_id=note),
+                Condition(field=ConditionField.FIELD, op=Operator.PRESENT, field_id=note),
                 Condition(
-                    field=ConditionField.ATTRIBUTE,
+                    field=ConditionField.FIELD,
                     op=Operator.MATCHES,
                     value="^Zähler",
-                    attribute_id=note,
+                    field_id=note,
                 ),
-                Condition(
-                    field=ConditionField.ATTRIBUTE, op=Operator.IS, value=False, attribute_id=flag
-                ),
+                Condition(field=ConditionField.FIELD, op=Operator.IS, value=False, field_id=flag),
             ),
         ),
         actions=(
@@ -128,8 +126,8 @@ def full() -> RuleDefinition:
             SetTitle("{contact}: {document_date} ({filename})"),
             AddTags(frozenset({TagId(new_id()), TagId(new_id())})),
             RemoveTags(frozenset({TagId(new_id())})),
-            SetAttribute(amount, {"amount": "12.30", "currency": "EUR"}),
-            SetAttribute(flag, True),
+            SetField(amount, {"amount": "12.30", "currency": "EUR"}),
+            SetField(flag, True),
             ForceReview("Zählerstand prüfen"),
         ),
     )

@@ -45,12 +45,12 @@ describe('fieldErrors', () => {
 	it('splits a 422 by field', () => {
 		const error = new ApiError(
 			422,
-			problem(422, 'title: String should have at least 1 character; attributes.abc-1: bad value'),
+			problem(422, 'title: String should have at least 1 character; fields.abc-1: bad value'),
 			null
 		);
 		expect(fieldErrors(error)).toEqual({
 			title: 'String should have at least 1 character',
-			'attribute:abc-1': 'bad value'
+			'field:abc-1': 'bad value'
 		});
 	});
 

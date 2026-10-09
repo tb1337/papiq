@@ -1,4 +1,4 @@
-"""Classification and attribute extraction for documents taken over from another system.
+"""Classification and field extraction for documents taken over from another system.
 
 A document received with metadata (channel `migration`, see `PipelineService.receive`) keeps
 what the source system knew: these steps apply it instead of asking the language model. Every
@@ -26,7 +26,7 @@ class _ImportedStep:
             return await self._inner.run(document)
         async with self._uow() as uow:
             entries = await uow.processing_log.list_for(document.id)
-            definitions = {item.id: item for item in await uow.attributes.list_all()}
+            definitions = {item.id: item for item in await uow.fields.list_all()}
         stored = next(
             (
                 entry.result.output[IMPORTED]
@@ -63,13 +63,13 @@ class ImportedClassifyStep(_ImportedStep):
 
 
 class ImportedExtractStep(_ImportedStep):
-    """Attribute values from the source system."""
+    """Field values from the source system."""
 
     def _apply(self, imported: ImportedMetadata) -> MetadataResult:
         result = StepResult(
             outcome=Outcome.OK,
             reason=REASON,
             model_version=IMPORTED,
-            output={"attributes": len(imported.attributes)},
+            output={"fields": len(imported.fields)},
         )
-        return MetadataResult(result, DocumentChanges(attributes=dict(imported.attributes)))
+        return MetadataResult(result, DocumentChanges(fields=dict(imported.fields)))

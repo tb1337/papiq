@@ -8,7 +8,7 @@
       "Einkauf"
     ],
     "document_date": "2026-07-02",
-    "attributes": {
+    "fields": {
       "Betrag": {
         "amount": "84.90",
         "currency": "EUR"
@@ -34,7 +34,7 @@
         "evidence": "Bescheid vom 01.01.2020"
       }
     },
-    "attributes": {
+    "fields": {
       "Betrag": {
         "value": {
           "amount": "1000000.00",

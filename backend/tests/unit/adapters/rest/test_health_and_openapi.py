@@ -114,7 +114,7 @@ async def test_openapi_lists_every_endpoint(api: Api) -> None:
     paths = (await openapi(api))["paths"]
     master_data = {
         (f"{PREFIX}/{kind}{suffix}", method)
-        for kind in ("contacts", "document-types", "tags", "attributes")
+        for kind in ("contacts", "document-types", "tags", "fields")
         for suffix, method in [
             ("", "get"),
             ("", "post"),
@@ -243,7 +243,7 @@ async def test_schemas_of_status_log_and_events(api: Api) -> None:
     assert "receive" not in step["enum"]
     resume = schemas["ConfirmRequest"]["properties"]["resume_at"]
     resume_at = schemas[resume["$ref"].rsplit("/", 1)[1]]
-    assert resume_at["enum"] == ["extract_attributes", "apply_rules"]
+    assert resume_at["enum"] == ["extract_fields", "apply_rules"]
     events = schema["paths"][f"{PREFIX}/events"]["get"]["responses"]["200"]["content"]
     stream = events["text/event-stream"]
     assert stream["schema"]["type"] == "string"

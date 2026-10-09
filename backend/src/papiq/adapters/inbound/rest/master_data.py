@@ -1,5 +1,5 @@
-"""Master data: contacts, document types, tags, attribute definitions. Everyone reads them;
-admins change them. Deleting works only for what no document (or attribute) uses."""
+"""Master data: contacts, document types, tags, field definitions. Everyone reads them;
+admins change them. Deleting works only for what no document (or field) uses."""
 
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -11,14 +11,14 @@ from papiq.adapters.inbound.rest.auth import PROTECTED, CurrentUser
 from papiq.adapters.inbound.rest.context import ApiContext, Context
 from papiq.adapters.inbound.rest.problems import problem_responses
 from papiq.adapters.inbound.rest.schemas import (
-    AttributeCreate,
-    AttributeOut,
-    AttributePatch,
+    FieldCreate,
+    FieldOut,
+    FieldPatch,
     MasterDataOut,
     NameIn,
 )
 from papiq.core.domain.documents import UNSET, Unset
-from papiq.core.domain.ids import AttributeId, DocumentTypeId
+from papiq.core.domain.ids import DocumentTypeId, FieldId
 from papiq.core.domain.master_data import MasterData
 
 ADMINS_ONLY = "Admins only."
@@ -96,34 +96,32 @@ def _simple(path: str, kind: str, plural: str, name: str) -> APIRouter:
 contacts = _simple("contacts", "contact", "contacts", "contact")
 document_types = _simple("document-types", "document type", "document_types", "document_type")
 tags = _simple("tags", "tag", "tags", "tag")
-attributes = APIRouter(prefix="/attributes", tags=["master data"], dependencies=PROTECTED)
+fields = APIRouter(prefix="/fields", tags=["master data"], dependencies=PROTECTED)
 
 
-@attributes.get(
+@fields.get(
     "",
-    summary="List attribute definitions",
-    response_model=list[AttributeOut],
+    summary="List field definitions",
+    response_model=list[FieldOut],
     responses=problem_responses(401),
 )
-async def list_attributes(user: CurrentUser, context: Context) -> list[AttributeOut]:
-    return [AttributeOut.of(item) for item in await context.master_data.list_attributes(user)]
+async def list_fields(user: CurrentUser, context: Context) -> list[FieldOut]:
+    return [FieldOut.of(item) for item in await context.master_data.list_fields(user)]
 
 
-@attributes.post(
+@fields.post(
     "",
     status_code=201,
-    summary="Create an attribute definition",
+    summary="Create a field definition",
     description=(
         ADMINS_ONLY + " Global (`document_type_ids` null) or for some document types; `choice` "
         "needs `choices`."
     ),
-    response_model=AttributeOut,
+    response_model=FieldOut,
     responses=problem_responses(401, 403, 404, 409, 422),
 )
-async def create_attribute(
-    body: AttributeCreate, user: CurrentUser, context: Context
-) -> AttributeOut:
-    item = await context.master_data.create_attribute(
+async def create_field(body: FieldCreate, user: CurrentUser, context: Context) -> FieldOut:
+    item = await context.master_data.create_field(
         user,
         body.name,
         body.data_type,
@@ -134,33 +132,31 @@ async def create_attribute(
         ),
         choices=body.choices,
     )
-    return AttributeOut.of(item)
+    return FieldOut.of(item)
 
 
-@attributes.get(
+@fields.get(
     "/{id}",
-    summary="An attribute definition",
-    response_model=AttributeOut,
+    summary="A field definition",
+    response_model=FieldOut,
     responses=problem_responses(401, 404, 422),
 )
-async def get_attribute(id: UUID, user: CurrentUser, context: Context) -> AttributeOut:
-    return AttributeOut.of(await context.master_data.get_attribute(user, AttributeId(id)))
+async def get_field(id: UUID, user: CurrentUser, context: Context) -> FieldOut:
+    return FieldOut.of(await context.master_data.get_field(user, FieldId(id)))
 
 
-@attributes.patch(
+@fields.patch(
     "/{id}",
-    summary="Change an attribute definition",
+    summary="Change a field definition",
     description=(
         ADMINS_ONLY + " Name, choices and scope; the data type stays. Values documents use are "
         "never changed: removing a used choice or narrowing the scope past documents with "
         "values is a conflict (409)."
     ),
-    response_model=AttributeOut,
+    response_model=FieldOut,
     responses=problem_responses(401, 403, 404, 409, 422),
 )
-async def change_attribute(
-    id: UUID, body: AttributePatch, user: CurrentUser, context: Context
-) -> AttributeOut:
+async def change_field(id: UUID, body: FieldPatch, user: CurrentUser, context: Context) -> FieldOut:
     scope: list[DocumentTypeId] | Unset | None = UNSET
     if "document_type_ids" in body.model_fields_set:
         scope = (
@@ -168,21 +164,21 @@ async def change_attribute(
             if body.document_type_ids is None
             else [DocumentTypeId(type_id) for type_id in body.document_type_ids]
         )
-    item = await context.master_data.change_attribute(
-        user, AttributeId(id), name=body.name, choices=body.choices, document_type_ids=scope
+    item = await context.master_data.change_field(
+        user, FieldId(id), name=body.name, choices=body.choices, document_type_ids=scope
     )
-    return AttributeOut.of(item)
+    return FieldOut.of(item)
 
 
-@attributes.delete(
+@fields.delete(
     "/{id}",
     status_code=204,
-    summary="Delete an attribute definition",
+    summary="Delete a field definition",
     description=ADMINS_ONLY + " Only while no document has a value for it (409).",
     responses=problem_responses(401, 403, 404, 409, 422),
 )
-async def delete_attribute(id: UUID, user: CurrentUser, context: Context) -> None:
-    await context.master_data.delete_attribute(user, AttributeId(id))
+async def delete_field(id: UUID, user: CurrentUser, context: Context) -> None:
+    await context.master_data.delete_field(user, FieldId(id))
 
 
-ROUTERS = [contacts, document_types, tags, attributes]
+ROUTERS = [contacts, document_types, tags, fields]

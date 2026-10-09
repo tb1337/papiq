@@ -5,11 +5,11 @@ from dataclasses import dataclass, field
 from datetime import date
 from uuid import UUID
 
-from papiq.core.domain.attributes import AttributeDefinition, AttributeValue
-from papiq.core.domain.classification import attribute_from_json, attribute_to_json
+from papiq.core.domain.classification import field_from_json, field_to_json
 from papiq.core.domain.documents import UNSET, DocumentChanges
 from papiq.core.domain.errors import ValidationError
-from papiq.core.domain.ids import AttributeId, ContactId, DocumentTypeId, TagId
+from papiq.core.domain.fields import FieldDefinition, FieldValue
+from papiq.core.domain.ids import ContactId, DocumentTypeId, FieldId, TagId
 from papiq.core.domain.json_value import JsonObject, JsonValue
 
 IMPORTED = "imported"
@@ -27,7 +27,7 @@ class ImportedMetadata:
     document_type_id: DocumentTypeId | None = None
     tag_ids: frozenset[TagId] = frozenset()
     document_date: date | None = None
-    attributes: Mapping[AttributeId, AttributeValue] = field(default_factory=dict)
+    fields: Mapping[FieldId, FieldValue] = field(default_factory=dict)
 
     def classification(self) -> DocumentChanges:
         """Title, contact, type and date as a change; the tags are added separately."""
@@ -47,33 +47,31 @@ class ImportedMetadata:
             ),
             "tag_ids": [str(tag) for tag in sorted(self.tag_ids)],
             "document_date": None if self.document_date is None else self.document_date.isoformat(),
-            "attributes": {
-                str(key): attribute_to_json(value) for key, value in self.attributes.items()
-            },
+            "fields": {str(key): field_to_json(value) for key, value in self.fields.items()},
         }
 
     @classmethod
     def from_json(
-        cls, data: JsonValue, definitions: Mapping[AttributeId, AttributeDefinition]
+        cls, data: JsonValue, definitions: Mapping[FieldId, FieldDefinition]
     ) -> "ImportedMetadata":
-        """Read what `to_json` wrote; the attribute values are checked against `definitions`."""
+        """Read what `to_json` wrote; the field values are checked against `definitions`."""
         if not isinstance(data, dict):
             raise ValidationError("imported metadata: expected an object")
         try:
-            raw_attributes = data.get("attributes")
-            attributes: dict[AttributeId, AttributeValue] = {}
-            for key, value in (raw_attributes if isinstance(raw_attributes, dict) else {}).items():
-                attribute_id = AttributeId(UUID(key))
-                if attribute_id not in definitions:
-                    raise ValidationError(f"attribute {key} no longer exists")
-                attributes[attribute_id] = attribute_from_json(definitions[attribute_id], value)
+            raw_fields = data.get("fields")
+            fields: dict[FieldId, FieldValue] = {}
+            for key, value in (raw_fields if isinstance(raw_fields, dict) else {}).items():
+                field_id = FieldId(UUID(key))
+                if field_id not in definitions:
+                    raise ValidationError(f"field {key} no longer exists")
+                fields[field_id] = field_from_json(definitions[field_id], value)
             return cls(
                 title=_text(data.get("title")),
                 contact_id=_id(data.get("contact_id"), ContactId),
                 document_type_id=_id(data.get("document_type_id"), DocumentTypeId),
                 tag_ids=frozenset(TagId(UUID(str(tag))) for tag in _list(data.get("tag_ids"))),
                 document_date=_date(data.get("document_date")),
-                attributes=attributes,
+                fields=fields,
             )
         except (ValueError, TypeError) as error:
             raise ValidationError(f"imported metadata: {error}") from None

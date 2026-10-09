@@ -105,8 +105,8 @@ async def test_the_migration_takes_everything_over(setup: Setup) -> None:
     assert sorted(c["name"] for c in papiq.contacts.values()) == ["ACME Energy", "Unused"]
     assert [t["name"] for t in papiq.document_types.values()] == ["Invoice"]
     assert sorted(t["name"] for t in papiq.tags.values()) == ["tax", "tax/2024"]
-    # attributes: one per usable custom field, plus ASN and notes; the link field is left out
-    types = {a["name"]: a["data_type"] for a in papiq.attributes.values()}
+    # fields: one per usable custom field, plus ASN and notes; the link field is left out
+    types = {a["name"]: a["data_type"] for a in papiq.fields.values()}
     assert types == {
         "Text": "text",
         "Long": "text",
@@ -121,7 +121,7 @@ async def test_the_migration_takes_everything_over(setup: Setup) -> None:
         "ASN": "number",
         "Notizen": "text",
     }
-    assert named(papiq.attributes, "Kind")["choices"] == ["One", "Two"]
+    assert named(papiq.fields, "Kind")["choices"] == ["One", "Two"]
 
     # documents: the e-mail and the one in the trash stay behind
     assert len(papiq.documents) == 8
@@ -132,7 +132,7 @@ async def test_the_migration_takes_everything_over(setup: Setup) -> None:
     assert first["contact_id"] == named(papiq.contacts, "ACME Energy")["id"]
     assert first["document_type_id"] == named(papiq.document_types, "Invoice")["id"]
     assert len(first["tag_ids"]) == 2
-    values = {papiq.attributes[k]["name"]: v for k, v in first["attributes"].items()}
+    values = {papiq.fields[k]["name"]: v for k, v in first["fields"].items()}
     assert values == {
         "Text": "Hello",
         "Long": "Some long text",
@@ -149,14 +149,14 @@ async def test_the_migration_takes_everything_over(setup: Setup) -> None:
     }
     # an invalid URL is left out, the rest of that document is taken over
     second = by_title(setup, "Document 11")
-    assert second["attributes"] == {}
+    assert second["fields"] == {}
     assert second["contact_id"] == named(papiq.contacts, "ACME Energy")["id"]
     # no owner, or an owner who is gone: the executing admin
     assert by_title(setup, "Document 14")["owner_id"] == fake_papiq.ADMIN["id"]
     assert by_title(setup, "Document 15")["owner_id"] == fake_papiq.ADMIN["id"]
     # documents with a negative amount and an unknown option
     nineteen = by_title(setup, "Document 19")
-    assert {papiq.attributes[k]["name"] for k in nineteen["attributes"]} == {"Net"}
+    assert {papiq.fields[k]["name"] for k in nineteen["fields"]} == {"Net"}
 
     # drawers: no extra permissions, default drawer; otherwise one shared drawer per combination
     assert by_title(setup, "Document 12")["drawer_id"].startswith("default:")
@@ -190,10 +190,10 @@ async def test_the_report_accounts_for_every_paperless_object(setup: Setup) -> N
     assert len(objects["contact"]) == counts["correspondents"]
     assert len(objects["document_type"]) == counts["document_types"]
     assert len(objects["tag"]) == counts["tags"]
-    assert len(objects["attribute"]) == counts["custom_fields"] + 2
+    assert len(objects["field"]) == counts["custom_fields"] + 2
     assert len(objects["storage_path"]) == counts["storage_paths"]
     assert len(report["documents"]) == counts["documents"]
-    omitted = [o for o in objects["attribute"] if o["status"] == "omitted"]
+    omitted = [o for o in objects["field"] if o["status"] == "omitted"]
     assert [o["name"] for o in omitted] == ["Related"]
     assert report["document_results"] == {"done": 8, "skipped": 2}
     assert report["lanes"] == {"green": 8}
@@ -218,7 +218,7 @@ async def test_a_second_run_creates_nothing_twice(setup: Setup) -> None:
     assert await setup.run("run") == 0
     snapshot = {
         name: len(getattr(setup.papiq, name))
-        for name in ("users", "contacts", "tags", "attributes", "drawers", "documents")
+        for name in ("users", "contacts", "tags", "fields", "drawers", "documents")
     }
     uploads, writes = len(setup.papiq.uploads), len(setup.papiq.writes())
     downloads = len(setup.paperless.downloads)
@@ -228,7 +228,7 @@ async def test_a_second_run_creates_nothing_twice(setup: Setup) -> None:
     assert len(setup.papiq.writes()) == writes
     assert snapshot == {
         name: len(getattr(setup.papiq, name))
-        for name in ("users", "contacts", "tags", "attributes", "drawers", "documents")
+        for name in ("users", "contacts", "tags", "fields", "drawers", "documents")
     }
     report = setup.report("run")
     # What the first run created still reads as created.
@@ -417,11 +417,11 @@ async def test_the_check_compares_numbers_by_value_and_skips_what_a_stopped_pipe
 ) -> None:
     setup.papiq.lanes["scan-12.pdf"] = "red"
     assert await setup.run("run") == 0
-    gross = named(setup.papiq.attributes, "Gross")["id"]
+    gross = named(setup.papiq.fields, "Gross")["id"]
     document = by_title(setup, "Document 10")
-    document["attributes"][gross] = {"amount": "9.99E+1", "currency": "EUR"}  # 99.90
-    count = named(setup.papiq.attributes, "Count")["id"]
-    document["attributes"][count] = "4.2E+1"  # 42
+    document["fields"][gross] = {"amount": "9.99E+1", "currency": "EUR"}  # 99.90
+    count = named(setup.papiq.fields, "Count")["id"]
+    document["fields"][count] = "4.2E+1"  # 42
     stopped = by_title(setup, "Document 12")
     stopped["title"] = "scan-12"  # the pipeline stopped before the metadata was applied
     stopped["processing"]["outcomes"] = {}
@@ -429,5 +429,5 @@ async def test_the_check_compares_numbers_by_value_and_skips_what_a_stopped_pipe
     findings = setup.report("verify")["findings"]
     assert findings[0]["id"] == 12 and "applied after a retry" in findings[0]["reason"]
     # A wrong amount is still found.
-    document["attributes"][gross] = {"amount": "9.9E+1", "currency": "EUR"}
+    document["fields"][gross] = {"amount": "9.9E+1", "currency": "EUR"}
     assert await setup.run("verify") == 1

@@ -9,7 +9,7 @@
       "Wohnung"
     ],
     "document_date": "2025-12-01",
-    "attributes": {
+    "fields": {
       "Versicherungsnummer": "HR-2026-55501",
       "Beitrag": {
         "amount": "89.90",
@@ -35,7 +35,7 @@
         "evidence": "Hamburg, 01.12.2025"
       }
     },
-    "attributes": {
+    "fields": {
       "Versicherungsnummer": {
         "value": "HR-2026-55501",
         "evidence": "Versicherungsnummer: HR-2026-55501"

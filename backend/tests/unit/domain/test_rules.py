@@ -4,14 +4,14 @@ from uuid import UUID
 
 import pytest
 
-from papiq.core.domain.attributes import AttributeDefinition, AttributeType
 from papiq.core.domain.errors import ValidationError
+from papiq.core.domain.fields import FieldDefinition, FieldType
 from papiq.core.domain.ids import (
-    AttributeId,
     ContactId,
     DocumentId,
     DocumentTypeId,
     DrawerId,
+    FieldId,
     RuleId,
     TagId,
     UserId,
@@ -42,14 +42,14 @@ from papiq.core.domain.rules import (
     RuleDefinition,
     RuleScope,
     RuleVersion,
-    SetAttribute,
     SetContact,
     SetDocumentType,
     SetDrawer,
+    SetField,
     SetTitle,
     Trigger,
     action_from_json,
-    check_attributes,
+    check_fields,
     check_scope,
     condition_from_json,
     condition_to_json,
@@ -67,7 +67,7 @@ TYPE = DocumentTypeId(new_id())
 TAG = TagId(new_id())
 OTHER_TAG = TagId(new_id())
 DRAWER = DrawerId(new_id())
-ATTRIBUTE = AttributeId(new_id())
+FIELD = FieldId(new_id())
 ID = str(new_id())
 
 ALWAYS = Condition(field=ConditionField.CHANNEL, op=Operator.IN, value=["web", "api"])
@@ -87,8 +87,8 @@ def definition(
     )
 
 
-def attribute(data_type: AttributeType, choices: tuple[str, ...] = ()) -> AttributeDefinition:
-    return AttributeDefinition.create(
+def field(data_type: FieldType, choices: tuple[str, ...] = ()) -> FieldDefinition:
+    return FieldDefinition.create(
         name=data_type.value, data_type=data_type, now=NOW, choices=choices
     )
 
@@ -125,15 +125,15 @@ def full_definition() -> RuleDefinition:
                             mode="all",
                             items=(
                                 Condition(
-                                    field=ConditionField.ATTRIBUTE,
+                                    field=ConditionField.FIELD,
                                     op=Operator.GT,
                                     value={"amount": "100.00", "currency": "EUR"},
-                                    attribute_id=ATTRIBUTE,
+                                    field_id=FIELD,
                                 ),
                                 Condition(
-                                    field=ConditionField.ATTRIBUTE,
+                                    field=ConditionField.FIELD,
                                     op=Operator.PRESENT,
-                                    attribute_id=ATTRIBUTE,
+                                    field_id=FIELD,
                                 ),
                             ),
                         ),
@@ -148,7 +148,7 @@ def full_definition() -> RuleDefinition:
             SetTitle("{contact} {document_date}"),
             AddTags(frozenset({TAG, OTHER_TAG})),
             RemoveTags(frozenset({OTHER_TAG})),
-            SetAttribute(ATTRIBUTE, {"amount": "12.50", "currency": "EUR"}),
+            SetField(FIELD, {"amount": "12.50", "currency": "EUR"}),
             ForceReview("check the amount"),
         ),
     )
@@ -187,7 +187,7 @@ def test_definition_json_shape() -> None:
         "op": "contains",
         "value": "Mahnung",
     }
-    assert {"field": "attribute", "op": "present", "attribute_id": str(ATTRIBUTE)} in (
+    assert {"field": "field", "op": "present", "field_id": str(FIELD)} in (
         inner[1]["all"] if isinstance(inner[1], dict) and isinstance(inner[1]["all"], list) else []
     )
     actions = data["actions"]
@@ -199,7 +199,7 @@ def test_definition_json_shape() -> None:
         "set_title",
         "add_tags",
         "remove_tags",
-        "set_attribute",
+        "set_field",
         "force_review",
     ]
     assert actions[4] == {"type": "add_tags", "tag_ids": sorted([str(TAG), str(OTHER_TAG)])}
@@ -298,10 +298,10 @@ VALID_CONDITIONS: list[JsonObject] = [
     {"field": "document_date", "op": "is", "value": "2026-03-31"},
     {"field": "document_date", "op": "lt", "value": "2026-03-31"},
     {"field": "document_date", "op": "present"},
-    {"field": "attribute", "op": "gt", "attribute_id": ID, "value": "12"},
-    {"field": "attribute", "op": "in", "attribute_id": ID, "value": ["a", "b"]},
-    {"field": "attribute", "op": "matches", "attribute_id": ID, "value": "^DE"},
-    {"field": "attribute", "op": "missing", "attribute_id": ID},
+    {"field": "field", "op": "gt", "field_id": ID, "value": "12"},
+    {"field": "field", "op": "in", "field_id": ID, "value": ["a", "b"]},
+    {"field": "field", "op": "matches", "field_id": ID, "value": "^DE"},
+    {"field": "field", "op": "missing", "field_id": ID},
 ]
 
 
@@ -349,7 +349,7 @@ INVALID_CONDITIONS: list[tuple[JsonObject, str]] = [
     ({"field": "document_date", "op": "lt", "value": 20260331}, "is no date"),
     ({"field": "text", "op": "matches", "value": "("}, "invalid regular expression"),
     (
-        {"field": "attribute", "op": "matches", "attribute_id": ID, "value": "[a-"},
+        {"field": "field", "op": "matches", "field_id": ID, "value": "[a-"},
         "invalid regular expression",
     ),
     ({"field": "text", "op": "contains", "value": "  "}, "expected non-empty text"),
@@ -358,11 +358,11 @@ INVALID_CONDITIONS: list[tuple[JsonObject, str]] = [
         {"field": "text", "op": "matches", "value": "x" * (MAX_PATTERN + 1)},
         f"{MAX_PATTERN} characters",
     ),
-    ({"field": "attribute", "op": "contains", "attribute_id": ID, "value": 7}, "non-empty text"),
-    # attribute_id exactly for attribute conditions
-    ({"field": "attribute", "op": "present"}, "attribute_id is given exactly"),
-    ({"field": "contact", "op": "present", "attribute_id": ID}, "attribute_id is given exactly"),
-    ({"field": "attribute", "op": "present", "attribute_id": "x"}, "attribute: 'x' is no id"),
+    ({"field": "field", "op": "contains", "field_id": ID, "value": 7}, "non-empty text"),
+    # field_id exactly for field conditions
+    ({"field": "field", "op": "present"}, "field_id is given exactly"),
+    ({"field": "contact", "op": "present", "field_id": ID}, "field_id is given exactly"),
+    ({"field": "field", "op": "present", "field_id": "x"}, "field: 'x' is no id"),
     # unknown names
     ({"field": "amount", "op": "is", "value": "1"}, "field: unknown value 'amount'"),
     ({"field": "contact", "op": "between", "value": ID}, "op: unknown value 'between'"),
@@ -496,7 +496,7 @@ def test_definition_needs_triggers_and_actions() -> None:
         (SetContact(CONTACT), SetContact(OTHER_CONTACT)),
         (SetDrawer(DRAWER), SetDrawer(DrawerId(new_id()))),
         (SetTitle("a"), SetTitle("b")),
-        (SetAttribute(ATTRIBUTE, "a"), SetAttribute(ATTRIBUTE, "b")),
+        (SetField(FIELD, "a"), SetField(FIELD, "b")),
     ],
 )
 def test_an_action_may_not_set_the_same_field_twice(actions: tuple[Action, ...]) -> None:
@@ -511,8 +511,8 @@ def test_repeatable_actions() -> None:
         RemoveTags(frozenset({TAG})),
         ForceReview("a"),
         ForceReview("b"),
-        SetAttribute(ATTRIBUTE, "a"),
-        SetAttribute(AttributeId(new_id()), "b"),
+        SetField(FIELD, "a"),
+        SetField(FieldId(new_id()), "b"),
     )
     assert len(rule.actions) == 7
 
@@ -565,7 +565,7 @@ def test_action_values() -> None:
     with pytest.raises(ValidationError, match=f"at most {MAX_LIST} tags"):
         AddTags(frozenset(TagId(new_id()) for _ in range(MAX_LIST + 1)))
     with pytest.raises(ValidationError, match="needs a value"):
-        SetAttribute(ATTRIBUTE, None)
+        SetField(FIELD, None)
     with pytest.raises(ValidationError, match="non-empty text"):
         ForceReview(" ")
     with pytest.raises(ValidationError, match="reason: expected text"):
@@ -589,7 +589,7 @@ def test_global_actions() -> None:
     allowed = definition(
         AddTags(frozenset({TAG})),
         RemoveTags(frozenset({OTHER_TAG})),
-        SetAttribute(ATTRIBUTE, "x"),
+        SetField(FIELD, "x"),
         ForceReview("look"),
     )
     assert all(isinstance(action, GLOBAL_ACTIONS) for action in allowed.actions)
@@ -613,16 +613,16 @@ def test_global_rule_is_created_and_changed_with_global_actions_only() -> None:
     assert rule.current.number == 1
 
 
-# --- attributes -------------------------------------------------------------------------------
+# --- fields -------------------------------------------------------------------------------
 
 
-def attribute_rule(
-    attr: AttributeDefinition, op: Operator, value: JsonValue = None, *actions: Action
+def field_rule(
+    attr: FieldDefinition, op: Operator, value: JsonValue = None, *actions: Action
 ) -> RuleDefinition:
     return definition(
         *actions,
         conditions=group(
-            Condition(field=ConditionField.ATTRIBUTE, op=op, value=value, attribute_id=attr.id)
+            Condition(field=ConditionField.FIELD, op=op, value=value, field_id=attr.id)
         ),
     )
 
@@ -630,133 +630,131 @@ def attribute_rule(
 @pytest.mark.parametrize(
     ("data_type", "op", "value"),
     [
-        (AttributeType.TEXT, Operator.IS, "ACME"),
-        (AttributeType.TEXT, Operator.CONTAINS, "acme"),
-        (AttributeType.TEXT, Operator.MATCHES, "^A"),
-        (AttributeType.LINK, Operator.IS, "https://example.org"),
-        (AttributeType.NUMBER, Operator.GT, "12.5"),
-        (AttributeType.NUMBER, Operator.IS, 3),
-        (AttributeType.AMOUNT, Operator.LT, {"amount": "100", "currency": "EUR"}),
-        (AttributeType.DATE, Operator.GT, "2026-01-01"),
-        (AttributeType.BOOLEAN, Operator.IS, True),
-        (AttributeType.CHOICE, Operator.IS, "monthly"),
-        (AttributeType.CHOICE, Operator.IN, ["monthly", "yearly"]),
-        (AttributeType.CHOICE, Operator.PRESENT, None),
+        (FieldType.TEXT, Operator.IS, "ACME"),
+        (FieldType.TEXT, Operator.CONTAINS, "acme"),
+        (FieldType.TEXT, Operator.MATCHES, "^A"),
+        (FieldType.LINK, Operator.IS, "https://example.org"),
+        (FieldType.NUMBER, Operator.GT, "12.5"),
+        (FieldType.NUMBER, Operator.IS, 3),
+        (FieldType.AMOUNT, Operator.LT, {"amount": "100", "currency": "EUR"}),
+        (FieldType.DATE, Operator.GT, "2026-01-01"),
+        (FieldType.BOOLEAN, Operator.IS, True),
+        (FieldType.CHOICE, Operator.IS, "monthly"),
+        (FieldType.CHOICE, Operator.IN, ["monthly", "yearly"]),
+        (FieldType.CHOICE, Operator.PRESENT, None),
     ],
 )
-def test_attribute_condition_fits_data_type(
-    data_type: AttributeType, op: Operator, value: JsonValue
+def test_field_condition_fits_data_type(
+    data_type: FieldType, op: Operator, value: JsonValue
 ) -> None:
-    choices = ("monthly", "yearly") if data_type is AttributeType.CHOICE else ()
-    attr = attribute(data_type, choices)
+    choices = ("monthly", "yearly") if data_type is FieldType.CHOICE else ()
+    attr = field(data_type, choices)
 
-    check_attributes(attribute_rule(attr, op, value), {attr.id: attr})
+    check_fields(field_rule(attr, op, value), {attr.id: attr})
 
 
 @pytest.mark.parametrize(
     ("data_type", "op", "value"),
     [
-        (AttributeType.NUMBER, Operator.CONTAINS, "1"),
-        (AttributeType.NUMBER, Operator.IN, ["1"]),
-        (AttributeType.AMOUNT, Operator.MATCHES, "1"),
-        (AttributeType.DATE, Operator.IN, ["2026-01-01"]),
-        (AttributeType.BOOLEAN, Operator.GT, True),
-        (AttributeType.BOOLEAN, Operator.IN, [True]),
-        (AttributeType.CHOICE, Operator.CONTAINS, "month"),
-        (AttributeType.CHOICE, Operator.GT, "monthly"),
-        (AttributeType.TEXT, Operator.GT, "a"),
-        (AttributeType.LINK, Operator.LT, "https://example.org"),
+        (FieldType.NUMBER, Operator.CONTAINS, "1"),
+        (FieldType.NUMBER, Operator.IN, ["1"]),
+        (FieldType.AMOUNT, Operator.MATCHES, "1"),
+        (FieldType.DATE, Operator.IN, ["2026-01-01"]),
+        (FieldType.BOOLEAN, Operator.GT, True),
+        (FieldType.BOOLEAN, Operator.IN, [True]),
+        (FieldType.CHOICE, Operator.CONTAINS, "month"),
+        (FieldType.CHOICE, Operator.GT, "monthly"),
+        (FieldType.TEXT, Operator.GT, "a"),
+        (FieldType.LINK, Operator.LT, "https://example.org"),
     ],
 )
-def test_attribute_operator_must_fit_data_type(
-    data_type: AttributeType, op: Operator, value: JsonValue
+def test_field_operator_must_fit_data_type(
+    data_type: FieldType, op: Operator, value: JsonValue
 ) -> None:
-    choices = ("monthly", "yearly") if data_type is AttributeType.CHOICE else ()
-    attr = attribute(data_type, choices)
+    choices = ("monthly", "yearly") if data_type is FieldType.CHOICE else ()
+    attr = field(data_type, choices)
 
-    with pytest.raises(ValidationError, match=f"operator '{op}' does not apply to attribute"):
-        check_attributes(attribute_rule(attr, op, value), {attr.id: attr})
+    with pytest.raises(ValidationError, match=f"operator '{op}' does not apply to field"):
+        check_fields(field_rule(attr, op, value), {attr.id: attr})
 
 
 @pytest.mark.parametrize(
     ("data_type", "op", "value"),
     [
-        (AttributeType.NUMBER, Operator.IS, "abc"),
-        (AttributeType.NUMBER, Operator.GT, True),
-        (AttributeType.AMOUNT, Operator.GT, "100"),
-        (AttributeType.AMOUNT, Operator.GT, {"amount": "100", "currency": "euro"}),
-        (AttributeType.DATE, Operator.LT, "2026-02-30"),
-        (AttributeType.BOOLEAN, Operator.IS, "true"),
-        (AttributeType.CHOICE, Operator.IS, "weekly"),
-        (AttributeType.CHOICE, Operator.IN, ["monthly", "weekly"]),
-        (AttributeType.LINK, Operator.IS, "ftp://example.org"),
+        (FieldType.NUMBER, Operator.IS, "abc"),
+        (FieldType.NUMBER, Operator.GT, True),
+        (FieldType.AMOUNT, Operator.GT, "100"),
+        (FieldType.AMOUNT, Operator.GT, {"amount": "100", "currency": "euro"}),
+        (FieldType.DATE, Operator.LT, "2026-02-30"),
+        (FieldType.BOOLEAN, Operator.IS, "true"),
+        (FieldType.CHOICE, Operator.IS, "weekly"),
+        (FieldType.CHOICE, Operator.IN, ["monthly", "weekly"]),
+        (FieldType.LINK, Operator.IS, "ftp://example.org"),
     ],
 )
-def test_attribute_condition_value_must_fit(
-    data_type: AttributeType, op: Operator, value: JsonValue
+def test_field_condition_value_must_fit(
+    data_type: FieldType, op: Operator, value: JsonValue
 ) -> None:
-    choices = ("monthly", "yearly") if data_type is AttributeType.CHOICE else ()
-    attr = attribute(data_type, choices)
+    choices = ("monthly", "yearly") if data_type is FieldType.CHOICE else ()
+    attr = field(data_type, choices)
 
     with pytest.raises(ValidationError, match="does not accept"):
-        check_attributes(attribute_rule(attr, op, value), {attr.id: attr})
+        check_fields(field_rule(attr, op, value), {attr.id: attr})
 
 
 @pytest.mark.parametrize(
     ("data_type", "value", "fits"),
     [
-        (AttributeType.AMOUNT, {"amount": "12.50", "currency": "EUR"}, True),
-        (AttributeType.AMOUNT, "12.50", False),
-        (AttributeType.NUMBER, "7", True),
-        (AttributeType.NUMBER, "seven", False),
-        (AttributeType.DATE, "2026-03-31", True),
-        (AttributeType.DATE, "31.03.2026", False),
-        (AttributeType.CHOICE, "yearly", True),
-        (AttributeType.CHOICE, "weekly", False),
-        (AttributeType.BOOLEAN, False, True),
-        (AttributeType.TEXT, " ", False),
+        (FieldType.AMOUNT, {"amount": "12.50", "currency": "EUR"}, True),
+        (FieldType.AMOUNT, "12.50", False),
+        (FieldType.NUMBER, "7", True),
+        (FieldType.NUMBER, "seven", False),
+        (FieldType.DATE, "2026-03-31", True),
+        (FieldType.DATE, "31.03.2026", False),
+        (FieldType.CHOICE, "yearly", True),
+        (FieldType.CHOICE, "weekly", False),
+        (FieldType.BOOLEAN, False, True),
+        (FieldType.TEXT, " ", False),
     ],
 )
-def test_set_attribute_value_must_fit(
-    data_type: AttributeType, value: JsonValue, fits: bool
-) -> None:
-    choices = ("monthly", "yearly") if data_type is AttributeType.CHOICE else ()
-    attr = attribute(data_type, choices)
-    rule = definition(SetAttribute(attr.id, value))
+def test_set_field_value_must_fit(data_type: FieldType, value: JsonValue, fits: bool) -> None:
+    choices = ("monthly", "yearly") if data_type is FieldType.CHOICE else ()
+    attr = field(data_type, choices)
+    rule = definition(SetField(attr.id, value))
 
     if fits:
-        check_attributes(rule, {attr.id: attr})
+        check_fields(rule, {attr.id: attr})
     else:
         with pytest.raises(ValidationError, match="does not accept"):
-            check_attributes(rule, {attr.id: attr})
+            check_fields(rule, {attr.id: attr})
 
 
-def test_missing_attribute_is_rejected() -> None:
-    attr = attribute(AttributeType.TEXT)
-    with pytest.raises(ValidationError, match=f"attribute {attr.id} does not exist"):
-        check_attributes(attribute_rule(attr, Operator.PRESENT), {})
+def test_missing_field_is_rejected() -> None:
+    attr = field(FieldType.TEXT)
+    with pytest.raises(ValidationError, match=f"field {attr.id} does not exist"):
+        check_fields(field_rule(attr, Operator.PRESENT), {})
     with pytest.raises(ValidationError, match="does not exist"):
-        check_attributes(definition(SetAttribute(attr.id, "x")), {})
+        check_fields(definition(SetField(attr.id, "x")), {})
 
 
 def test_errors_of_stored_data_and_scope_name_the_place() -> None:
     """So that a client puts the message next to the condition or action concerned."""
-    number = attribute(AttributeType.NUMBER)
+    number = field(FieldType.NUMBER)
     condition = Condition(
-        field=ConditionField.ATTRIBUTE, op=Operator.IS, value="abc", attribute_id=number.id
+        field=ConditionField.FIELD, op=Operator.IS, value="abc", field_id=number.id
     )
     nested = definition(
         AddTags(frozenset({TAG})),
-        SetAttribute(number.id, "seven"),
+        SetField(number.id, "seven"),
         conditions=group(ALWAYS, group(ALWAYS, condition, mode="any")),
     )
     with pytest.raises(
         ValidationError, match=r"^conditions\.all\[1\]\.any\[1\]: .*does not accept"
     ):
-        check_attributes(nested, {number.id: number})
-    fitting = definition(SetAttribute(number.id, "seven"), AddTags(frozenset({TAG})))
+        check_fields(nested, {number.id: number})
+    fitting = definition(SetField(number.id, "seven"), AddTags(frozenset({TAG})))
     with pytest.raises(ValidationError, match=r"^actions\[0\]: .*does not accept"):
-        check_attributes(fitting, {number.id: number})
+        check_fields(fitting, {number.id: number})
     with pytest.raises(ValidationError, match=r"^actions\[1\]: a global rule cannot set_drawer"):
         check_scope(
             definition(AddTags(frozenset({TAG})), SetDrawer(DrawerId(new_id()))),
@@ -773,14 +771,14 @@ def test_references() -> None:
     in_condition = ContactId(new_id())
     type_in_condition = DocumentTypeId(new_id())
     tags = [TagId(new_id()) for _ in range(3)]
-    attr = AttributeId(new_id())
+    attr = FieldId(new_id())
     rule = definition(
         SetDrawer(DRAWER),
         SetContact(CONTACT),
         SetDocumentType(TYPE),
         AddTags(frozenset({tags[2]})),
         RemoveTags(frozenset({OTHER_TAG})),
-        SetAttribute(ATTRIBUTE, "x"),
+        SetField(FIELD, "x"),
         conditions=group(
             Condition(field=ConditionField.CONTACT, op=Operator.IN, value=[str(in_condition), ID]),
             Condition(
@@ -791,7 +789,7 @@ def test_references() -> None:
                 Condition(field=ConditionField.TAGS, op=Operator.IN, value=[str(tags[1])]),
                 mode="any",
             ),
-            Condition(field=ConditionField.ATTRIBUTE, op=Operator.IS, value=ID, attribute_id=attr),
+            Condition(field=ConditionField.FIELD, op=Operator.IS, value=ID, field_id=attr),
             # text values and other values that look like ids are no references
             Condition(field=ConditionField.TEXT, op=Operator.CONTAINS, value=str(OTHER_CONTACT)),
             Condition(field=ConditionField.CONTACT, op=Operator.PRESENT),
@@ -803,21 +801,19 @@ def test_references() -> None:
         contacts=frozenset({in_condition, ContactId(UUID(ID)), CONTACT}),
         document_types=frozenset({type_in_condition, TYPE}),
         tags=frozenset({*tags, OTHER_TAG}),
-        attributes=frozenset({attr, ATTRIBUTE}),
+        fields=frozenset({attr, FIELD}),
         drawers=frozenset({DRAWER}),
     )
 
 
 def test_uses_text_and_patterns() -> None:
-    attr = AttributeId(new_id())
+    attr = FieldId(new_id())
     rule = definition(
         conditions=group(
             Condition(
                 field=ConditionField.TEXT, op=Operator.MATCHES, value="R-\\d+", case_sensitive=True
             ),
-            Condition(
-                field=ConditionField.ATTRIBUTE, op=Operator.MATCHES, value="^DE", attribute_id=attr
-            ),
+            Condition(field=ConditionField.FIELD, op=Operator.MATCHES, value="^DE", field_id=attr),
             Condition(field=ConditionField.TEXT, op=Operator.CONTAINS, value="Invoice"),
         )
     )

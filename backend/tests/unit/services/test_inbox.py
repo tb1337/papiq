@@ -7,8 +7,7 @@ from uuid import UUID
 
 import pytest
 
-from papiq.core.domain.attributes import AttributeDefinition, AttributeType, Money
-from papiq.core.domain.classification import FieldCheck, attribute_field, checks_to_json
+from papiq.core.domain.classification import FieldCheck, checks_to_json, field_key
 from papiq.core.domain.documents import Document, DocumentChanges
 from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import (
@@ -18,6 +17,7 @@ from papiq.core.domain.errors import (
     PermissionDeniedError,
     ValidationError,
 )
+from papiq.core.domain.fields import FieldDefinition, FieldType, Money
 from papiq.core.domain.ids import ContactId, DrawerId, UserId
 from papiq.core.domain.master_data import Contact
 from papiq.core.domain.pipeline import Lane, Outcome, ProcessingStatus, Step, StepResult
@@ -35,7 +35,7 @@ DOCUMENT = document(UserId(UUID(int=1)), DrawerId(UUID(int=2)))
 class Scene:
     owner: User
     contact: Contact
-    amount: AttributeDefinition
+    amount: FieldDefinition
     pipeline: PipelineService
     document: Document
 
@@ -62,9 +62,9 @@ def classified(contact: Contact) -> StepResult:
     )
 
 
-def extracted(amount: AttributeDefinition) -> StepResult:
+def extracted(amount: FieldDefinition) -> StepResult:
     check = FieldCheck(
-        field=attribute_field(amount.id),
+        field=field_key(amount.id),
         outcome=Outcome.UNCERTAIN,
         confidence=0,
         reason=UNSURE,
@@ -82,15 +82,15 @@ def extracted(amount: AttributeDefinition) -> StepResult:
 async def scene(world: World) -> Scene:
     owner = await world.user()
     contact = Contact.create(name="Stadtwerke", now=NOW)
-    amount = AttributeDefinition.create(name="Betrag", data_type=AttributeType.AMOUNT, now=NOW)
+    amount = FieldDefinition.create(name="Betrag", data_type=FieldType.AMOUNT, now=NOW)
     async with world.uow() as uow:
         await uow.contacts.add(contact)
-        await uow.attributes.add(amount)
+        await uow.fields.add(amount)
         await uow.commit()
     pipeline = world.pipeline(
         {
             Step.CLASSIFY: Returns(classified(contact)),
-            Step.EXTRACT_ATTRIBUTES: Returns(extracted(amount)),
+            Step.EXTRACT_FIELDS: Returns(extracted(amount)),
         }
     )
     document = await pipeline.receive(owner.id, incoming(b"%PDF-1.7\n%%EOF\n"), filename="a.pdf")
@@ -106,10 +106,10 @@ async def test_an_uncertain_document_is_in_the_inbox(world: World) -> None:
     assert item.document.id == s.document.id
     assert [(step.step, step.outcome) for step in item.open] == [
         (Step.CLASSIFY, Outcome.UNCERTAIN),
-        (Step.EXTRACT_ATTRIBUTES, Outcome.UNCERTAIN),
+        (Step.EXTRACT_FIELDS, Outcome.UNCERTAIN),
     ]
     assert [check.field for check in item.open[0].fields] == ["contact", "document_date"]
-    assert item.open[1].fields[0].field == attribute_field(s.amount.id)
+    assert item.open[1].fields[0].field == field_key(s.amount.id)
     assert await world.documents.inbox((await world.user()).id) == []
 
 
@@ -134,7 +134,7 @@ async def test_confirming_needs_a_decision_on_every_open_field(world: World) -> 
     assert error.value.fields == (
         "contact",
         "document_date",
-        f"{attribute_field(s.amount.id)} (Betrag)",
+        f"{field_key(s.amount.id)} (Betrag)",
     )
     with pytest.raises(OpenFieldsError) as error:
         await s.pipeline.confirm(
@@ -162,7 +162,7 @@ async def test_a_confirmed_document_is_filed(world: World) -> None:
     assert document.lane is Lane.GREEN
     assert document.contact_id == s.contact.id
     assert document.document_date == date(2026, 3, 31)
-    assert document.attributes[s.amount.id] == Money(Decimal("84.20"), "EUR")
+    assert document.fields[s.amount.id] == Money(Decimal("84.20"), "EUR")
     assert "document.filed" in world.event_types()
     assert await world.documents.inbox(s.owner.id) == []
 
@@ -170,7 +170,7 @@ async def test_a_confirmed_document_is_filed(world: World) -> None:
     confirmations = [entry for entry in log if entry.result.model_version == PERSON]
     assert [(entry.step, entry.run) for entry in confirmations] == [
         (Step.CLASSIFY, 2),
-        (Step.EXTRACT_ATTRIBUTES, 2),
+        (Step.EXTRACT_FIELDS, 2),
         (Step.APPLY_RULES, 2),
     ]
     assert confirmations[0].result.output == {
@@ -182,7 +182,7 @@ async def test_a_confirmed_document_is_filed(world: World) -> None:
     }
     # What the owner changed, for the rules that run next.
     assert confirmations[2].result.output["changed"] == sorted(
-        ["contact", "document_date", f"attribute:{s.amount.id}"]
+        ["contact", "document_date", f"field:{s.amount.id}"]
     )
     # The model's proposals stay readable, for the rules.
     assert field_checks(log)["contact"].proposed == "Stadtwerk"
@@ -208,20 +208,20 @@ async def test_values_set_meanwhile_are_kept(world: World) -> None:
     await world.drain(s.pipeline)
     document = await world.documents.get(s.owner.id, s.document.id)
     assert document.contact_id == chosen.id
-    assert document.attributes[s.amount.id] == Money(Decimal("84.20"), "EUR")
+    assert document.fields[s.amount.id] == Money(Decimal("84.20"), "EUR")
     log = await world.documents.processing_log(s.owner.id, s.document.id)
     confirmed = next(entry for entry in log if entry.result.model_version == PERSON)
     assert confirmed.result.output["kept"] == ["contact"]
     assert confirmed.result.output["accepted"] == []
 
 
-async def test_after_a_type_correction_attributes_are_extracted_again(world: World) -> None:
+async def test_after_a_type_correction_fields_are_extracted_again(world: World) -> None:
     s = await scene(world)
     await s.pipeline.confirm(
         s.owner.id,
         s.document.id,
         DocumentChanges(contact_id=None, document_date=None),
-        resume_at=Step.EXTRACT_ATTRIBUTES,
+        resume_at=Step.EXTRACT_FIELDS,
     )
     await world.drain(s.pipeline)
     document = await world.documents.get(s.owner.id, s.document.id)
@@ -253,7 +253,7 @@ async def test_a_red_document_can_be_taken_over(world: World) -> None:
     taken = [entry for entry in log if entry.result.model_version == PERSON]
     assert [entry.step for entry in taken] == [
         Step.CLASSIFY,
-        Step.EXTRACT_ATTRIBUTES,
+        Step.EXTRACT_FIELDS,
         Step.APPLY_RULES,
     ]
     assert taken[0].result.output["outcome_before"] == "failed"
@@ -337,11 +337,11 @@ def test_suggestions_that_do_not_fit_are_refused() -> None:
     assert decision.accepted == {}
 
 
-def test_fields_of_removed_attributes_need_no_decision() -> None:
-    gone = AttributeDefinition.create(name="Alt", data_type=AttributeType.TEXT, now=NOW)
+def test_fields_of_removed_fields_need_no_decision() -> None:
+    gone = FieldDefinition.create(name="Alt", data_type=FieldType.TEXT, now=NOW)
     check = FieldCheck(
-        field=attribute_field(gone.id), outcome=Outcome.UNCERTAIN, confidence=0, reason="x"
+        field=field_key(gone.id), outcome=Outcome.UNCERTAIN, confidence=0, reason="x"
     )
-    open = [OpenStep(Step.EXTRACT_ATTRIBUTES, Outcome.UNCERTAIN, "x", (check,))]
+    open = [OpenStep(Step.EXTRACT_FIELDS, Outcome.UNCERTAIN, "x", (check,))]
     decision = decide(open, DOCUMENT, DocumentChanges(), accept_suggestions=False, definitions={})
     assert decision.changes == DocumentChanges()

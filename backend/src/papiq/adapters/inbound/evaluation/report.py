@@ -91,10 +91,10 @@ def summarise(results: Sequence[CaseResult], *, fake: bool) -> Summary:
             "document_type": expected.document_type,
             "document_date": expected.document_date,
         }
-        attributes = set(expected.attributes) | {
+        fields = set(expected.fields) | {
             name for name in result.checks if name not in (*FIELDS, "tags")
         }
-        wanted |= {name: expected.attributes.get(name) for name in attributes}
+        wanted |= {name: expected.fields.get(name) for name in fields}
         wrong = []
         for name, value in wanted.items():
             score = scores.setdefault(name, FieldScore(name))

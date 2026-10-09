@@ -16,13 +16,13 @@ from uuid import UUID
 
 from papiq.adapters.outbound.memory.database import (
     API_TOKENS,
-    ATTRIBUTES,
     CONTACTS,
     CREDENTIALS,
     DOCUMENT_TYPES,
     DOCUMENTS,
     DRAWERS,
     EXTERNAL_IDENTITIES,
+    FIELDS,
     LOGIN_FAILURES,
     RULE_APPLICATIONS,
     RULES,
@@ -46,17 +46,17 @@ from papiq.adapters.outbound.memory.rules import (
     MemoryRuleRepository,
 )
 from papiq.adapters.outbound.memory.webhooks import MemoryWebhookRepository
-from papiq.core.domain.attributes import AttributeDefinition
 from papiq.core.domain.documents import Document, Sha256
 from papiq.core.domain.drawers import Drawer
 from papiq.core.domain.errors import ConcurrencyError, ConflictError, NotFoundError
 from papiq.core.domain.events import DomainEvent
+from papiq.core.domain.fields import FieldDefinition
 from papiq.core.domain.ids import (
-    AttributeId,
     ContactId,
     DocumentId,
     DocumentTypeId,
     DrawerId,
+    FieldId,
     JobId,
     TagId,
     UserId,
@@ -92,7 +92,7 @@ class MemoryUnitOfWork:
             self, DOCUMENT_TYPES
         )
         self.tags = MemoryNamedRepository[TagId, Tag](self, TAGS)
-        self.attributes = MemoryNamedRepository[AttributeId, AttributeDefinition](self, ATTRIBUTES)
+        self.fields = MemoryNamedRepository[FieldId, FieldDefinition](self, FIELDS)
         self.documents = MemoryDocumentRepository(self, DOCUMENTS)
         self.processing_log = MemoryProcessingLog(self)
         self.rules = MemoryRuleRepository(self, RULES)
@@ -289,16 +289,16 @@ class MemoryDocumentRepository(MemoryRepository[DocumentId, Document]):
             raise NotFoundError(self._table.name, id)
         self._uow._write(self._table, id, _REMOVED)
 
-    async def attribute_in_use(
+    async def field_in_use(
         self,
-        attribute: AttributeId,
+        field: FieldId,
         *,
         values: Collection[str] | None = None,
         outside_types: Collection[DocumentTypeId] | None = None,
     ) -> bool:
         return any(
-            attribute in row.attributes
-            and (values is None or row.attributes[attribute] in set(values))
+            field in row.fields
+            and (values is None or row.fields[field] in set(values))
             and (outside_types is None or row.document_type_id not in set(outside_types))
             for row in self._all()
         )
@@ -326,10 +326,10 @@ class MemoryDocumentRepository(MemoryRepository[DocumentId, Document]):
         contact: ContactId | None = None,
         document_type: DocumentTypeId | None = None,
         tag: TagId | None = None,
-        attribute: AttributeId | None = None,
+        field: FieldId | None = None,
         sha256: Sha256 | None = None,
     ) -> bool:
-        criteria = (owner, drawer, contact, document_type, tag, attribute, sha256)
+        criteria = (owner, drawer, contact, document_type, tag, field, sha256)
         if all(value is None for value in criteria):
             raise ValueError("exists needs at least one criterion")
         return any(
@@ -338,7 +338,7 @@ class MemoryDocumentRepository(MemoryRepository[DocumentId, Document]):
             and (contact is None or row.contact_id == contact)
             and (document_type is None or row.document_type_id == document_type)
             and (tag is None or tag in row.tag_ids)
-            and (attribute is None or attribute in row.attributes)
+            and (field is None or field in row.fields)
             and (sha256 is None or row.sha256 == sha256)
             for row in self._all()
         )

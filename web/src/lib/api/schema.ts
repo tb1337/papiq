@@ -562,50 +562,50 @@ export interface paths {
 		patch: operations['rename_tag_api_v1_tags__id__patch'];
 		trace?: never;
 	};
-	'/api/v1/attributes': {
+	'/api/v1/fields': {
 		parameters: {
 			query?: never;
 			header?: never;
 			path?: never;
 			cookie?: never;
 		};
-		/** List attribute definitions */
-		get: operations['list_attributes_api_v1_attributes_get'];
+		/** List field definitions */
+		get: operations['list_fields_api_v1_fields_get'];
 		put?: never;
 		/**
-		 * Create an attribute definition
+		 * Create a field definition
 		 * @description Admins only. Global (`document_type_ids` null) or for some document types; `choice` needs `choices`.
 		 */
-		post: operations['create_attribute_api_v1_attributes_post'];
+		post: operations['create_field_api_v1_fields_post'];
 		delete?: never;
 		options?: never;
 		head?: never;
 		patch?: never;
 		trace?: never;
 	};
-	'/api/v1/attributes/{id}': {
+	'/api/v1/fields/{id}': {
 		parameters: {
 			query?: never;
 			header?: never;
 			path?: never;
 			cookie?: never;
 		};
-		/** An attribute definition */
-		get: operations['get_attribute_api_v1_attributes__id__get'];
+		/** A field definition */
+		get: operations['get_field_api_v1_fields__id__get'];
 		put?: never;
 		post?: never;
 		/**
-		 * Delete an attribute definition
+		 * Delete a field definition
 		 * @description Admins only. Only while no document has a value for it (409).
 		 */
-		delete: operations['delete_attribute_api_v1_attributes__id__delete'];
+		delete: operations['delete_field_api_v1_fields__id__delete'];
 		options?: never;
 		head?: never;
 		/**
-		 * Change an attribute definition
+		 * Change a field definition
 		 * @description Admins only. Name, choices and scope; the data type stays. Values documents use are never changed: removing a used choice or narrowing the scope past documents with values is a conflict (409).
 		 */
-		patch: operations['change_attribute_api_v1_attributes__id__patch'];
+		patch: operations['change_field_api_v1_fields__id__patch'];
 		trace?: never;
 	};
 	'/api/v1/drawers': {
@@ -696,7 +696,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Create a rule
-		 * @description Global rules: admins only (403). The content is checked: operators fit the field and the attribute's data type, patterns compile, a global rule only tags, sets attributes and forces reviews (422, the message names the place, such as `conditions.all[1].any[0]` or `actions[2]`); contacts, types, tags, attributes and drawers exist (404); a user rule files only into drawers its owner may write to (403).
+		 * @description Global rules: admins only (403). The content is checked: operators fit the field and the field's data type, patterns compile, a global rule only tags, sets fields and forces reviews (422, the message names the place, such as `conditions.all[1].any[0]` or `actions[2]`); contacts, types, tags, fields and drawers exist (404); a user rule files only into drawers its owner may write to (403).
 		 */
 		post: operations['create_rule_api_v1_rules_post'];
 		delete?: never;
@@ -719,7 +719,7 @@ export interface paths {
 		get: operations['get_rule_api_v1_rules__id__get'];
 		/**
 		 * Change a rule
-		 * @description Makes a new version; earlier ones stay readable. A user rule: its owner and admins (its references are checked for its owner). A global rule: admins. The content is checked: operators fit the field and the attribute's data type, patterns compile, a global rule only tags, sets attributes and forces reviews (422, the message names the place, such as `conditions.all[1].any[0]` or `actions[2]`); contacts, types, tags, attributes and drawers exist (404); a user rule files only into drawers its owner may write to (403).
+		 * @description Makes a new version; earlier ones stay readable. A user rule: its owner and admins (its references are checked for its owner). A global rule: admins. The content is checked: operators fit the field and the field's data type, patterns compile, a global rule only tags, sets fields and forces reviews (422, the message names the place, such as `conditions.all[1].any[0]` or `actions[2]`); contacts, types, tags, fields and drawers exist (404); a user rule files only into drawers its owner may write to (403).
 		 */
 		put: operations['change_rule_api_v1_rules__id__put'];
 		post?: never;
@@ -924,7 +924,7 @@ export interface paths {
 		head?: never;
 		/**
 		 * Change a document's metadata
-		 * @description Needs write access (owner or a `read_write` share). Referenced contact, type, tags and attributes must exist; attribute values must fit their type and apply to the document type. On a filed document, the change sets off the owner's rules and the global ones with trigger `change` that hold after it and did not before; fields set in the change stay as they are. The owner sees what the rules did in `rules`. If the rules filed the document where the caller can no longer read it, the answer has only its `id` and `access: null`.
+		 * @description Needs write access (owner or a `read_write` share). Referenced contact, type, tags and fields must exist; field values must fit their type and apply to the document type. On a filed document, the change sets off the owner's rules and the global ones with trigger `change` that hold after it and did not before; fields set in the change stay as they are. The owner sees what the rules did in `rules`. If the rules filed the document where the caller can no longer read it, the answer has only its `id` and `access: null`.
 		 */
 		patch: operations['update_document_api_v1_documents__id__patch'];
 		trace?: never;
@@ -1098,7 +1098,7 @@ export interface paths {
 		};
 		/**
 		 * What the model proposed for a document
-		 * @description The owner and admins. The open steps and fields, and the latest classification and attribute extraction by the model: each field as proposed, checked and applied.
+		 * @description The owner and admins. The open steps and fields, and the latest classification and field extraction by the model: each field as proposed, checked and applied.
 		 */
 		get: operations['review_api_v1_documents__id__review_get'];
 		put?: never;
@@ -1120,7 +1120,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Confirm a document from the inbox
-		 * @description The owner and admins, for yellow and red documents that are not being processed. `drawer_id` must be a drawer the owner may write to; an admin chooses any drawer. Every open field of the steps before `resume_at` (and of `apply_rules` when processing resumes with it) needs a decision: a value or null in `changes`, a value the document already has (it is kept), or its suggestion with `accept_suggestions`. Otherwise 422 lists the open fields in `open_fields`. The rules' fields `drawer`, `title` and `review` always have a value: confirming keeps it, `drawer_id` moves the document. The results before `resume_at` count as confirmed; processing continues from there up to filing, and the rules leave what the owner decided or changed as it is. From `extract_attributes` on, the extracted attributes replace the ones the document has.
+		 * @description The owner and admins, for yellow and red documents that are not being processed. `drawer_id` must be a drawer the owner may write to; an admin chooses any drawer. Every open field of the steps before `resume_at` (and of `apply_rules` when processing resumes with it) needs a decision: a value or null in `changes`, a value the document already has (it is kept), or its suggestion with `accept_suggestions`. Otherwise 422 lists the open fields in `open_fields`. The rules' fields `drawer`, `title` and `review` always have a value: confirming keeps it, `drawer_id` moves the document. The results before `resume_at` count as confirmed; processing continues from there up to filing, and the rules leave what the owner decided or changed as it is. From `extract_fields` on, the extracted fields replace the ones the document has.
 		 */
 		post: operations['confirm_api_v1_documents__id__confirm_post'];
 		delete?: never;
@@ -1496,94 +1496,6 @@ export interface components {
 			 */
 			accept_conflicts?: string[];
 		};
-		/**
-		 * AttributeCreate
-		 * @example {
-		 *       "data_type": "amount",
-		 *       "document_type_ids": [
-		 *         "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b"
-		 *       ],
-		 *       "name": "Amount"
-		 *     }
-		 */
-		AttributeCreate: {
-			/**
-			 * Name
-			 * @example ACME Energy
-			 */
-			name: string;
-			data_type: components['schemas']['AttributeType'];
-			/**
-			 * Document Type Ids
-			 * @description null: global; otherwise only for these document types.
-			 */
-			document_type_ids?: string[] | null;
-			/**
-			 * Choices
-			 * @description For `choice` only.
-			 */
-			choices?: string[];
-		};
-		/**
-		 * AttributeOut
-		 * @example {
-		 *       "choices": [],
-		 *       "created_at": "2026-01-10T09:00:00Z",
-		 *       "data_type": "amount",
-		 *       "id": "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b",
-		 *       "name": "Amount"
-		 *     }
-		 */
-		AttributeOut: {
-			/**
-			 * Id
-			 * Format: uuid
-			 */
-			id: string;
-			/** Name */
-			name: string;
-			data_type: components['schemas']['AttributeType'];
-			/** Document Type Ids */
-			document_type_ids: string[] | null;
-			/** Choices */
-			choices: string[];
-			/**
-			 * Created At
-			 * Format: date-time
-			 */
-			created_at: string;
-		};
-		/**
-		 * AttributePatch
-		 * @description Fields left out stay. The data type cannot change.
-		 * @example {
-		 *       "choices": [
-		 *         "Card",
-		 *         "Transfer",
-		 *         "Cash"
-		 *       ],
-		 *       "name": "Payment method"
-		 *     }
-		 */
-		AttributePatch: {
-			/** Name */
-			name?: string | null;
-			/**
-			 * Choices
-			 * @description All choices; removing one that documents use is a conflict (409).
-			 */
-			choices?: string[] | null;
-			/**
-			 * Document Type Ids
-			 * @description null: global. Narrowing is a conflict (409) while documents outside the new scope have values.
-			 */
-			document_type_ids?: string[] | null;
-		};
-		/**
-		 * AttributeType
-		 * @enum {string}
-		 */
-		AttributeType: 'text' | 'number' | 'amount' | 'date' | 'boolean' | 'choice' | 'link';
 		/** AuthorizationUrl */
 		AuthorizationUrl: {
 			/**
@@ -1616,14 +1528,14 @@ export interface components {
 		 * @enum {string}
 		 */
 		ConditionField:
-			'contact' | 'document_type' | 'tags' | 'channel' | 'text' | 'attribute' | 'document_date';
+			'contact' | 'document_type' | 'tags' | 'channel' | 'text' | 'field' | 'document_date';
 		/**
 		 * ConditionSchema
 		 * @description `field` `op` `value`. Operators by field: contact, document_type: `is`, `in`, `present`,
 		 *     `missing`; tags: `contains` (this tag), `in` (one of), `present` (any), `missing` (none);
 		 *     channel: `is`, `in`; text: `contains`, `matches` (regular expression); document_date and
-		 *     number, amount, date attributes: `is`, `gt`, `lt`, `present`, `missing`; text and link
-		 *     attributes: `is`, `in`, `contains`, `matches`, `present`, `missing`; choice: `is`, `in`,
+		 *     number, amount, date fields: `is`, `gt`, `lt`, `present`, `missing`; text and link
+		 *     fields: `is`, `in`, `contains`, `matches`, `present`, `missing`; choice: `is`, `in`,
 		 *     `present`, `missing`; boolean: `is`, `present`, `missing`.
 		 * @example {
 		 *       "field": "contact",
@@ -1642,14 +1554,14 @@ export interface components {
 			op: components['schemas']['Operator'];
 			/**
 			 * Value
-			 * @description None for `present` and `missing`, a list for `in`, otherwise one value: an id, a channel, a text or pattern, a date `YYYY-MM-DD`, or an attribute value as in `attributes` of a document.
+			 * @description None for `present` and `missing`, a list for `in`, otherwise one value: an id, a channel, a text or pattern, a date `YYYY-MM-DD`, or a field value as in `fields` of a document.
 			 */
 			value?: string | boolean | components['schemas']['MoneyValue'] | string[] | null;
 			/**
-			 * Attribute Id
-			 * @description For `field` `attribute` only.
+			 * Field Id
+			 * @description For `field` `field` only.
 			 */
-			attribute_id?: string | null;
+			field_id?: string | null;
 			/**
 			 * Case Sensitive
 			 * @description For `matches` only; other comparisons ignore case.
@@ -1677,7 +1589,7 @@ export interface components {
 			 */
 			accept_suggestions: boolean;
 			/**
-			 * @description `extract_attributes` after correcting the document type, so the attributes of the new type are extracted.
+			 * @description `extract_fields` after correcting the document type, so the fields of the new type are extracted.
 			 * @default apply_rules
 			 */
 			resume_at: components['schemas']['ResumeStep'];
@@ -1758,17 +1670,17 @@ export interface components {
 		 * DocumentChanged
 		 * @example {
 		 *       "access": "read_write",
-		 *       "attributes": {
-		 *         "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b": {
-		 *           "amount": "84.20",
-		 *           "currency": "EUR"
-		 *         }
-		 *       },
 		 *       "channel": "web",
 		 *       "contact_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b",
 		 *       "created_at": "2026-04-02T08:15:00Z",
 		 *       "document_date": "2026-03-31",
 		 *       "drawer_id": "01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b",
+		 *       "fields": {
+		 *         "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b": {
+		 *           "amount": "84.20",
+		 *           "currency": "EUR"
+		 *         }
+		 *       },
 		 *       "id": "01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b",
 		 *       "lane": "green",
 		 *       "media_type": "application/pdf",
@@ -1832,10 +1744,10 @@ export interface components {
 			/** Document Date */
 			document_date: string | null;
 			/**
-			 * Attributes
-			 * @description Values by attribute id.
+			 * Fields
+			 * @description Values by field id.
 			 */
-			attributes: {
+			fields: {
 				[key: string]: string | boolean | components['schemas']['MoneyValue'];
 			};
 			/** @description None while processing runs. */
@@ -1862,17 +1774,17 @@ export interface components {
 		 * @description A document's metadata and processing state, with the caller's access.
 		 * @example {
 		 *       "access": "read_write",
-		 *       "attributes": {
-		 *         "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b": {
-		 *           "amount": "84.20",
-		 *           "currency": "EUR"
-		 *         }
-		 *       },
 		 *       "channel": "web",
 		 *       "contact_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b",
 		 *       "created_at": "2026-04-02T08:15:00Z",
 		 *       "document_date": "2026-03-31",
 		 *       "drawer_id": "01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b",
+		 *       "fields": {
+		 *         "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b": {
+		 *           "amount": "84.20",
+		 *           "currency": "EUR"
+		 *         }
+		 *       },
 		 *       "id": "01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b",
 		 *       "lane": "green",
 		 *       "media_type": "application/pdf",
@@ -1936,10 +1848,10 @@ export interface components {
 			/** Document Date */
 			document_date: string | null;
 			/**
-			 * Attributes
-			 * @description Values by attribute id.
+			 * Fields
+			 * @description Values by field id.
 			 */
-			attributes: {
+			fields: {
 				[key: string]: string | boolean | components['schemas']['MoneyValue'];
 			};
 			/** @description None while processing runs. */
@@ -1987,14 +1899,14 @@ export interface components {
 		 * DocumentPatch
 		 * @description Fields left out stay as they are; null removes a value.
 		 * @example {
-		 *       "attributes": {
+		 *       "contact_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b",
+		 *       "document_date": "2026-03-31",
+		 *       "fields": {
 		 *         "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b": {
 		 *           "amount": "84.20",
 		 *           "currency": "EUR"
 		 *         }
 		 *       },
-		 *       "contact_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b",
-		 *       "document_date": "2026-03-31",
 		 *       "tag_ids": [
 		 *         "01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b"
 		 *       ],
@@ -2013,10 +1925,10 @@ export interface components {
 			/** Document Date */
 			document_date?: string | null;
 			/**
-			 * Attributes
-			 * @description Values by attribute id, in the form of `attributes` above; null removes.
+			 * Fields
+			 * @description Values by field id, in the form of `fields` above; null removes.
 			 */
-			attributes?: {
+			fields?: {
 				[key: string]: unknown;
 			} | null;
 		};
@@ -2029,7 +1941,7 @@ export interface components {
 			document: components['schemas']['DocumentDetails'] | null;
 			/**
 			 * Changed
-			 * @description Fields that would change: `title`, `contact`, `document_type`, `tags`, `document_date`, `attribute:<id>`, `drawer`.
+			 * @description Fields that would change: `title`, `contact`, `document_type`, `tags`, `document_date`, `field:<id>`, `drawer`.
 			 */
 			changed: string[];
 			/**
@@ -2105,7 +2017,7 @@ export interface components {
 		FieldCheckOut: {
 			/**
 			 * Field
-			 * @description `contact`, `document_type`, `tags`, `document_date`, or `attribute:<id>`.
+			 * @description `contact`, `document_type`, `tags`, `document_date`, or `field:<id>`.
 			 */
 			field: string;
 			/** @description `ok` or `uncertain`. */
@@ -2132,7 +2044,7 @@ export interface components {
 			evidence: string | null;
 			/**
 			 * Value
-			 * @description The checked value, applied to the document (`ok` only): an id, a list of tag ids, a date, or an attribute value.
+			 * @description The checked value, applied to the document (`ok` only): an id, a list of tag ids, a date, or a field value.
 			 */
 			value: unknown;
 			/**
@@ -2146,6 +2058,94 @@ export interface components {
 			 */
 			new_name: string | null;
 		};
+		/**
+		 * FieldCreate
+		 * @example {
+		 *       "data_type": "amount",
+		 *       "document_type_ids": [
+		 *         "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b"
+		 *       ],
+		 *       "name": "Amount"
+		 *     }
+		 */
+		FieldCreate: {
+			/**
+			 * Name
+			 * @example ACME Energy
+			 */
+			name: string;
+			data_type: components['schemas']['FieldType'];
+			/**
+			 * Document Type Ids
+			 * @description null: global; otherwise only for these document types.
+			 */
+			document_type_ids?: string[] | null;
+			/**
+			 * Choices
+			 * @description For `choice` only.
+			 */
+			choices?: string[];
+		};
+		/**
+		 * FieldOut
+		 * @example {
+		 *       "choices": [],
+		 *       "created_at": "2026-01-10T09:00:00Z",
+		 *       "data_type": "amount",
+		 *       "id": "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b",
+		 *       "name": "Amount"
+		 *     }
+		 */
+		FieldOut: {
+			/**
+			 * Id
+			 * Format: uuid
+			 */
+			id: string;
+			/** Name */
+			name: string;
+			data_type: components['schemas']['FieldType'];
+			/** Document Type Ids */
+			document_type_ids: string[] | null;
+			/** Choices */
+			choices: string[];
+			/**
+			 * Created At
+			 * Format: date-time
+			 */
+			created_at: string;
+		};
+		/**
+		 * FieldPatch
+		 * @description Fields left out stay. The data type cannot change.
+		 * @example {
+		 *       "choices": [
+		 *         "Card",
+		 *         "Transfer",
+		 *         "Cash"
+		 *       ],
+		 *       "name": "Payment method"
+		 *     }
+		 */
+		FieldPatch: {
+			/** Name */
+			name?: string | null;
+			/**
+			 * Choices
+			 * @description All choices; removing one that documents use is a conflict (409).
+			 */
+			choices?: string[] | null;
+			/**
+			 * Document Type Ids
+			 * @description null: global. Narrowing is a conflict (409) while documents outside the new scope have values.
+			 */
+			document_type_ids?: string[] | null;
+		};
+		/**
+		 * FieldType
+		 * @enum {string}
+		 */
+		FieldType: 'text' | 'number' | 'amount' | 'date' | 'boolean' | 'choice' | 'link';
 		/** ForceReviewAction */
 		ForceReviewAction: {
 			/**
@@ -2414,7 +2414,7 @@ export interface components {
 			reason: string | null;
 			/**
 			 * Fields
-			 * @description Uncertain fields of classification, attribute extraction and the rules (also `drawer`, `title`, `review`), and of filing (`drawer`).
+			 * @description Uncertain fields of classification, field extraction and the rules (also `drawer`, `title`, `review`), and of filing (`drawer`).
 			 */
 			fields: components['schemas']['FieldCheckOut'][];
 		};
@@ -2539,12 +2539,12 @@ export interface components {
 		 * ReprocessStep
 		 * @enum {string}
 		 */
-		ReprocessStep: 'ocr' | 'parse' | 'classify' | 'extract_attributes' | 'apply_rules' | 'file';
+		ReprocessStep: 'ocr' | 'parse' | 'classify' | 'extract_fields' | 'apply_rules' | 'file';
 		/**
 		 * ResumeStep
 		 * @enum {string}
 		 */
-		ResumeStep: 'extract_attributes' | 'apply_rules';
+		ResumeStep: 'extract_fields' | 'apply_rules';
 		/** ReviewOut */
 		ReviewOut: {
 			document: components['schemas']['DocumentDetails'];
@@ -2670,11 +2670,11 @@ export interface components {
 				| components['schemas']['SetTitleAction']
 				| components['schemas']['AddTagsAction']
 				| components['schemas']['RemoveTagsAction']
-				| components['schemas']['SetAttributeAction']
+				| components['schemas']['SetFieldAction']
 				| components['schemas']['ForceReviewAction']
 			)[];
 			/**
-			 * @description `user`: the caller's rule, for their documents. `global` (admins): for every document, but only tags, attributes and reviews.
+			 * @description `user`: the caller's rule, for their documents. `global` (admins): for every document, but only tags, fields and reviews.
 			 * @default user
 			 */
 			scope: components['schemas']['RuleScope'];
@@ -2744,7 +2744,7 @@ export interface components {
 				| components['schemas']['SetTitleAction']
 				| components['schemas']['AddTagsAction']
 				| components['schemas']['RemoveTagsAction']
-				| components['schemas']['SetAttributeAction']
+				| components['schemas']['SetFieldAction']
 				| components['schemas']['ForceReviewAction']
 			)[];
 		};
@@ -2792,7 +2792,7 @@ export interface components {
 				| components['schemas']['SetTitleAction']
 				| components['schemas']['AddTagsAction']
 				| components['schemas']['RemoveTagsAction']
-				| components['schemas']['SetAttributeAction']
+				| components['schemas']['SetFieldAction']
 				| components['schemas']['ForceReviewAction']
 			)[];
 			/**
@@ -2886,7 +2886,7 @@ export interface components {
 				| components['schemas']['SetTitleAction']
 				| components['schemas']['AddTagsAction']
 				| components['schemas']['RemoveTagsAction']
-				| components['schemas']['SetAttributeAction']
+				| components['schemas']['SetFieldAction']
 				| components['schemas']['ForceReviewAction']
 			)[];
 			/**
@@ -2968,24 +2968,6 @@ export interface components {
 			/** Ended */
 			ended: number;
 		};
-		/** SetAttributeAction */
-		SetAttributeAction: {
-			/**
-			 * @description discriminator enum property added by openapi-typescript
-			 * @enum {string}
-			 */
-			type: 'set_attribute';
-			/**
-			 * Attribute Id
-			 * Format: uuid
-			 */
-			attribute_id: string;
-			/**
-			 * Value
-			 * @description By data type: text, choice and link: string; number: decimal as string; date: `YYYY-MM-DD`; boolean: true/false; amount: `{amount, currency}`.
-			 */
-			value: string | boolean | components['schemas']['MoneyValue'];
-		};
 		/** SetContactAction */
 		SetContactAction: {
 			/**
@@ -3025,6 +3007,24 @@ export interface components {
 			 * @description A drawer the rule's owner may write to (user rules).
 			 */
 			drawer_id: string;
+		};
+		/** SetFieldAction */
+		SetFieldAction: {
+			/**
+			 * @description discriminator enum property added by openapi-typescript
+			 * @enum {string}
+			 */
+			type: 'set_field';
+			/**
+			 * Field Id
+			 * Format: uuid
+			 */
+			field_id: string;
+			/**
+			 * Value
+			 * @description By data type: text, choice and link: string; number: decimal as string; date: `YYYY-MM-DD`; boolean: true/false; amount: `{amount, currency}`.
+			 */
+			value: string | boolean | components['schemas']['MoneyValue'];
 		};
 		/** SetTitleAction */
 		SetTitleAction: {
@@ -3088,10 +3088,10 @@ export interface components {
 		 * @description Pipeline steps in their fixed order.
 		 * @enum {string}
 		 */
-		Step: 'receive' | 'ocr' | 'parse' | 'classify' | 'extract_attributes' | 'apply_rules' | 'file';
+		Step: 'receive' | 'ocr' | 'parse' | 'classify' | 'extract_fields' | 'apply_rules' | 'file';
 		/**
 		 * StepReviewOut
-		 * @description The latest run of classification or attribute extraction by the model.
+		 * @description The latest run of classification or field extraction by the model.
 		 */
 		StepReviewOut: {
 			step: components['schemas']['Step'];
@@ -7690,7 +7690,7 @@ export interface operations {
 			};
 		};
 	};
-	list_attributes_api_v1_attributes_get: {
+	list_fields_api_v1_fields_get: {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -7705,7 +7705,7 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					'application/json': components['schemas']['AttributeOut'][];
+					'application/json': components['schemas']['FieldOut'][];
 				};
 			};
 			/** @description Unauthorized */
@@ -7744,7 +7744,7 @@ export interface operations {
 			};
 		};
 	};
-	create_attribute_api_v1_attributes_post: {
+	create_field_api_v1_fields_post: {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -7753,7 +7753,7 @@ export interface operations {
 		};
 		requestBody: {
 			content: {
-				'application/json': components['schemas']['AttributeCreate'];
+				'application/json': components['schemas']['FieldCreate'];
 			};
 		};
 		responses: {
@@ -7763,7 +7763,7 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					'application/json': components['schemas']['AttributeOut'];
+					'application/json': components['schemas']['FieldOut'];
 				};
 			};
 			/** @description Unauthorized */
@@ -7887,7 +7887,7 @@ export interface operations {
 			};
 		};
 	};
-	get_attribute_api_v1_attributes__id__get: {
+	get_field_api_v1_fields__id__get: {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -7904,7 +7904,7 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					'application/json': components['schemas']['AttributeOut'];
+					'application/json': components['schemas']['FieldOut'];
 				};
 			};
 			/** @description Unauthorized */
@@ -7977,7 +7977,7 @@ export interface operations {
 			};
 		};
 	};
-	delete_attribute_api_v1_attributes__id__delete: {
+	delete_field_api_v1_fields__id__delete: {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -8099,7 +8099,7 @@ export interface operations {
 			};
 		};
 	};
-	change_attribute_api_v1_attributes__id__patch: {
+	change_field_api_v1_fields__id__patch: {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -8110,7 +8110,7 @@ export interface operations {
 		};
 		requestBody: {
 			content: {
-				'application/json': components['schemas']['AttributePatch'];
+				'application/json': components['schemas']['FieldPatch'];
 			};
 		};
 		responses: {
@@ -8120,7 +8120,7 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					'application/json': components['schemas']['AttributeOut'];
+					'application/json': components['schemas']['FieldOut'];
 				};
 			};
 			/** @description Unauthorized */
@@ -10617,7 +10617,7 @@ export interface operations {
 					 * @description Admins only: the active user who owns the document. Default: the caller. The duplicate check, the default drawer and the write access to `drawer_id` are the owner's.
 					 */
 					owner?: string;
-					/** @description Admins only, with `channel=migration`: JSON of the metadata the document comes with (up to 48 KiB), as `ImportedMetadataIn`. Classification and attribute extraction apply it instead of asking the language model; the other steps and the rules run as usual. */
+					/** @description Admins only, with `channel=migration`: JSON of the metadata the document comes with (up to 48 KiB), as `ImportedMetadataIn`. Classification and field extraction apply it instead of asking the language model; the other steps and the rules run as usual. */
 					metadata?: string;
 				};
 			};

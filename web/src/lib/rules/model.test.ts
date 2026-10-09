@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { ApiError } from '#lib/api/problem.ts';
 import { keyAt, saveErrors } from './errors.ts';
 import {
-	ATTRIBUTE_OPERATORS,
-	FIELD_OPERATORS,
+	FIELD_TYPE_OPERATORS,
+	CONDITION_FIELD_OPERATORS,
 	LIMITS,
 	canAddGroup,
-	changeAttribute,
 	changeField,
+	changeConditionField,
 	changeOperator,
 	conditionsOf,
 	fromApi,
@@ -21,7 +21,7 @@ import {
 	type ApiCondition,
 	type ApiDefinition,
 	type ApiGroup,
-	type AttributeInfo,
+	type FieldInfo,
 	type ConditionNode,
 	type GroupNode,
 	type RuleModel
@@ -44,7 +44,7 @@ const failed = (status: number, detail: string) =>
 
 const ID = (n: number) => `01999d5e-${String(n).padStart(4, '0')}-7c1e-b6a3-2f4d5e6f7a8b`;
 
-const ATTRIBUTES: AttributeInfo[] = [
+const FIELDS: FieldInfo[] = [
 	{ id: ID(101), data_type: 'text', choices: [] },
 	{ id: ID(102), data_type: 'link', choices: [] },
 	{ id: ID(103), data_type: 'number', choices: [] },
@@ -61,11 +61,11 @@ function cond(
 	value: ApiCondition['value'] = null,
 	extra: Partial<ApiCondition> = {}
 ): ApiCondition {
-	return { field, op, value, attribute_id: null, case_sensitive: false, ...extra };
+	return { field, op, value, field_id: null, case_sensitive: false, ...extra };
 }
 
 const attr = (n: number, op: ApiCondition['op'], value: ApiCondition['value'] = null) =>
-	cond('attribute', op, value, { attribute_id: ID(n) });
+	cond('field', op, value, { field_id: ID(n) });
 
 const EVERY_CONDITION: ApiCondition[] = [
 	cond('contact', 'is', ID(1)),
@@ -108,8 +108,8 @@ const EVERY_ACTION: ApiDefinition['actions'] = [
 	{ type: 'set_title', template: '{contact} {document_type} {document_date} {filename}' },
 	{ type: 'add_tags', tag_ids: [ID(4), ID(5)] },
 	{ type: 'remove_tags', tag_ids: [ID(6)] },
-	{ type: 'set_attribute', attribute_id: ID(104), value: { amount: '12.50', currency: 'EUR' } },
-	{ type: 'set_attribute', attribute_id: ID(106), value: false },
+	{ type: 'set_field', field_id: ID(104), value: { amount: '12.50', currency: 'EUR' } },
+	{ type: 'set_field', field_id: ID(106), value: false },
 	{ type: 'force_review', reason: 'check the contract term' }
 ];
 
@@ -153,7 +153,7 @@ describe('the rule model', () => {
 		const model = fromApi(many);
 		expect(conditionsOf(model.conditions)).toHaveLength(LIMITS.conditions);
 		expect(toApi(model)).toEqual(many);
-		expect(validate(model, 'user', ATTRIBUTES)).toEqual({});
+		expect(validate(model, 'user', FIELDS)).toEqual({});
 	});
 
 	it('round-trips references to deleted things as they are', () => {
@@ -174,7 +174,7 @@ describe('the rule model', () => {
 	});
 
 	it('mirrors the operator tables of the core', () => {
-		expect(FIELD_OPERATORS).toEqual({
+		expect(CONDITION_FIELD_OPERATORS).toEqual({
 			contact: ['is', 'in', 'present', 'missing'],
 			document_type: ['is', 'in', 'present', 'missing'],
 			tags: ['contains', 'in', 'present', 'missing'],
@@ -182,37 +182,37 @@ describe('the rule model', () => {
 			text: ['contains', 'matches'],
 			document_date: ['is', 'gt', 'lt', 'present', 'missing']
 		});
-		expect(ATTRIBUTE_OPERATORS.boolean).toEqual(['is', 'present', 'missing']);
-		expect(ATTRIBUTE_OPERATORS.choice).toEqual(['is', 'in', 'present', 'missing']);
-		expect(ATTRIBUTE_OPERATORS.amount).toEqual(['is', 'gt', 'lt', 'present', 'missing']);
-		expect(ATTRIBUTE_OPERATORS.link).toEqual(ATTRIBUTE_OPERATORS.text);
+		expect(FIELD_TYPE_OPERATORS.boolean).toEqual(['is', 'present', 'missing']);
+		expect(FIELD_TYPE_OPERATORS.choice).toEqual(['is', 'in', 'present', 'missing']);
+		expect(FIELD_TYPE_OPERATORS.amount).toEqual(['is', 'gt', 'lt', 'present', 'missing']);
+		expect(FIELD_TYPE_OPERATORS.link).toEqual(FIELD_TYPE_OPERATORS.text);
 	});
 });
 
 describe('editing conditions', () => {
-	it('resets operator and value for another field or attribute', () => {
+	it('resets operator and value for another field or field', () => {
 		const condition = newCondition('contact');
 		condition.value = ID(1);
-		changeField(condition, 'text', ATTRIBUTES);
+		changeConditionField(condition, 'text', FIELDS);
 		expect([condition.op, condition.value]).toEqual(['contains', '']);
-		changeField(condition, 'attribute', ATTRIBUTES);
-		changeAttribute(condition, ID(106), ATTRIBUTES);
+		changeConditionField(condition, 'field', FIELDS);
+		changeField(condition, ID(106), FIELDS);
 		expect([condition.op, condition.value]).toEqual(['is', true]);
-		changeAttribute(condition, ID(104), ATTRIBUTES);
+		changeField(condition, ID(104), FIELDS);
 		expect(condition.value).toEqual({ amount: '', currency: 'EUR' });
 	});
 
 	it('keeps a value between one and a list', () => {
 		const condition: ConditionNode = { ...newCondition('contact'), value: ID(1) };
-		changeOperator(condition, 'in', ATTRIBUTES);
+		changeOperator(condition, 'in', FIELDS);
 		expect(condition.value).toEqual([ID(1)]);
-		changeOperator(condition, 'is', ATTRIBUTES);
+		changeOperator(condition, 'is', FIELDS);
 		expect(condition.value).toBe(ID(1));
-		changeOperator(condition, 'present', ATTRIBUTES);
+		changeOperator(condition, 'present', FIELDS);
 		expect(condition.value).toBeNull();
 		const text: ConditionNode = { ...newCondition('text'), value: 'x', caseSensitive: true };
-		changeOperator(text, 'matches', ATTRIBUTES);
-		changeOperator(text, 'contains', ATTRIBUTES);
+		changeOperator(text, 'matches', FIELDS);
+		changeOperator(text, 'contains', FIELDS);
 		expect([text.value, text.caseSensitive]).toEqual(['x', false]);
 	});
 
@@ -235,10 +235,7 @@ describe('editing conditions', () => {
 describe('checking a rule', () => {
 	function problems(model: RuleModel, scope: 'user' | 'global' = 'user') {
 		return Object.fromEntries(
-			Object.entries(validate(model, scope, ATTRIBUTES)).map(([key, problem]) => [
-				key,
-				problem.code
-			])
+			Object.entries(validate(model, scope, FIELDS)).map(([key, problem]) => [key, problem.code])
 		);
 	}
 
@@ -259,7 +256,7 @@ describe('checking a rule', () => {
 		});
 	});
 
-	it('checks values by field and attribute type', () => {
+	it('checks values by field and field type', () => {
 		const model = newModel();
 		model.name = 'x';
 		model.actions = [{ ...newAction('force_review'), reason: 'why' } as never];
@@ -268,27 +265,27 @@ describe('checking a rule', () => {
 			[{ field: 'text', op: 'matches', value: 'x'.repeat(201) }, 'text_long'],
 			[{ field: 'document_date', op: 'gt', value: '31.12.2026' }, 'date'],
 			[{ field: 'channel', op: 'in', value: [] }, 'list'],
-			[{ field: 'attribute', op: 'is', value: 'x', attributeId: null }, 'attribute'],
-			[{ field: 'attribute', op: 'gt', value: 'seven', attributeId: ID(103) }, 'number'],
+			[{ field: 'field', op: 'is', value: 'x', fieldId: null }, 'field'],
+			[{ field: 'field', op: 'gt', value: 'seven', fieldId: ID(103) }, 'number'],
 			[
 				{
-					field: 'attribute',
+					field: 'field',
 					op: 'is',
 					value: { amount: '1', currency: 'eur' },
-					attributeId: ID(104)
+					fieldId: ID(104)
 				},
 				'amount'
 			],
-			[{ field: 'attribute', op: 'contains', value: 'x', attributeId: ID(103) }, 'operator'],
-			[{ field: 'attribute', op: 'in', value: ['monthly'], attributeId: ID(107) }, undefined],
-			[{ field: 'attribute', op: 'missing', value: null, attributeId: ID(999) }, undefined],
+			[{ field: 'field', op: 'contains', value: 'x', fieldId: ID(103) }, 'operator'],
+			[{ field: 'field', op: 'in', value: ['monthly'], fieldId: ID(107) }, undefined],
+			[{ field: 'field', op: 'missing', value: null, fieldId: ID(999) }, undefined],
 			// What the API accepts as well: other date and number spellings, long text values.
 			[{ field: 'document_date', op: 'gt', value: '20240115' }, undefined],
 			[{ field: 'document_date', op: 'gt', value: '2024-W03-1' }, undefined],
-			[{ field: 'attribute', op: 'gt', value: '1e3', attributeId: ID(103) }, undefined],
-			[{ field: 'attribute', op: 'gt', value: '1_000.5', attributeId: ID(103) }, undefined],
-			[{ field: 'attribute', op: 'gt', value: 'inf', attributeId: ID(103) }, 'number'],
-			[{ field: 'attribute', op: 'is', value: 'x'.repeat(600), attributeId: ID(101) }, undefined]
+			[{ field: 'field', op: 'gt', value: '1e3', fieldId: ID(103) }, undefined],
+			[{ field: 'field', op: 'gt', value: '1_000.5', fieldId: ID(103) }, undefined],
+			[{ field: 'field', op: 'gt', value: 'inf', fieldId: ID(103) }, 'number'],
+			[{ field: 'field', op: 'is', value: 'x'.repeat(600), fieldId: ID(101) }, undefined]
 		];
 		for (const [change, code] of cases) {
 			const condition = { ...newCondition(), ...change } as ConditionNode;

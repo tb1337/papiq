@@ -4,16 +4,16 @@ import logging
 
 import pytest
 
-from papiq.core.domain.attributes import AttributeType
 from papiq.core.domain.documents import DocumentChanges
 from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import OpenFieldsError
+from papiq.core.domain.fields import FieldType
 from papiq.core.domain.pipeline import Lane, Outcome, ProcessingStatus, Step
 from papiq.core.domain.rules import (
     ForceReview,
-    SetAttribute,
     SetContact,
     SetDrawer,
+    SetField,
     SetTitle,
     Trigger,
 )
@@ -42,7 +42,7 @@ async def test_rules_act_on_arrival_and_the_log_names_rule_and_version(world: Wo
     owner, stranger = await world.user(), await world.user()
     acme = await r.contact("ACME")
     tax, checked, foreign = await r.tag("tax"), await r.tag("checked"), await r.tag("foreign")
-    note = await world.master_data.create_attribute(r.admin.id, "Note", AttributeType.TEXT)
+    note = await world.master_data.create_field(r.admin.id, "Note", FieldType.TEXT)
     household = await world.drawers.create(owner.id, "Household")
     rule = await r.user_rule(owner, definition("Draft", channel_api(), SetTitle("Draft")))
     rule = await r.rules.change(
@@ -54,7 +54,7 @@ async def test_rules_act_on_arrival_and_the_log_names_rule_and_version(world: Wo
             SetContact(acme.id),
             SetTitle("{contact} {filename}"),
             add_tags(tax.id),
-            SetAttribute(note.id, "from a rule"),
+            SetField(note.id, "from a rule"),
             SetDrawer(household.id),
         ),
     )
@@ -67,7 +67,7 @@ async def test_rules_act_on_arrival_and_the_log_names_rule_and_version(world: Wo
     assert document.lane is Lane.GREEN
     assert (document.contact_id, document.title) == (acme.id, "ACME Bill 2026")
     assert document.tag_ids == {tax.id, checked.id}
-    assert document.attributes == {note.id: "from a rule"}
+    assert document.fields == {note.id: "from a rule"}
     assert document.drawer_id == household.id
     (entry,) = await r.rule_entries(document, RULES)
     assert entry.result.outcome is Outcome.OK
@@ -84,7 +84,7 @@ async def test_rules_act_on_arrival_and_the_log_names_rule_and_version(world: Wo
         "contact",
         "title",
         "tags",
-        f"attribute:{note.id}",
+        f"field:{note.id}",
         "drawer",
     }
 

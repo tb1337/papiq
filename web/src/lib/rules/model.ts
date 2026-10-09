@@ -14,7 +14,7 @@ export type Operator = Schemas['Operator'];
 export type Trigger = Schemas['Trigger'];
 export type Channel = Schemas['Channel'];
 export type Scope = Schemas['RuleScope'];
-export type AttributeType = Schemas['AttributeType'];
+export type FieldType = Schemas['FieldType'];
 export type Money = Schemas['MoneyValue'];
 export type Value = string | boolean | Money | string[] | null;
 export type ApiCondition = Schemas['ConditionSchema'];
@@ -32,7 +32,7 @@ export interface ConditionNode {
 	field: ConditionField;
 	op: Operator;
 	value: Value;
-	attributeId: string | null;
+	fieldId: string | null;
 	caseSensitive: boolean;
 }
 
@@ -55,10 +55,10 @@ export interface RuleModel {
 	actions: ActionNode[];
 }
 
-/** What the builder needs to know about an attribute. */
-export interface AttributeInfo {
+/** What the builder needs to know about a field. */
+export interface FieldInfo {
 	id: string;
-	data_type: AttributeType;
+	data_type: FieldType;
 	choices: readonly string[];
 }
 
@@ -77,14 +77,14 @@ export const LIMITS = {
 export const DEFAULT_PRIORITY = 100;
 export const TRIGGERS: readonly Trigger[] = ['ingest', 'change'];
 export const CHANNELS: readonly Channel[] = ['web', 'api', 'migration'];
-export const FIELDS: readonly ConditionField[] = [
+export const CONDITION_FIELDS: readonly ConditionField[] = [
 	'contact',
 	'document_type',
 	'tags',
 	'channel',
 	'text',
 	'document_date',
-	'attribute'
+	'field'
 ];
 export const TITLE_PLACEHOLDERS = [
 	'contact',
@@ -107,7 +107,10 @@ const REFERENCE: readonly Operator[] = ['is', 'in', 'present', 'missing'];
 const ORDERED: readonly Operator[] = ['is', 'gt', 'lt', 'present', 'missing'];
 const TEXTUAL: readonly Operator[] = ['is', 'in', 'contains', 'matches', 'present', 'missing'];
 
-export const FIELD_OPERATORS: Record<Exclude<ConditionField, 'attribute'>, readonly Operator[]> = {
+export const CONDITION_FIELD_OPERATORS: Record<
+	Exclude<ConditionField, 'field'>,
+	readonly Operator[]
+> = {
 	contact: REFERENCE,
 	document_type: REFERENCE,
 	tags: ['contains', 'in', 'present', 'missing'],
@@ -116,7 +119,7 @@ export const FIELD_OPERATORS: Record<Exclude<ConditionField, 'attribute'>, reado
 	document_date: ORDERED
 };
 
-export const ATTRIBUTE_OPERATORS: Record<AttributeType, readonly Operator[]> = {
+export const FIELD_TYPE_OPERATORS: Record<FieldType, readonly Operator[]> = {
 	text: TEXTUAL,
 	link: TEXTUAL,
 	number: ORDERED,
@@ -133,14 +136,14 @@ export const ACTION_TYPES: readonly ActionType[] = [
 	'set_title',
 	'add_tags',
 	'remove_tags',
-	'set_attribute',
+	'set_field',
 	'force_review'
 ];
 /** What a global rule may do: nothing that changes who sees a document. */
 export const GLOBAL_ACTIONS: readonly ActionType[] = [
 	'add_tags',
 	'remove_tags',
-	'set_attribute',
+	'set_field',
 	'force_review'
 ];
 
@@ -178,7 +181,7 @@ function conditionFromApi(condition: ApiCondition): ConditionNode {
 		field: condition.field,
 		op: condition.op,
 		value: clone(condition.value ?? null),
-		attributeId: condition.attribute_id ?? null,
+		fieldId: condition.field_id ?? null,
 		caseSensitive: condition.case_sensitive ?? false
 	};
 }
@@ -208,7 +211,7 @@ function conditionToApi(condition: ConditionNode): ApiCondition {
 		field: condition.field,
 		op: condition.op,
 		value: clone(condition.value),
-		attribute_id: condition.attributeId,
+		field_id: condition.fieldId,
 		case_sensitive: condition.caseSensitive
 	};
 }
@@ -246,14 +249,14 @@ export function newGroup(mode: 'all' | 'any' = 'all', items: RuleNode[] = []): G
 }
 
 export function newCondition(field: ConditionField = 'contact'): ConditionNode {
-	const op = (field === 'attribute' ? ALL_OPERATORS : FIELD_OPERATORS[field])[0];
+	const op = (field === 'field' ? ALL_OPERATORS : CONDITION_FIELD_OPERATORS[field])[0];
 	return {
 		kind: 'condition',
 		key: nextKey(),
 		field,
 		op,
 		value: defaultValue(field, op, null),
-		attributeId: null,
+		fieldId: null,
 		caseSensitive: false
 	};
 }
@@ -272,8 +275,8 @@ export function newAction(type: ActionType): ActionNode {
 		case 'add_tags':
 		case 'remove_tags':
 			return { key, type, tag_ids: [] };
-		case 'set_attribute':
-			return { key, type, attribute_id: '', value: '' };
+		case 'set_field':
+			return { key, type, field_id: '', value: '' };
 		case 'force_review':
 			return { key, type, reason: '' };
 	}
@@ -284,71 +287,71 @@ export function takesNoValue(op: Operator): boolean {
 	return op === 'present' || op === 'missing';
 }
 
-/** The operators for a condition; for an attribute by its data type. An unknown attribute keeps
+/** The operators for a condition; for a field by its data type. An unknown field keeps
  * the operator it has. */
 export function operatorsFor(
-	condition: Pick<ConditionNode, 'field' | 'op' | 'attributeId'>,
-	attributes: readonly AttributeInfo[]
+	condition: Pick<ConditionNode, 'field' | 'op' | 'fieldId'>,
+	fields: readonly FieldInfo[]
 ): readonly Operator[] {
-	if (condition.field !== 'attribute') return FIELD_OPERATORS[condition.field];
-	if (condition.attributeId === null) return ALL_OPERATORS;
-	const attribute = attributes.find((entry) => entry.id === condition.attributeId);
-	return attribute ? ATTRIBUTE_OPERATORS[attribute.data_type] : [condition.op];
+	if (condition.field !== 'field') return CONDITION_FIELD_OPERATORS[condition.field];
+	if (condition.fieldId === null) return ALL_OPERATORS;
+	const field = fields.find((entry) => entry.id === condition.fieldId);
+	return field ? FIELD_TYPE_OPERATORS[field.data_type] : [condition.op];
 }
 
 /** The empty value for a field and operator. */
 export function defaultValue(
-	field: ConditionField,
+	conditionField: ConditionField,
 	op: Operator,
-	attribute: AttributeInfo | null
+	field: FieldInfo | null
 ): Value {
 	if (takesNoValue(op)) return null;
 	if (op === 'in') return [];
-	if (field === 'attribute' && attribute && op !== 'contains' && op !== 'matches') {
-		if (attribute.data_type === 'boolean') return true;
-		if (attribute.data_type === 'amount') return { amount: '', currency: 'EUR' };
+	if (conditionField === 'field' && field && op !== 'contains' && op !== 'matches') {
+		if (field.data_type === 'boolean') return true;
+		if (field.data_type === 'amount') return { amount: '', currency: 'EUR' };
 	}
 	return '';
 }
 
-/** A new field: the first operator for it and an empty value. */
-export function changeField(
+/** A new condition field: the first operator for it and an empty value. */
+export function changeConditionField(
 	condition: ConditionNode,
 	field: ConditionField,
-	attributes: readonly AttributeInfo[]
+	fields: readonly FieldInfo[]
 ): void {
 	condition.field = field;
-	condition.attributeId = null;
+	condition.fieldId = null;
 	condition.caseSensitive = false;
-	condition.op = operatorsFor(condition, attributes)[0];
+	condition.op = operatorsFor(condition, fields)[0];
 	condition.value = defaultValue(field, condition.op, null);
 }
 
-/** Another attribute: its first fitting operator unless the current one fits, empty value. */
-export function changeAttribute(
+/** Another field: its first fitting operator unless the current one fits, empty value. */
+export function changeField(
 	condition: ConditionNode,
-	attributeId: string,
-	attributes: readonly AttributeInfo[]
+	fieldId: string,
+	fields: readonly FieldInfo[]
 ): void {
-	condition.attributeId = attributeId;
-	const operators = operatorsFor(condition, attributes);
+	condition.fieldId = fieldId;
+	const operators = operatorsFor(condition, fields);
 	if (!operators.includes(condition.op)) condition.op = operators[0];
 	if (condition.op !== 'matches') condition.caseSensitive = false;
-	const attribute = attributes.find((entry) => entry.id === attributeId) ?? null;
-	condition.value = defaultValue('attribute', condition.op, attribute);
+	const field = fields.find((entry) => entry.id === fieldId) ?? null;
+	condition.value = defaultValue('field', condition.op, field);
 }
 
 /** Another operator; a value that still fits stays (one value into a list and back). */
 export function changeOperator(
 	condition: ConditionNode,
 	op: Operator,
-	attributes: readonly AttributeInfo[]
+	fields: readonly FieldInfo[]
 ): void {
 	const before = condition.value;
-	const attribute = attributes.find((entry) => entry.id === condition.attributeId) ?? null;
+	const field = fields.find((entry) => entry.id === condition.fieldId) ?? null;
 	condition.op = op;
 	if (op !== 'matches') condition.caseSensitive = false;
-	const empty = defaultValue(condition.field, op, attribute);
+	const empty = defaultValue(condition.field, op, field);
 	if (empty === null) {
 		condition.value = null;
 	} else if (Array.isArray(empty)) {
@@ -409,7 +412,7 @@ export function move<T>(items: T[], index: number, by: -1 | 1): void {
 
 /** The field an action sets alone; two such actions contradict each other. */
 export function singleKey(action: ApiAction): string | null {
-	if (action.type === 'set_attribute') return `attribute:${action.attribute_id}`;
+	if (action.type === 'set_field') return `field:${action.field_id}`;
 	if (action.type === 'add_tags' || action.type === 'remove_tags') return null;
 	if (action.type === 'force_review') return null;
 	return action.type;
@@ -422,7 +425,7 @@ export function actionTypesFor(scope: Scope): readonly ActionType[] {
 /** The ids a condition or action refers to. */
 export function referencedIds(node: ConditionNode | ActionNode): string[] {
 	if ('kind' in node && node.kind === 'condition') {
-		const ids: string[] = node.attributeId ? [node.attributeId] : [];
+		const ids: string[] = node.fieldId ? [node.fieldId] : [];
 		if (node.field === 'contact' || node.field === 'document_type' || node.field === 'tags') {
 			const values = Array.isArray(node.value) ? node.value : [node.value];
 			ids.push(...values.filter((value): value is string => typeof value === 'string'));
@@ -440,8 +443,8 @@ export function referencedIds(node: ConditionNode | ActionNode): string[] {
 		case 'add_tags':
 		case 'remove_tags':
 			return [...action.tag_ids];
-		case 'set_attribute':
-			return [action.attribute_id];
+		case 'set_field':
+			return [action.field_id];
 		default:
 			return [];
 	}
@@ -462,7 +465,7 @@ export type ProblemCode =
 	| 'date'
 	| 'number'
 	| 'amount'
-	| 'attribute'
+	| 'field'
 	| 'operator'
 	| 'group_empty'
 	| 'conditions_many'
@@ -483,7 +486,7 @@ export interface Problem {
 export function validate(
 	model: RuleModel,
 	scope: Scope,
-	attributes: readonly AttributeInfo[]
+	fields: readonly FieldInfo[]
 ): Record<string, Problem> {
 	const problems: Record<string, Problem> = {};
 	const name = model.name.trim();
@@ -498,7 +501,7 @@ export function validate(
 		problems.priority = { code: 'priority' };
 	}
 	if (model.triggers.length === 0) problems.triggers = { code: 'triggers' };
-	checkGroup(model.conditions, problems, attributes);
+	checkGroup(model.conditions, problems, fields);
 	if (depthOf(model.conditions) > LIMITS.depth) {
 		problems[model.conditions.key] = { code: 'depth', params: { max: LIMITS.depth } };
 	}
@@ -514,7 +517,7 @@ export function validate(
 	}
 	const seen = new Set<string>();
 	for (const action of model.actions) {
-		const problem = checkAction(action, scope, attributes);
+		const problem = checkAction(action, scope, fields);
 		if (problem) problems[action.key] = problem;
 		const single = singleKey(action);
 		if (single !== null && seen.has(single)) problems[action.key] ??= { code: 'twice' };
@@ -526,26 +529,23 @@ export function validate(
 function checkGroup(
 	group: GroupNode,
 	problems: Record<string, Problem>,
-	attributes: readonly AttributeInfo[]
+	fields: readonly FieldInfo[]
 ): void {
 	if (group.items.length === 0) problems[group.key] = { code: 'group_empty' };
 	for (const item of group.items) {
 		if (item.kind === 'group') {
-			checkGroup(item, problems, attributes);
+			checkGroup(item, problems, fields);
 		} else {
-			const problem = checkCondition(item, attributes);
+			const problem = checkCondition(item, fields);
 			if (problem) problems[item.key] = problem;
 		}
 	}
 }
 
-function checkCondition(
-	condition: ConditionNode,
-	attributes: readonly AttributeInfo[]
-): Problem | null {
-	if (condition.field === 'attribute' && !condition.attributeId) return { code: 'attribute' };
-	const attribute = attributes.find((entry) => entry.id === condition.attributeId) ?? null;
-	if (attribute && !ATTRIBUTE_OPERATORS[attribute.data_type].includes(condition.op)) {
+function checkCondition(condition: ConditionNode, fields: readonly FieldInfo[]): Problem | null {
+	if (condition.field === 'field' && !condition.fieldId) return { code: 'field' };
+	const field = fields.find((entry) => entry.id === condition.fieldId) ?? null;
+	if (field && !FIELD_TYPE_OPERATORS[field.data_type].includes(condition.op)) {
 		return { code: 'operator' };
 	}
 	if (takesNoValue(condition.op)) return null;
@@ -554,7 +554,7 @@ function checkCondition(
 	if (values.length === 0) return { code: 'list' };
 	if (values.length > LIMITS.list) return { code: 'list_long', params: { max: LIMITS.list } };
 	for (const value of values) {
-		const problem = checkValue(condition, attribute, value);
+		const problem = checkValue(condition, field, value);
 		if (problem) return problem;
 	}
 	return null;
@@ -562,11 +562,11 @@ function checkCondition(
 
 function checkValue(
 	condition: ConditionNode,
-	attribute: AttributeInfo | null,
+	field: FieldInfo | null,
 	value: Value
 ): Problem | null {
 	const textual = condition.op === 'contains' || condition.op === 'matches';
-	if (condition.field === 'text' || (condition.field === 'attribute' && textual)) {
+	if (condition.field === 'text' || (condition.field === 'field' && textual)) {
 		return checkText(value, condition.op === 'matches' ? LIMITS.pattern : LIMITS.text);
 	}
 	switch (condition.field) {
@@ -577,8 +577,8 @@ function checkValue(
 			return typeof value === 'string' && value !== '' ? null : { code: 'choose' };
 		case 'document_date':
 			return isDate(value) ? null : { code: 'date' };
-		case 'attribute':
-			return attribute ? checkAttributeValue(attribute, value) : null;
+		case 'field':
+			return field ? checkFieldValue(field, value) : null;
 		default:
 			return null;
 	}
@@ -589,8 +589,8 @@ function checkText(value: Value, max: number): Problem | null {
 	return value.length > max ? { code: 'text_long', params: { max } } : null;
 }
 
-function checkAttributeValue(attribute: AttributeInfo, value: Value): Problem | null {
-	switch (attribute.data_type) {
+function checkFieldValue(field: FieldInfo, value: Value): Problem | null {
+	switch (field.data_type) {
 		case 'boolean':
 			return typeof value === 'boolean' ? null : { code: 'value' };
 		case 'amount':
@@ -630,7 +630,7 @@ function isDate(value: Value): boolean {
 function checkAction(
 	action: ActionNode,
 	scope: Scope,
-	attributes: readonly AttributeInfo[]
+	fields: readonly FieldInfo[]
 ): Problem | null {
 	if (!actionTypesFor(scope).includes(action.type)) return { code: 'scope' };
 	switch (action.type) {
@@ -648,10 +648,10 @@ function checkAction(
 			return action.tag_ids.length > LIMITS.list
 				? { code: 'list_long', params: { max: LIMITS.list } }
 				: null;
-		case 'set_attribute': {
-			if (!action.attribute_id) return { code: 'attribute' };
-			const attribute = attributes.find((entry) => entry.id === action.attribute_id);
-			return attribute ? checkAttributeValue(attribute, action.value) : null;
+		case 'set_field': {
+			if (!action.field_id) return { code: 'field' };
+			const field = fields.find((entry) => entry.id === action.field_id);
+			return field ? checkFieldValue(field, action.value) : null;
 		}
 		case 'force_review':
 			return checkText(action.reason, LIMITS.text);

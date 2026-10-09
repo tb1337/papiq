@@ -1,7 +1,7 @@
 <script lang="ts">
 	import X from '@lucide/svelte/icons/x';
 	import type { components } from '#lib/api/schema.ts';
-	import AttributeField from '#lib/components/AttributeField.svelte';
+	import FieldValueInput from '#lib/components/FieldValueInput.svelte';
 	import NativeSelect from '#lib/components/NativeSelect.svelte';
 	import * as Field from '#lib/components/ui/field/index.ts';
 	import { Input } from '#lib/components/ui/input/index.ts';
@@ -9,7 +9,7 @@
 	import { formatNumber } from '#lib/i18n.ts';
 	import type { Lookup } from '#lib/masterdata.svelte.ts';
 	import { m } from '#lib/paraglide/messages.js';
-	import { attributeId, type ReviewValue } from '#lib/review.ts';
+	import { fieldId, type ReviewValue } from '#lib/review.ts';
 
 	// One open field of a review: what the model proposed and how sure the checks are, and the
 	// input for the decision. An empty input means "no value".
@@ -25,9 +25,7 @@
 		id: string;
 	} = $props();
 
-	const attribute = $derived(
-		lookup.attributes.find((entry) => entry.id === attributeId(check.field))
-	);
+	const field = $derived(lookup.fields.find((entry) => entry.id === fieldId(check.field)));
 	const options = (list: readonly { id: string; name: string }[]) => [
 		{ value: '', label: m.value_unset() },
 		...list.map((entry) => ({ value: entry.id, label: entry.name }))
@@ -60,8 +58,8 @@
 		{/if}
 	</dl>
 
-	{#if attribute}
-		<AttributeField {attribute} bind:value id="{id}-input" />
+	{#if field}
+		<FieldValueInput {field} bind:value id="{id}-input" />
 	{:else if check.field === 'contact' && typeof value === 'string'}
 		<NativeSelect
 			id="{id}-input"

@@ -325,7 +325,7 @@ class RuleApplicationService:
         if run is None or not run.plan.effects:
             return "unchanged"
         now = self._clock.now()
-        definitions = {item.id: item for item in await uow.attributes.list_all()}
+        definitions = {item.id: item for item in await uow.fields.list_all()}
         problem = apply_plan(document, run.plan, definitions, now)
         if problem is not None:
             return problem
@@ -365,7 +365,7 @@ class RuleApplicationService:
     ) -> RuleRun | None:
         """The rule on the document; None if it does not hold."""
         owner = await uow.users.get(document.owner_id)
-        definitions = {item.id: item for item in await uow.attributes.list_all()}
+        definitions = {item.id: item for item in await uow.fields.list_all()}
         run = await run_rules(
             uow,
             self._matcher,

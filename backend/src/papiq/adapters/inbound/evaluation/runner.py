@@ -1,7 +1,7 @@
 """Running the evaluation set through the pipeline's classification and extraction steps.
 
 Each case becomes a document of one owner, whose text is stored as if the parse step had
-produced it. OCR, parsing, rules and filing pass through; classification and attribute
+produced it. OCR, parsing, rules and filing pass through; classification and field
 extraction are the same steps as in the pipeline, with the given model.
 """
 
@@ -12,11 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from papiq.adapters.inbound.evaluation.cases import Case, EvaluationSet, MasterDataSpec
-from papiq.core.domain.attributes import AttributeDefinition
-from papiq.core.domain.classification import FieldCheck, attribute_field, attribute_to_json
+from papiq.core.domain.classification import FieldCheck, field_key, field_to_json
 from papiq.core.domain.documents import Document
 from papiq.core.domain.drawers import Drawer
-from papiq.core.domain.ids import AttributeId, ContactId, DocumentTypeId, TagId
+from papiq.core.domain.fields import FieldDefinition
+from papiq.core.domain.ids import ContactId, DocumentTypeId, FieldId, TagId
 from papiq.core.domain.json_value import JsonValue
 from papiq.core.domain.master_data import Contact, DocumentType, Tag
 from papiq.core.domain.pipeline import PIPELINE, Lane, ProcessingStatus, Step, StepRun
@@ -25,7 +25,7 @@ from papiq.core.ports import Clock, LanguageModel, ObjectStore, UnitOfWorkFactor
 from papiq.core.services.classification.steps import (
     ClassificationPolicy,
     ClassifyStep,
-    ExtractAttributesStep,
+    ExtractFieldsStep,
 )
 from papiq.core.services.inbox import field_checks, open_steps
 from papiq.core.services.objects import markdown_key
@@ -57,7 +57,7 @@ class MasterData:
     contacts: dict[ContactId, str]
     document_types: dict[DocumentTypeId, str]
     tags: dict[TagId, str]
-    attributes: dict[AttributeId, AttributeDefinition]
+    fields: dict[FieldId, FieldDefinition]
 
 
 @dataclass(frozen=True)
@@ -71,8 +71,8 @@ class CaseResult:
     document_type: str | None
     tags: frozenset[str]
     document_date: str | None
-    attributes: dict[str, JsonValue]
-    checks: dict[str, FieldCheck]  # by field; attribute fields by attribute name
+    fields: dict[str, JsonValue]
+    checks: dict[str, FieldCheck]  # by field; fields by their name
     proposed: dict[str, JsonValue]  # by field as `checks`: the value, else the suggestion, by name
     reasons: dict[Step, str]  # steps that are uncertain or failed
     seconds: float
@@ -116,8 +116,8 @@ async def _seed(environment: Environment, spec: MasterDataSpec) -> MasterData:
     types = [DocumentType.create(name=name, now=now) for name in spec.document_types]
     tags = [Tag.create(name=name, now=now) for name in spec.tags]
     type_ids = {item.name: item.id for item in types}
-    attributes = [
-        AttributeDefinition.create(
+    fields = [
+        FieldDefinition.create(
             name=item.name,
             data_type=item.data_type,
             now=now,
@@ -128,7 +128,7 @@ async def _seed(environment: Environment, spec: MasterDataSpec) -> MasterData:
             ),
             choices=item.choices,
         )
-        for item in spec.attributes
+        for item in spec.fields
     ]
     async with environment.uow() as uow:
         for contact in contacts:
@@ -137,14 +137,14 @@ async def _seed(environment: Environment, spec: MasterDataSpec) -> MasterData:
             await uow.document_types.add(document_type)
         for tag in tags:
             await uow.tags.add(tag)
-        for attribute in attributes:
-            await uow.attributes.add(attribute)
+        for field in fields:
+            await uow.fields.add(field)
         await uow.commit()
     return MasterData(
         contacts={item.id: item.name for item in contacts},
         document_types={item.id: item.name for item in types},
         tags={item.id: item.name for item in tags},
-        attributes={item.id: item for item in attributes},
+        fields={item.id: item for item in fields},
     )
 
 
@@ -159,7 +159,7 @@ async def _run(
     uow, store, clock = environment.uow, environment.store, environment.clock
     executors: dict[Step, StepExecutor] = {step: PlaceholderStep() for step in PIPELINE[1:]}
     executors[Step.CLASSIFY] = ClassifyStep(uow, store, model, clock, policy)
-    executors[Step.EXTRACT_ATTRIBUTES] = ExtractAttributesStep(uow, store, model, clock, policy)
+    executors[Step.EXTRACT_FIELDS] = ExtractFieldsStep(uow, store, model, clock, policy)
     # No automatic retries: a model that cannot be reached ends the case red at once.
     pipeline = PipelineService(
         uow,
@@ -204,7 +204,7 @@ def _result(
     truncated = any(
         entry.result.input.get("truncated") is True
         for entry in log
-        if entry.step in (Step.CLASSIFY, Step.EXTRACT_ATTRIBUTES)
+        if entry.step in (Step.CLASSIFY, Step.EXTRACT_FIELDS)
     )
     return CaseResult(
         case=case,
@@ -218,10 +218,7 @@ def _result(
         ),
         tags=frozenset(master.tags[tag] for tag in after.tag_ids),
         document_date=None if after.document_date is None else after.document_date.isoformat(),
-        attributes={
-            master.attributes[id].name: attribute_to_json(value)
-            for id, value in after.attributes.items()
-        },
+        fields={master.fields[id].name: field_to_json(value) for id, value in after.fields.items()},
         checks=checks,
         proposed={label: _resolved(check, master) for label, check in checks.items()},
         reasons={item.step: item.reason or "" for item in open_steps(after, log)},
@@ -251,8 +248,8 @@ def _resolved(check: FieldCheck, master: MasterData) -> JsonValue:
 
 
 def _field_label(field: str, master: MasterData) -> str:
-    for id, definition in master.attributes.items():
-        if field == attribute_field(id):
+    for id, definition in master.fields.items():
+        if field == field_key(id):
             return definition.name
     return field
 
@@ -291,11 +288,9 @@ def _violations(
         "document_date", None if after.document_date is None else after.document_date.isoformat()
     ):
         problems.append("document date changed without a passed check")
-    for id, value in after.attributes.items():
-        if before.attributes.get(id) != value and not backed(
-            attribute_field(id), attribute_to_json(value)
-        ):
-            problems.append(f"attribute {id} changed without a passed check")
+    for id, value in after.fields.items():
+        if before.fields.get(id) != value and not backed(field_key(id), field_to_json(value)):
+            problems.append(f"field {id} changed without a passed check")
     return tuple(problems)
 
 

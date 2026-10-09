@@ -44,9 +44,9 @@
 		];
 	}
 
-	const attribute = $derived(
-		action.type === 'set_attribute'
-			? (lookup.attributes.find((entry) => entry.id === action.attribute_id) ?? null)
+	const field = $derived(
+		action.type === 'set_field'
+			? (lookup.fields.find((entry) => entry.id === action.field_id) ?? null)
 			: null
 	);
 
@@ -118,28 +118,28 @@
 						if (action.type === 'add_tags' || action.type === 'remove_tags') action.tag_ids = next;
 					}}
 				/>
-			{:else if action.type === 'set_attribute'}
+			{:else if action.type === 'set_field'}
 				<NativeSelect
-					aria-label={m.rule_condition_attribute()}
-					aria-invalid={(invalid && !action.attribute_id) || undefined}
-					value={action.attribute_id}
-					options={options(lookup.attributes, action.attribute_id)}
+					aria-label={m.rule_condition_field()}
+					aria-invalid={(invalid && !action.field_id) || undefined}
+					value={action.field_id}
+					options={options(lookup.fields, action.field_id)}
 					onchange={(id) => {
-						if (action.type !== 'set_attribute') return;
-						const chosen = lookup.attributes.find((entry) => entry.id === id) ?? null;
-						action.attribute_id = id;
-						action.value = (defaultValue('attribute', 'is', chosen) ?? '') as typeof action.value;
+						if (action.type !== 'set_field') return;
+						const chosen = lookup.fields.find((entry) => entry.id === id) ?? null;
+						action.field_id = id;
+						action.value = (defaultValue('field', 'is', chosen) ?? '') as typeof action.value;
 					}}
 					class="h-10"
 				/>
-				{#if action.attribute_id}
+				{#if action.field_id}
 					<ValueInput
-						{attribute}
+						{field}
 						{invalid}
 						label={m.rule_condition_value()}
 						value={action.value}
 						onchange={(next) => {
-							if (action.type === 'set_attribute') action.value = next as typeof action.value;
+							if (action.type === 'set_field') action.value = next as typeof action.value;
 						}}
 					/>
 				{/if}

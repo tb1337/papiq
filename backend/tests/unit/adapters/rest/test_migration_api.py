@@ -30,7 +30,7 @@ def imported_steps(api: Api) -> None:
     uow = api.container.unit_of_work
     executors = api.services.pipeline._executors
     executors[Step.CLASSIFY] = ImportedClassifyStep(uow, PlaceholderStep())
-    executors[Step.EXTRACT_ATTRIBUTES] = ImportedExtractStep(uow, PlaceholderStep())
+    executors[Step.EXTRACT_FIELDS] = ImportedExtractStep(uow, PlaceholderStep())
 
 
 def file(name: str = "scan.pdf") -> dict[str, tuple[str, bytes, str]]:
@@ -55,8 +55,8 @@ async def master_data(api: Api, admin: User) -> dict[str, Any]:
         "contact": await post(api, "/contacts", {"name": "ACME Energy"}, a),
         "type": await post(api, "/document-types", {"name": "Invoice"}, a),
         "tag": await post(api, "/tags", {"name": "tax"}, a),
-        "amount": await post(api, "/attributes", {"name": "Amount", "data_type": "amount"}, a),
-        "note": await post(api, "/attributes", {"name": "Notes", "data_type": "text"}, a),
+        "amount": await post(api, "/fields", {"name": "Amount", "data_type": "amount"}, a),
+        "note": await post(api, "/fields", {"name": "Notes", "data_type": "text"}, a),
     }
 
 
@@ -67,7 +67,7 @@ def metadata(data: dict[str, Any], **changes: Any) -> str:
         "document_type_id": data["type"]["id"],
         "tag_ids": [data["tag"]["id"]],
         "document_date": "2026-03-31",
-        "attributes": {
+        "fields": {
             data["amount"]["id"]: {"amount": "84.20", "currency": "EUR"},
             data["note"]["id"]: "paid by transfer",
         },
@@ -96,7 +96,7 @@ async def test_an_admin_uploads_for_another_owner_with_the_metadata(api: Api) ->
     assert document["document_type_id"] == data["type"]["id"]
     assert document["tag_ids"] == [data["tag"]["id"]]
     assert document["document_date"] == "2026-03-31"
-    assert document["attributes"] == {
+    assert document["fields"] == {
         data["amount"]["id"]: {"amount": "84.20", "currency": "EUR"},
         data["note"]["id"]: "paid by transfer",
     }
@@ -109,12 +109,12 @@ async def test_an_admin_uploads_for_another_owner_with_the_metadata(api: Api) ->
     assert receive["output"]["uploaded_by"] == str(admin.id)
     assert receive["output"]["imported"]["title"] == "Electricity March"
     applied = {
-        entry["step"]: entry for entry in log if entry["step"] in ("classify", "extract_attributes")
+        entry["step"]: entry for entry in log if entry["step"] in ("classify", "extract_fields")
     }
     assert applied["classify"]["outcome"] == "ok"
     assert applied["classify"]["reason"] == "taken over from the source system"
     assert applied["classify"]["model_version"] == "imported"
-    assert applied["extract_attributes"]["model_version"] == "imported"
+    assert applied["extract_fields"]["model_version"] == "imported"
     # The admin does not own it.
     other = await api.client.get(f"{DOCUMENTS}?limit=50", headers=auth(admin))
     assert other.json()["items"] == []
@@ -149,7 +149,7 @@ async def test_a_red_document_keeps_the_metadata_and_gets_them_when_retried(api:
     url = response.json()["status_url"]
     document = (await api.client.get(url, headers=auth(owner))).json()
     assert (document["lane"], document["processing"]["current_step"]) == ("red", "ocr")
-    assert (document["title"], document["contact_id"], document["attributes"]) == (
+    assert (document["title"], document["contact_id"], document["fields"]) == (
         "scan",
         None,
         {},
@@ -167,7 +167,7 @@ async def test_a_red_document_keeps_the_metadata_and_gets_them_when_retried(api:
     assert document["document_type_id"] == data["type"]["id"]
     assert document["tag_ids"] == [data["tag"]["id"]]
     assert document["document_date"] == "2026-03-31"
-    assert document["attributes"][data["amount"]["id"]] == {"amount": "84.20", "currency": "EUR"}
+    assert document["fields"][data["amount"]["id"]] == {"amount": "84.20", "currency": "EUR"}
 
 
 async def test_the_original_hash_is_in_the_details(api: Api) -> None:
@@ -252,15 +252,15 @@ async def test_metadata_needs_the_channel_and_must_fit_the_master_data(api: Api)
             "tag",
         ),
         (
-            {"channel": "migration", "metadata": metadata(data, attributes={str(UUID(int=9)): 1})},
-            "attribute",
+            {"channel": "migration", "metadata": metadata(data, fields={str(UUID(int=9)): 1})},
+            "field",
         ),
         (
             {
                 "channel": "migration",
-                "metadata": metadata(data, attributes={data["amount"]["id"]: "12"}),
+                "metadata": metadata(data, fields={data["amount"]["id"]: "12"}),
             },
-            "attribute",
+            "field",
         ),
         ({"channel": "migration", "metadata": metadata(data, unknown=1)}, "unknown"),
     ]:
@@ -282,7 +282,7 @@ async def test_metadata_may_be_long(api: Api) -> None:
         auth(admin),
         owner=str(owner.id),
         channel="migration",
-        metadata=metadata(data, attributes=notes),
+        metadata=metadata(data, fields=notes),
     )
     assert response.status_code == 202, response.text
     too_long = {data["note"]["id"]: "x" * 60_000}
@@ -292,7 +292,7 @@ async def test_metadata_may_be_long(api: Api) -> None:
         name="photo.jpg",
         owner=str(owner.id),
         channel="migration",
-        metadata=metadata(data, attributes=too_long),
+        metadata=metadata(data, fields=too_long),
     )
     assert response.status_code == 400
 

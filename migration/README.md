@@ -12,8 +12,8 @@ Papiq image.
 | --- | --- |
 | Users | users by user name; missing ones are created without password, role `user`, inactive ones deactivated |
 | Correspondents, document types, tags | contacts, document types, tags, matched by name (case-insensitive) |
-| Custom fields | global attributes: string/longtext → text, url → link, date → date, boolean → yes/no, integer/float → number, monetary → amount, select → choice |
-| ASN, notes | attributes `ASN` (number) and `Notizen` (text, one paragraph per note with date and author) |
+| Custom fields | global fields: string/longtext → text, url → link, date → date, boolean → yes/no, integer/float → number, monetary → amount, select → choice |
+| ASN, notes | fields `ASN` (number) and `Notizen` (text, one paragraph per note with date and author) |
 | Document date | document date |
 | Owner | owner (no owner, or a deleted one: the admin who runs the migration) |
 | Permissions | a drawer of the owner for every combination of readers and writers (groups resolved to users), named `Geteilt: anna (schreiben), bob (lesen)`; without extra permissions the owner's default drawer |
@@ -28,7 +28,7 @@ documents in Paperless' trash are listed with the reason.
 
 Documents are uploaded with `channel=migration`, the owner and their metadata
 (`POST /documents` fields `owner` and `metadata`, admins only). Papiq's classification and
-attribute steps apply the metadata instead of asking a language model; OCR, parsing and the rules
+field steps apply the metadata instead of asking a language model; OCR, parsing and the rules
 run as usual, so the lane of a document is what the pipeline decides.
 
 ## Use

@@ -11,7 +11,7 @@ from papiq_migration.mapping import (
     NOTES_LIMIT,
     NOTES_SPEC,
     Access,
-    AttributeSpec,
+    FieldSpec,
     access_of,
     convert_value,
     document_date,
@@ -36,8 +36,8 @@ class Ids:
     contacts: dict[int, str] = field(default_factory=dict)
     document_types: dict[int, str] = field(default_factory=dict)
     tags: dict[int, str] = field(default_factory=dict)
-    attributes: dict[str, str] = field(default_factory=dict)  # attribute key -> Papiq id
-    specs: dict[str, AttributeSpec] = field(default_factory=dict)  # usable attributes by key
+    fields: dict[str, str] = field(default_factory=dict)  # field key -> Papiq id
+    specs: dict[str, FieldSpec] = field(default_factory=dict)  # usable fields by key
 
 
 @dataclass
@@ -98,14 +98,14 @@ def prepare(
     further = [v for v in document.get("versions") or [] if not v.get("is_root")]
     if further:
         notes.append(f"{len(further)} further versions of the file are not taken over")
-    attributes: dict[str, Any] = {}
+    fields: dict[str, Any] = {}
     asn = document.get("archive_serial_number")
-    if asn is not None and ASN_SPEC.key in ids.attributes:
-        attributes[ids.attributes[ASN_SPEC.key]] = str(asn)
+    if asn is not None and ASN_SPEC.key in ids.fields:
+        fields[ids.fields[ASN_SPEC.key]] = str(asn)
     text, text_notes = notes_text(document.get("notes") or [])
     notes += text_notes
-    if text and NOTES_SPEC.key in ids.attributes:
-        attributes[ids.attributes[NOTES_SPEC.key]] = text
+    if text and NOTES_SPEC.key in ids.fields:
+        fields[ids.fields[NOTES_SPEC.key]] = text
     for item in document.get("custom_fields") or []:
         custom_field = custom_fields.get(int(item["field"]))
         if custom_field is None:
@@ -119,15 +119,13 @@ def prepare(
                     "is not taken over"
                 )
             elif item.get("value") not in (None, "", []):
-                notes.append(
-                    f"'{custom_field['name']}': no attribute in Papiq, value not taken over"
-                )
+                notes.append(f"'{custom_field['name']}': no field in Papiq, value not taken over")
             continue
         converted = convert_value(custom_field, item.get("value"), currency)
         if converted.note and converted.note != "empty value":
             notes.append(f"'{custom_field['name']}': {converted.note}")
         if converted.value is not None:
-            attributes[ids.attributes[key]] = converted.value
+            fields[ids.fields[key]] = converted.value
 
     metadata: dict[str, Any] = {
         "title": title,
@@ -139,17 +137,17 @@ def prepare(
         else None,
         "tag_ids": sorted({ids.tags[tag] for tag in document.get("tags") or [] if tag in ids.tags}),
         "document_date": document_date(document),
-        "attributes": attributes,
+        "fields": fields,
     }
-    while len(json.dumps(metadata)) > METADATA_LIMIT and attributes:
+    while len(json.dumps(metadata)) > METADATA_LIMIT and fields:
         # Too large for the upload: leave out the biggest value, the notes first.
-        notes_id = ids.attributes.get(NOTES_SPEC.key)
+        notes_id = ids.fields.get(NOTES_SPEC.key)
         biggest = (
             notes_id
-            if notes_id in attributes
-            else max(attributes, key=lambda key: len(json.dumps(attributes[key])))
+            if notes_id in fields
+            else max(fields, key=lambda key: len(json.dumps(fields[key])))
         )
-        del attributes[biggest]
+        del fields[biggest]
         notes.append("the metadata was too large: one value is not taken over")
     return Prepared(
         id=int(document["id"]),

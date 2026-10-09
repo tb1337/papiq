@@ -8,16 +8,16 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr
 
-from papiq.core.domain.attributes import (
-    AttributeDefinition,
-    AttributeType,
-    AttributeValue,
-    Money,
-    Url,
-)
 from papiq.core.domain.classification import FieldCheck
 from papiq.core.domain.documents import Channel, Document
 from papiq.core.domain.drawers import Drawer, ShareLevel
+from papiq.core.domain.fields import (
+    FieldDefinition,
+    FieldType,
+    FieldValue,
+    Money,
+    Url,
+)
 from papiq.core.domain.identity import ApiToken, ExternalIdentity, LoginMethod, TokenScope
 from papiq.core.domain.json_value import JsonValue
 from papiq.core.domain.master_data import MasterData
@@ -73,7 +73,7 @@ class MoneyValue(BaseModel):
     currency: str = Field(examples=["EUR"], description="ISO 4217 code.")
 
 
-AttributeJson = Annotated[
+FieldJson = Annotated[
     str | bool | MoneyValue,
     Field(
         description=(
@@ -90,7 +90,7 @@ def decimal_text(value: Decimal) -> str:
     return format(value, "f")
 
 
-def attribute_json(value: AttributeValue) -> str | bool | MoneyValue:
+def field_json(value: FieldValue) -> str | bool | MoneyValue:
     match value:
         case bool() | str():
             return value
@@ -124,7 +124,7 @@ class DocumentDetails(BaseModel):
                     "document_type_id": None,
                     "tag_ids": [],
                     "document_date": "2026-03-31",
-                    "attributes": {
+                    "fields": {
                         "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b": {
                             "amount": "84.20",
                             "currency": "EUR",
@@ -162,7 +162,7 @@ class DocumentDetails(BaseModel):
     document_type_id: UUID | None
     tag_ids: list[UUID]
     document_date: date | None
-    attributes: dict[UUID, AttributeJson] = Field(description="Values by attribute id.")
+    fields: dict[UUID, FieldJson] = Field(description="Values by field id.")
     lane: Lane | None = Field(description="None while processing runs.")
     processing: Processing
     created_at: datetime
@@ -185,9 +185,7 @@ class DocumentDetails(BaseModel):
             document_type_id=document.document_type_id,
             tag_ids=sorted(document.tag_ids),
             document_date=document.document_date,
-            attributes={
-                key: attribute_json(value) for key, value in sorted(document.attributes.items())
-            },
+            fields={key: field_json(value) for key, value in sorted(document.fields.items())},
             lane=document.lane,
             processing=Processing(
                 status=state.status,
@@ -253,7 +251,7 @@ class DocumentPatch(BaseModel):
                     "contact_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b",
                     "tag_ids": ["01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b"],
                     "document_date": "2026-03-31",
-                    "attributes": {
+                    "fields": {
                         "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b": {
                             "amount": "84.20",
                             "currency": "EUR",
@@ -269,9 +267,9 @@ class DocumentPatch(BaseModel):
     document_type_id: UUID | None = None
     tag_ids: list[UUID] | None = Field(default=None, max_length=500)
     document_date: date | None = None
-    attributes: dict[UUID, Any] | None = Field(
+    fields: dict[UUID, Any] | None = Field(
         default=None,
-        description="Values by attribute id, in the form of `attributes` above; null removes.",
+        description="Values by field id, in the form of `fields` above; null removes.",
     )
 
 
@@ -288,7 +286,7 @@ class ImportedMetadataIn(BaseModel):
                     "contact_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b",
                     "tag_ids": ["01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b"],
                     "document_date": "2026-03-31",
-                    "attributes": {"01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b": "84.20"},
+                    "fields": {"01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b": "84.20"},
                 }
             ]
         },
@@ -299,8 +297,8 @@ class ImportedMetadataIn(BaseModel):
     document_type_id: UUID | None = None
     tag_ids: list[UUID] = Field(default_factory=list, max_length=500)
     document_date: date | None = None
-    attributes: dict[UUID, Any] = Field(
-        default_factory=dict, description="Values by attribute id, as in `PATCH /documents/{id}`."
+    fields: dict[UUID, Any] = Field(
+        default_factory=dict, description="Values by field id, as in `PATCH /documents/{id}`."
     )
 
 
@@ -357,7 +355,7 @@ class ReprocessRequest(BaseModel):
 # --- inbox --------------------------------------------------------------------------------------
 
 ResumeStep = StrEnum(  # type: ignore[misc]
-    "ResumeStep", {step.name: step.value for step in (Step.EXTRACT_ATTRIBUTES, Step.APPLY_RULES)}
+    "ResumeStep", {step.name: step.value for step in (Step.EXTRACT_FIELDS, Step.APPLY_RULES)}
 )
 """Steps processing can resume with after a confirmation."""
 
@@ -384,7 +382,7 @@ class FieldCheckOut(BaseModel):
     )
 
     field: str = Field(
-        description=("`contact`, `document_type`, `tags`, `document_date`, or `attribute:<id>`.")
+        description=("`contact`, `document_type`, `tags`, `document_date`, or `field:<id>`.")
     )
     outcome: Outcome = Field(description="`ok` or `uncertain`.")
     confidence: float = Field(description="0 to 1, from checks against the text.")
@@ -394,7 +392,7 @@ class FieldCheckOut(BaseModel):
     value: Any = Field(
         description=(
             "The checked value, applied to the document (`ok` only): an id, a list of tag ids, "
-            "a date, or an attribute value."
+            "a date, or a field value."
         )
     )
     suggestion: Any = Field(
@@ -427,7 +425,7 @@ class OpenStepOut(BaseModel):
     reason: str | None
     fields: list[FieldCheckOut] = Field(
         description=(
-            "Uncertain fields of classification, attribute extraction and the rules (also "
+            "Uncertain fields of classification, field extraction and the rules (also "
             "`drawer`, `title`, `review`), and of filing (`drawer`)."
         )
     )
@@ -462,7 +460,7 @@ class InboxPage(BaseModel):
 
 
 class StepReviewOut(BaseModel):
-    """The latest run of classification or attribute extraction by the model."""
+    """The latest run of classification or field extraction by the model."""
 
     step: Step
     run: int
@@ -527,7 +525,7 @@ class ConfirmRequest(BaseModel):
     resume_at: ResumeStep = Field(
         default=ResumeStep.APPLY_RULES,  # type: ignore[attr-defined]
         description=(
-            "`extract_attributes` after correcting the document type, so the attributes of the "
+            "`extract_fields` after correcting the document type, so the fields of the "
             "new type are extracted."
         ),
     )
@@ -875,7 +873,7 @@ class MasterDataOut(BaseModel):
         return cls(id=getattr(item, "id"), name=item.name, created_at=item.created_at)  # noqa: B009
 
 
-class AttributeCreate(BaseModel):
+class FieldCreate(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
         json_schema_extra={
@@ -890,7 +888,7 @@ class AttributeCreate(BaseModel):
     )
 
     name: Name
-    data_type: AttributeType
+    data_type: FieldType
     document_type_ids: list[UUID] | None = Field(
         default=None, description="null: global; otherwise only for these document types."
     )
@@ -899,7 +897,7 @@ class AttributeCreate(BaseModel):
     )
 
 
-class AttributePatch(BaseModel):
+class FieldPatch(BaseModel):
     """Fields left out stay. The data type cannot change."""
 
     model_config = ConfigDict(
@@ -924,7 +922,7 @@ class AttributePatch(BaseModel):
     )
 
 
-class AttributeOut(BaseModel):
+class FieldOut(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "examples": [
@@ -942,13 +940,13 @@ class AttributeOut(BaseModel):
 
     id: UUID
     name: str
-    data_type: AttributeType
+    data_type: FieldType
     document_type_ids: list[UUID] | None
     choices: list[str]
     created_at: datetime
 
     @classmethod
-    def of(cls, item: AttributeDefinition) -> "AttributeOut":
+    def of(cls, item: FieldDefinition) -> "FieldOut":
         return cls(
             id=item.id,
             name=item.name,
@@ -1017,8 +1015,8 @@ class ConditionSchema(BaseModel):
     """`field` `op` `value`. Operators by field: contact, document_type: `is`, `in`, `present`,
     `missing`; tags: `contains` (this tag), `in` (one of), `present` (any), `missing` (none);
     channel: `is`, `in`; text: `contains`, `matches` (regular expression); document_date and
-    number, amount, date attributes: `is`, `gt`, `lt`, `present`, `missing`; text and link
-    attributes: `is`, `in`, `contains`, `matches`, `present`, `missing`; choice: `is`, `in`,
+    number, amount, date fields: `is`, `gt`, `lt`, `present`, `missing`; text and link
+    fields: `is`, `in`, `contains`, `matches`, `present`, `missing`; choice: `is`, `in`,
     `present`, `missing`; boolean: `is`, `present`, `missing`."""
 
     model_config = ConfigDict(
@@ -1042,11 +1040,11 @@ class ConditionSchema(BaseModel):
         default=None,
         description=(
             "None for `present` and `missing`, a list for `in`, otherwise one value: an id, a "
-            "channel, a text or pattern, a date `YYYY-MM-DD`, or an attribute value as in "
-            "`attributes` of a document."
+            "channel, a text or pattern, a date `YYYY-MM-DD`, or a field value as in "
+            "`fields` of a document."
         ),
     )
-    attribute_id: UUID | None = Field(default=None, description="For `field` `attribute` only.")
+    field_id: UUID | None = Field(default=None, description="For `field` `field` only.")
     case_sensitive: bool = Field(
         default=False, description="For `matches` only; other comparisons ignore case."
     )
@@ -1113,11 +1111,11 @@ class RemoveTagsAction(BaseModel):
     tag_ids: list[UUID] = Field(min_length=1, max_length=100)
 
 
-class SetAttributeAction(BaseModel):
+class SetFieldAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    type: Literal["set_attribute"]
-    attribute_id: UUID
-    value: AttributeJson
+    type: Literal["set_field"]
+    field_id: UUID
+    value: FieldJson
 
 
 class ForceReviewAction(BaseModel):
@@ -1133,7 +1131,7 @@ ActionSchema = Annotated[
     | SetTitleAction
     | AddTagsAction
     | RemoveTagsAction
-    | SetAttributeAction
+    | SetFieldAction
     | ForceReviewAction,
     Field(discriminator="type"),
 ]
@@ -1194,7 +1192,7 @@ class RuleCreate(RuleDefinitionIn):
         default=RuleScope.USER,
         description=(
             "`user`: the caller's rule, for their documents. `global` (admins): for every "
-            "document, but only tags, attributes and reviews."
+            "document, but only tags, fields and reviews."
         ),
     )
 
@@ -1357,7 +1355,7 @@ class DocumentPreviewOut(BaseModel):
     )
     changed: list[str] = Field(
         description="Fields that would change: `title`, `contact`, `document_type`, `tags`, "
-        "`document_date`, `attribute:<id>`, `drawer`."
+        "`document_date`, `field:<id>`, `drawer`."
     )
     rules: list[RuleReportOut] | None = Field(
         description="For the owner: the rules the change would set off, and what they would do."

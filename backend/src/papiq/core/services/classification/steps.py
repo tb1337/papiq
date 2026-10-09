@@ -1,4 +1,4 @@
-"""The classification steps: classify (contact, type, tags, date) and extract attributes.
+"""The classification steps: classify (contact, type, tags, date) and extract fields.
 
 Each step asks the language model once, checks the answer's structure and asks once more if it
 does not fit; a second unfit answer fails the step (red). Every proposed field is then checked
@@ -16,28 +16,28 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
-from papiq.core.domain.attributes import (
-    AttributeDefinition,
-    AttributeType,
-    AttributeValue,
-    Money,
-    Url,
-)
 from papiq.core.domain.classification import (
     CONTACT,
     DOCUMENT_DATE,
     DOCUMENT_TYPE,
     TAGS,
     FieldCheck,
-    attribute_field,
-    attribute_of,
-    attribute_to_json,
     checks_to_json,
+    field_id_of,
+    field_key,
+    field_to_json,
 )
 from papiq.core.domain.documents import UNSET, Document, DocumentChanges, Unset
 from papiq.core.domain.errors import ValidationError
 from papiq.core.domain.evidence import DocumentText
-from papiq.core.domain.ids import AttributeId, ContactId
+from papiq.core.domain.fields import (
+    FieldDefinition,
+    FieldType,
+    FieldValue,
+    Money,
+    Url,
+)
+from papiq.core.domain.ids import ContactId, FieldId
 from papiq.core.domain.json_value import JsonObject, JsonValue
 from papiq.core.domain.master_data import Contact, DocumentType, Tag
 from papiq.core.domain.names import best_match, mentions, name_key
@@ -48,9 +48,9 @@ from papiq.core.services.classification.answers import (
     AnswerError,
     ClassifyAnswer,
     Proposal,
-    attribute_keys,
     classify_schema,
     extract_schema,
+    field_keys,
     parse_classify,
     parse_extract,
 )
@@ -275,9 +275,9 @@ class ClassifyStep(_ModelStep):
         )
 
 
-class ExtractAttributesStep(_ModelStep):
-    """The values of the attributes that apply to the document: those of its type and the
-    global ones. A type's attribute that the document does not show is uncertain; a global
+class ExtractFieldsStep(_ModelStep):
+    """The values of the fields that apply to the document: those of its type and the
+    global ones. A type's field that the document does not show is uncertain; a global
     one stays unset."""
 
     async def run(self, document: Document) -> StepResult | MetadataResult:
@@ -285,7 +285,7 @@ class ExtractAttributesStep(_ModelStep):
             definitions = sorted(
                 (
                     item
-                    for item in await uow.attributes.list_all()
+                    for item in await uow.fields.list_all()
                     if item.applies_to(document.document_type_id)
                 ),
                 key=lambda item: item.name,
@@ -301,23 +301,23 @@ class ExtractAttributesStep(_ModelStep):
             return StepResult(outcome=Outcome.UNCERTAIN, reason=NO_MODEL)
         text = await self._text(document)
         facts = DocumentText(text)
-        keys = attribute_keys(definitions)
+        keys = field_keys(definitions)
         sent = shorten(text, self._policy.input_budget)
         input = self._input(document, text, sent, EXTRACT_PROMPT) | {
-            "attributes": {key: str(definition.id) for key, definition in keys.items()},
+            "fields": {key: str(definition.id) for key, definition in keys.items()},
         }
         try:
             proposals, answers = await self._ask(
                 EXTRACT_SYSTEM,
                 extract_message(None if document_type is None else document_type.name, keys, sent),
                 extract_schema(keys),
-                "attributes",
+                "fields",
                 lambda content: parse_extract(content, list(keys)),
             )
         except _UnfitAnswerError as error:
             return self._unfit(error, input)
         checks = [
-            _check_attribute(
+            _check_field(
                 definition,
                 proposals[key],
                 facts,
@@ -326,14 +326,14 @@ class ExtractAttributesStep(_ModelStep):
             )
             for key, definition in keys.items()
         ]
-        values: dict[AttributeId, object] = {}
+        values: dict[FieldId, object] = {}
         for check, definition in zip(checks, definitions, strict=True):
             if check.ok and check.value is not None:
                 values[definition.id] = _parse_value(definition, check.value)
         raw: JsonObject = {key: _proposal_json(proposal) for key, proposal in proposals.items()}
         return MetadataResult(
-            _result(checks, {"attributes": raw}, answers, input),
-            DocumentChanges(attributes=values),
+            _result(checks, {"fields": raw}, answers, input),
+            DocumentChanges(fields=values),
         )
 
 
@@ -408,16 +408,16 @@ def _check_date(field: str, proposal: Proposal, facts: DocumentText, today: date
     return _verified(common, value.isoformat(), proposal, facts, facts.has_date(value), "date")
 
 
-def _check_attribute(
-    definition: AttributeDefinition,
+def _check_field(
+    definition: FieldDefinition,
     proposal: Proposal,
     facts: DocumentText,
     today: date,
     document_date: date | None,
 ) -> FieldCheck:
     """A date equal to the document date is only suggested: models put the document date into
-    date attributes the text does not show (a due date "within 30 days")."""
-    field = attribute_field(definition.id)
+    date fields the text does not show (a due date "within 30 days")."""
+    field = field_key(definition.id)
     common = _common(field, proposal)
     if proposal.value is None:
         if definition.is_global:
@@ -428,7 +428,7 @@ def _check_attribute(
             reason=f"'{definition.name}' was not found",
             **common,
         )
-    if definition.data_type is AttributeType.DATE:
+    if definition.data_type is FieldType.DATE:
         check = _check_date(field, proposal, facts, today)
         if check.ok and document_date is not None and check.value == document_date.isoformat():
             check = replace(
@@ -460,7 +460,7 @@ def _check_attribute(
             **common,
         )
     shown, what = _shown(definition, value, proposal, facts)
-    check = _verified(common, attribute_to_json(value), proposal, facts, shown, what)
+    check = _verified(common, field_to_json(value), proposal, facts, shown, what)
     if check.ok:
         return check
     return FieldCheck(
@@ -476,7 +476,7 @@ _SHORTEST_EVIDENCE = 4  # characters of a quoted passage that alone backs a yes/
 
 
 def _shown(
-    definition: AttributeDefinition, value: AttributeValue, proposal: Proposal, facts: DocumentText
+    definition: FieldDefinition, value: FieldValue, proposal: Proposal, facts: DocumentText
 ) -> tuple[bool, str]:
     """Whether the text shows the value, and what was looked for. Yes/no and choice values
     are not written as such; for them a quoted passage of some length must be in the text."""
@@ -489,7 +489,7 @@ def _shown(
             return facts.has_number(value), "number"
         case Url():
             return facts.contains(value.value), "link"
-        case str() if definition.data_type is AttributeType.TEXT:
+        case str() if definition.data_type is FieldType.TEXT:
             return facts.contains(value), "text"
         case _:
             evidence = (proposal.evidence or "").strip()
@@ -526,25 +526,25 @@ def _verified(
 # --- values -----------------------------------------------------------------------------------
 
 
-def _parse_value(definition: AttributeDefinition, raw: JsonValue) -> AttributeValue:
+def _parse_value(definition: FieldDefinition, raw: JsonValue) -> FieldValue:
     """A proposed value read leniently (a number may come as number or with a decimal
     comma), then checked against the definition. ValidationError if it does not fit."""
     value: object = raw
     try:
         match definition.data_type:
-            case AttributeType.NUMBER:
+            case FieldType.NUMBER:
                 value = _decimal(raw)
-            case AttributeType.AMOUNT if isinstance(raw, dict):
+            case FieldType.AMOUNT if isinstance(raw, dict):
                 currency = raw.get("currency")
                 value = Money(
                     _decimal(raw.get("amount")),
                     currency.strip().upper() if isinstance(currency, str) else "",
                 )
-            case AttributeType.DATE:
+            case FieldType.DATE:
                 value = _date(raw)
-            case AttributeType.LINK if isinstance(raw, str):
+            case FieldType.LINK if isinstance(raw, str):
                 value = Url(raw.strip())
-            case AttributeType.TEXT | AttributeType.CHOICE if isinstance(raw, str):
+            case FieldType.TEXT | FieldType.CHOICE if isinstance(raw, str):
                 value = raw.strip()
     except (InvalidOperation, ValueError, TypeError):
         raise ValidationError(f"invalid value {raw!r}") from None
@@ -627,8 +627,8 @@ def _output(
 
 
 def _reason(check: FieldCheck) -> str:
-    """Reasons of attribute checks name the attribute already."""
-    return str(check.reason) if attribute_of(check.field) else f"{check.field}: {check.reason}"
+    """Reasons of field checks name the field already."""
+    return str(check.reason) if field_id_of(check.field) else f"{check.field}: {check.reason}"
 
 
 def _result(

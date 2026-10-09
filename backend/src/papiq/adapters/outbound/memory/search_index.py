@@ -153,7 +153,7 @@ def _fields(document: IndexDocument) -> list[str]:
         document.contact or "",
         document.document_type or "",
         " ".join(document.tags),
-        " ".join(document.attributes),
+        " ".join(document.fields),
         document.filename,
         document.text,
     ]

@@ -37,7 +37,7 @@ class Contact(MasterData):
 
 @dataclass(kw_only=True)
 class DocumentType(MasterData):
-    """The kind of a document; attribute definitions can be bound to it."""
+    """The kind of a document; field definitions can be bound to it."""
 
     id: DocumentTypeId
 

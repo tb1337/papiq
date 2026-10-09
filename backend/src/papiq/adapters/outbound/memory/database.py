@@ -7,10 +7,10 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from papiq.core.domain.attributes import AttributeDefinition
 from papiq.core.domain.documents import Document
 from papiq.core.domain.drawers import Drawer
 from papiq.core.domain.events import DomainEvent
+from papiq.core.domain.fields import FieldDefinition
 from papiq.core.domain.identity import ApiToken, ExternalIdentity, Session
 from papiq.core.domain.ids import EventId, JobId
 from papiq.core.domain.jobs import Job
@@ -43,7 +43,7 @@ def _name_keys(item: MasterData) -> Iterable[Hashable]:
     return [("name", name_key(item.name))]
 
 
-def _attribute_keys(item: AttributeDefinition) -> Iterable[Hashable]:
+def _field_keys(item: FieldDefinition) -> Iterable[Hashable]:
     return _name_keys(item)
 
 
@@ -72,7 +72,7 @@ DRAWERS = Table("drawer", _drawer_keys)
 CONTACTS = Table("contact", _name_keys)
 DOCUMENT_TYPES = Table("document type", _name_keys)
 TAGS = Table("tag", _name_keys)
-ATTRIBUTES = Table("attribute", _attribute_keys)
+FIELDS = Table("field", _field_keys)
 DOCUMENTS = Table("document", _document_keys)
 CREDENTIALS = Table("credential", _no_keys)
 SESSIONS = Table("session", _session_keys)

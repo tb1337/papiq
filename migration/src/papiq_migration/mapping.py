@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urlsplit
 
-NOTES_LIMIT = 20_000  # characters of the notes attribute (the upload's metadata is limited)
+NOTES_LIMIT = 20_000  # characters of the notes field (the upload's metadata is limited)
 TITLE_LIMIT = 500
 NAME_LIMIT = 200
 
@@ -24,8 +24,8 @@ def norm(name: str) -> str:
 
 
 @dataclass(frozen=True)
-class AttributeSpec:
-    """The Papiq attribute definition for a Paperless custom field (or ASN, notes)."""
+class FieldSpec:
+    """The Papiq field definition for a Paperless custom field (or ASN, notes)."""
 
     key: str  # "field:<id>", "asn", "notes"
     name: str
@@ -44,8 +44,8 @@ _TYPES = {
     "monetary": "amount",
     "select": "choice",
 }
-ASN_SPEC = AttributeSpec("asn", ASN, "number")
-NOTES_SPEC = AttributeSpec("notes", NOTES, "text")
+ASN_SPEC = FieldSpec("asn", ASN, "number")
+NOTES_SPEC = FieldSpec("notes", NOTES, "text")
 
 
 def field_key(id: int) -> str:
@@ -58,8 +58,8 @@ def select_options(custom_field: dict[str, Any]) -> dict[str, str]:
     return {str(o["id"]): str(o["label"]).strip() for o in options if isinstance(o, dict)}
 
 
-def field_spec(custom_field: dict[str, Any]) -> tuple[AttributeSpec | None, list[str]]:
-    """The attribute for a custom field, or None with the reasons why there is none."""
+def field_spec(custom_field: dict[str, Any]) -> tuple[FieldSpec | None, list[str]]:
+    """The field for a custom field, or None with the reasons why there is none."""
     kind = custom_field["data_type"]
     name = str(custom_field["name"]).strip()[:NAME_LIMIT]
     if kind not in _TYPES:
@@ -71,7 +71,7 @@ def field_spec(custom_field: dict[str, Any]) -> tuple[AttributeSpec | None, list
         if len(labels) != len(select_options(custom_field)):
             notes.append("options with the same label were merged")
         choices = tuple(labels)
-    return AttributeSpec(field_key(custom_field["id"]), name, _TYPES[kind], choices), notes
+    return FieldSpec(field_key(custom_field["id"]), name, _TYPES[kind], choices), notes
 
 
 @dataclass(frozen=True)

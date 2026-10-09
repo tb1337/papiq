@@ -92,7 +92,7 @@ class EventBusContract:
             LaneChanged(document_id=document, occurred_at=NOW, old=None, new=Lane.YELLOW),
             LaneChanged(document_id=document, occurred_at=NOW, old=Lane.RED, new=None),
             DocumentFiled(document_id=document, occurred_at=NOW, drawer_id=DrawerId(new_id())),
-            DocumentUpdated(document_id=document, occurred_at=NOW, fields=("title", "attributes")),
+            DocumentUpdated(document_id=document, occurred_at=NOW, fields=("title", "fields")),
             DocumentDeleted(document_id=document, occurred_at=NOW),
             DocumentDeleted(
                 document_id=document,

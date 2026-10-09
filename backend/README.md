@@ -27,7 +27,7 @@ adapter must pass.
 ## Core
 
 - `core/domain`: users, drawers and shares, master data (contacts, document types, tags),
-  attribute definitions and values, the document aggregate with the pipeline state machine and
+  field definitions and values, the document aggregate with the pipeline state machine and
   lanes, domain events, jobs and the permission rules. IDs are UUIDv7, timestamps are UTC.
 - `core/ports`: repositories, processing log, outbox and job queue share one `UnitOfWork`, so
   a state change, its events and follow-up jobs are committed together (transactional outbox).
@@ -151,7 +151,7 @@ small objects; files of any size go through `upload`/`download`, which work on l
 
 ## Processing
 
-Receive → OCR → parse → classify → extract attributes → apply rules → file run as jobs
+Receive → OCR → parse → classify → extract fields → apply rules → file run as jobs
 (`pipeline.step`).
 
 | Step | Input | Derivatives (object store) | Outcome |
@@ -159,8 +159,8 @@ Receive → OCR → parse → classify → extract attributes → apply rules �
 | OCR (`OcrStep`) | `originals/<sha256>` | `documents/<id>/archive.pdf` (PDF/A with text layer), `documents/<id>/preview.webp` (first page, 400 px wide) | uncertain if the archive is not PDF/A, with the reason; OK with a note if the original's digital signature is not in the archive |
 | Parse (`ParseStep`) | the archive PDF | `documents/<id>/content.md`, `documents/<id>/content.json` (Docling) | failed if no text was recognised; uncertain if the text is the plain text layer because the layout analysis found none |
 | Classify (`ClassifyStep`) | `content.md`, master data | contact, document type, tags, document date (applied if checked) | see below |
-| Extract attributes (`ExtractAttributesStep`) | `content.md`, the attributes of the type | attribute values (applied if checked) | see below |
-| Apply rules (`ApplyRulesStep`) | `content.md` (only if a rule looks at the text), the rules | drawer, contact, type, title, tags, attributes | uncertain on conflicts, refused actions and forced reviews; see Rules |
+| Extract fields (`ExtractFieldsStep`) | `content.md`, the fields of the type | field values (applied if checked) | see below |
+| Apply rules (`ApplyRulesStep`) | `content.md` (only if a rule looks at the text), the rules | drawer, contact, type, title, tags, fields | uncertain on conflicts, refused actions and forced reviews; see Rules |
 | File (`FileStep`) | the drawer | - | uncertain if the owner may no longer file into the drawer (field `drawer`) |
 
 - A step that raises is retried (`PAPIQ_STEP_MAX_ATTEMPTS`, delay `PAPIQ_STEP_RETRY_DELAY`,
@@ -216,7 +216,7 @@ Receive → OCR → parse → classify → extract attributes → apply rules �
 
 Two requests per document to an OpenAI-compatible chat completions endpoint
 (`adapters/outbound/openai_compat`, `PAPIQ_LLM_*`): one for contact, document type, tags and
-document date, one for the attributes of the document type. The answer must follow a JSON schema
+document date, one for the fields of the document type. The answer must follow a JSON schema
 (`response_format` `json_schema`, or `json_object` for providers without schema support); an
 answer that does not fit is asked for once more, then the step fails (red). Without a
 configured model both steps end uncertain (yellow): the owner fills in the fields.
@@ -229,10 +229,10 @@ passes is applied (the same way as a change by the owner):
 | Contact | Contacts are not sent; the proposed name is matched against all contacts (legal forms and punctuation ignored). Accepted if similar enough (`PAPIQ_CONFIDENCE_THRESHOLD`), named in the text and not ambiguous | an existing contact is suggested from `PAPIQ_CONTACT_SUGGEST_THRESHOLD` on, otherwise a new contact (only an admin can create it) |
 | Document type | One of the existing types | new type suggested |
 | Tags | Only existing tags are applied; proposed new tags are only logged | - |
-| Document date, date attributes | A valid date that appears in the text (`31.03.2026`, `31.3.26`, `2026-03-31`, `31. März 2026`, `March 31, 2026`, ...); a date attribute must differ from the document date | the date is suggested |
+| Document date, date fields | A valid date that appears in the text (`31.03.2026`, `31.3.26`, `2026-03-31`, `31. März 2026`, `March 31, 2026`, ...); a date field must differ from the document date | the date is suggested |
 | Amounts, numbers | The number appears in the text (German or English notation); the currency is shown as code, sign or word | |
 | Text, link, choice, yes/no | The value, or the quoted passage, appears in the text | |
-| Attributes of the type | A missing value makes the document yellow (global attributes may be missing) | |
+| Fields of the type | A missing value makes the document yellow (global fields may be missing) | |
 
 The quoted passage must appear in the text as well. Every check and the raw answer are in the
 processing log (`fields`, `answer`), so the proposal stays traceable after a correction; the
@@ -244,7 +244,7 @@ shares or actions, and additional fields make the answer unfit. Long documents a
 `PAPIQ_LLM_INPUT_BUDGET` characters (beginning and end kept, the middle left out); with many
 tags, at most `PAPIQ_LLM_MAX_TAGS` are listed, those named in the text first.
 
-**Privacy.** The shortened document text and the names of document types, tags and attributes
+**Privacy.** The shortened document text and the names of document types, tags and fields
 go to the endpoint in `PAPIQ_LLM_BASE_URL`; the file, contacts and users do not. Every log entry
 of the two steps names the endpoint host and the model. At start, a warning names every
 configured model endpoint outside the local network (not loopback, private, link-local or a
@@ -286,7 +286,7 @@ version; deleting is a soft delete.
 
 - **Scope.** A user rule (any user) acts on its owner's documents with all actions and files
   only into drawers its owner may write to. A global rule (admins) acts on every document, but
-  only with `add_tags`, `remove_tags`, `set_attribute` and `force_review`: nothing that changes
+  only with `add_tags`, `remove_tags`, `set_field` and `force_review`: nothing that changes
   who sees a document. Everyone reads the global rules; user rules are read by their owner and
   admins (`all_users=true`).
 - **Triggers.** `ingest`: the pipeline step `apply_rules`, when a document arrives. `change`:
@@ -301,7 +301,7 @@ version; deleting is a soft delete.
   | `channel` (Eingangskanal: `web`, `api`, `migration`) | `is`, `in` |
   | `text` | `contains` (normalised like the classification checks), `matches` (regular expression) |
   | `document_date` | `is`, `gt`, `lt`, `present`, `missing` |
-  | `attribute` (with `attribute_id`) | by data type: text and link `is`, `in`, `contains`, `matches`; number, amount, date `is`, `gt`, `lt`; yes/no `is`; choice `is`, `in`; all `present`, `missing` |
+  | `field` (with `field_id`) | by data type: text and link `is`, `in`, `contains`, `matches`; number, amount, date `is`, `gt`, `lt`; yes/no `is`; choice `is`, `in`; all `present`, `missing` |
 
   `matches` takes `case_sensitive` (default false). Patterns run with the `regex` package
   (`adapters/outbound/regex`) in a thread with a time limit (`PAPIQ_RULES_PATTERN_TIMEOUT`); a
@@ -310,7 +310,7 @@ version; deleting is a soft delete.
   markup, at most `PAPIQ_RULES_MAX_TEXT` characters; it is loaded only if a rule looks at it.
 - **Actions.** `set_drawer`, `set_contact`, `set_document_type`, `set_title` (placeholders
   `{contact}`, `{document_type}`, `{document_date}`, `{filename}`), `add_tags`, `remove_tags`,
-  `set_attribute`, `force_review` (with a reason).
+  `set_field`, `force_review` (with a reason).
 - **Evaluation.** All conditions see the state before any rule acts; a rule's action never makes
   another rule match in the same run. Contact, type and tags the model set and no person
   confirmed are distrusted: a rule that matches only because of them does not file into a
@@ -340,7 +340,7 @@ version; deleting is a soft delete.
   job; conflicts only where accepted (`accept_conflicts`), forced reviews do not act. A user rule
   is applied by its owner to their documents, a global rule by anyone to the documents they may
   write to; rights are checked again per document. Progress: `GET /rule-applications/{id}`.
-- **References.** Contacts, types, tags, attributes and drawers a rule names must exist (`404`),
+- **References.** Contacts, types, tags, fields and drawers a rule names must exist (`404`),
   drawers must be writable for the owner (`403`). Deleting one of them, or removing a choice a
   rule uses, disables the rules that use it with a reason; enabling checks again. Deleting a user
   removes their rules.
@@ -438,7 +438,7 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
 | `GET /auth/oidc`, `/auth/oidc/login`, `/auth/oidc/callback`; `POST/DELETE /auth/oidc/link` | OpenID Connect |
 | `GET /users`, `GET/PATCH/DELETE /users/{id}` | Accounts: list (others see active users' names), role and state, delete (admins) |
 | `POST /users`, `POST /users/{id}/password`, `DELETE /users/{id}/totp`, `DELETE /users/{id}/oidc` | Create with password, reset password, turn TOTP off, remove links (admins, session only, not the own account) |
-| `/contacts`, `/document-types`, `/tags`, `/attributes` (`GET`, `POST`, `GET/PATCH/DELETE /{id}`) | Master data: read by all, changed by admins, deleted only when unused. Attributes: name, choices and scope change, the data type does not; removing a used choice or narrowing the scope past documents with values is `409` |
+| `/contacts`, `/document-types`, `/tags`, `/fields` (`GET`, `POST`, `GET/PATCH/DELETE /{id}`) | Master data: read by all, changed by admins, deleted only when unused. Fields: name, choices and scope change, the data type does not; removing a used choice or narrowing the scope past documents with values is `409` |
 | `GET/POST /drawers`, `GET/PATCH/DELETE /drawers/{id}`, `PUT/DELETE /drawers/{id}/shares/{user_id}` | Drawers and shares (owner) |
 | `GET /documents/search` | Search: `q`, the filters of `GET /documents`, `limit`, `offset`, `semantic_ratio`; hits with snippet, `estimated_total`, `next_offset`, `semantic` |
 | `POST /search/reindex` | Rebuild the search index in the background (admins); `202` |
@@ -453,7 +453,7 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
 | `POST /documents/{id}/reprocess` | `{"from_step": "ocr"}`: process again from a step (owner or admin) |
 | `GET /inbox` | The caller's yellow and red documents, newest first, with their open steps and fields; `limit`, `cursor` |
 | `GET /documents/{id}/review` | What the model proposed and how each field was checked (owner or admin) |
-| `POST /documents/{id}/confirm` | Decide the open fields (`changes` as with `PATCH`, `accept_suggestions`, `drawer_id`), then continue from `resume_at` (`apply_rules`, or `extract_attributes` after a type change) up to filing (owner or admin); undecided fields: `422` with `open_fields` |
+| `POST /documents/{id}/confirm` | Decide the open fields (`changes` as with `PATCH`, `accept_suggestions`, `drawer_id`), then continue from `resume_at` (`apply_rules`, or `extract_fields` after a type change) up to filing (owner or admin); undecided fields: `422` with `open_fields` |
 | `GET/POST /rules`, `GET/PUT/PATCH/DELETE /rules/{id}`, `GET /rules/{id}/versions`, `/versions/{number}` | Rules: list (`scope`, `include_disabled`, `all_users` for admins), create, change (new version), enable or disable, delete; see Rules |
 | `POST /rules/{id}/apply/preview`, `POST /rules/{id}/apply`, `GET /rule-applications/{id}` | Apply a rule to existing documents: preview, start (`202`), progress |
 | `GET /events` | Server-sent events of the documents the caller may read; `?document_id=` |
@@ -646,9 +646,9 @@ as in REST: `read` may use every tool but `update_metadata`.
 | Tool | Does |
 | --- | --- |
 | `search` | `query`, `limit` (1 to 25), `offset`, optional `contact`, `document_type`, `tags` (names): hits with `id`, `title`, `score`, `snippet` (plain text), contact, type, tags, date, lane, `access`; `next_offset`, `semantic` |
-| `get_document` | `id`: metadata with contact, type, tags and attributes by name, lane and processing status |
+| `get_document` | `id`: metadata with contact, type, tags and fields by name, lane and processing status |
 | `get_text` | `id`, `offset`, `limit` (characters, at most `PAPIQ_MCP_TEXT_MAX`, 20,000): a piece of the document's text as Markdown, `next_offset` to continue. The text is content from outside; the tool description tells clients not to follow instructions in it |
-| `update_metadata` | `id` and any of `title`, `contact`, `document_type` (name; `null` removes), `tags` (the complete list, replaces), `document_date` (`null` removes), `attributes` (attribute name to value; `null` removes). Needs a `read_write` token and write access; the owner's change rules run as for `PATCH /documents/{id}` and the result shows them. If the rules filed the document where the caller can no longer read it, the result has only `id` and `access: null` |
+| `update_metadata` | `id` and any of `title`, `contact`, `document_type` (name; `null` removes), `tags` (the complete list, replaces), `document_date` (`null` removes), `fields` (field name to value; `null` removes). Needs a `read_write` token and write access; the owner's change rules run as for `PATCH /documents/{id}` and the result shows them. If the rules filed the document where the caller can no longer read it, the result has only `id` and `access: null` |
 | `list_tags` | All tags, to name them in the other tools |
 
 Names are matched regardless of case; an unknown name is an error, nothing is created. A

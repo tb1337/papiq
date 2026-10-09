@@ -8,7 +8,7 @@
       "Einkauf"
     ],
     "document_date": null,
-    "attributes": {
+    "fields": {
       "Kundennummer": "88 77 66"
     }
   },
@@ -29,7 +29,7 @@
         "evidence": null
       }
     },
-    "attributes": {
+    "fields": {
       "Kundennummer": {
         "value": "88 77 66",
         "evidence": "Kundennummer: 88 77 66"

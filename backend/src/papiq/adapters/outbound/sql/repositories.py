@@ -18,22 +18,22 @@ from sqlalchemy import ColumnElement, Row, Table, and_, delete, insert, or_, sel
 
 from papiq.adapters.outbound.sql import tables as t
 from papiq.adapters.outbound.sql.transaction import Transaction
-from papiq.core.domain.attributes import (
-    AttributeDefinition,
-    AttributeType,
-    AttributeValue,
-    Money,
-    Url,
-)
 from papiq.core.domain.documents import Channel, Document, Sha256
 from papiq.core.domain.drawers import Drawer, ShareLevel
 from papiq.core.domain.errors import ConcurrencyError, NotFoundError
+from papiq.core.domain.fields import (
+    FieldDefinition,
+    FieldType,
+    FieldValue,
+    Money,
+    Url,
+)
 from papiq.core.domain.ids import (
-    AttributeId,
     ContactId,
     DocumentId,
     DocumentTypeId,
     DrawerId,
+    FieldId,
     TagId,
     UserId,
 )
@@ -310,19 +310,17 @@ class SqlTagRepository(SqlNamedRepository[TagId, Tag]):
         return Tag(id=TagId(row.id), name=row.name, created_at=row.created_at, version=row.version)
 
 
-class SqlAttributeRepository(SqlNamedRepository[AttributeId, AttributeDefinition]):
-    kind = "attribute"
-    table = t.attribute_definitions
+class SqlFieldRepository(SqlNamedRepository[FieldId, FieldDefinition]):
+    kind = "field"
+    table = t.field_definitions
 
-    async def _entities(self, rows: Sequence[Row[Any]]) -> list[AttributeDefinition]:
-        scopes = await self._children(
-            t.attribute_document_types, "attribute_id", (row.id for row in rows)
-        )
+    async def _entities(self, rows: Sequence[Row[Any]]) -> list[FieldDefinition]:
+        scopes = await self._children(t.field_document_types, "field_id", (row.id for row in rows))
         return [
-            AttributeDefinition(
-                id=AttributeId(row.id),
+            FieldDefinition(
+                id=FieldId(row.id),
                 name=row.name,
-                data_type=AttributeType(row.data_type),
+                data_type=FieldType(row.data_type),
                 document_type_ids=(
                     None
                     if row.is_global
@@ -335,7 +333,7 @@ class SqlAttributeRepository(SqlNamedRepository[AttributeId, AttributeDefinition
             for row in rows
         ]
 
-    def _values(self, entity: AttributeDefinition) -> Values:
+    def _values(self, entity: FieldDefinition) -> Values:
         return {
             **super()._values(entity),
             "data_type": entity.data_type.value,
@@ -343,18 +341,18 @@ class SqlAttributeRepository(SqlNamedRepository[AttributeId, AttributeDefinition
             "choices": list(entity.choices),
         }
 
-    async def _write_children(self, entity: AttributeDefinition) -> None:
+    async def _write_children(self, entity: FieldDefinition) -> None:
         await self._insert_many(
-            t.attribute_document_types,
+            t.field_document_types,
             [
-                {"attribute_id": entity.id, "document_type_id": type_id}
+                {"field_id": entity.id, "document_type_id": type_id}
                 for type_id in entity.document_type_ids or ()
             ],
         )
 
-    async def _delete_children(self, ids: list[AttributeId]) -> None:
-        table = t.attribute_document_types
-        await self._tx.write(delete(table).where(table.c.attribute_id.in_(ids)))
+    async def _delete_children(self, ids: list[FieldId]) -> None:
+        table = t.field_document_types
+        await self._tx.write(delete(table).where(table.c.field_id.in_(ids)))
 
 
 # --- documents ----------------------------------------------------------------------------------
@@ -373,18 +371,18 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
     async def list_visible_to(self, user: UserId) -> list[Document]:
         return await self._load(_visible_to(user))
 
-    async def attribute_in_use(
+    async def field_in_use(
         self,
-        attribute: AttributeId,
+        field: FieldId,
         *,
         values: Collection[str] | None = None,
         outside_types: Collection[DocumentTypeId] | None = None,
     ) -> bool:
-        documents, values_table = t.documents, t.document_attributes
+        documents, values_table = t.documents, t.document_fields
         statement = (
             select(values_table.c.document_id)
             .join(documents, documents.c.id == values_table.c.document_id)
-            .where(values_table.c.attribute_id == attribute)
+            .where(values_table.c.field_id == field)
         )
         if values is not None:
             statement = statement.where(values_table.c.value_text.in_(list(values)))
@@ -456,7 +454,7 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
         contact: ContactId | None = None,
         document_type: DocumentTypeId | None = None,
         tag: TagId | None = None,
-        attribute: AttributeId | None = None,
+        field: FieldId | None = None,
         sha256: Sha256 | None = None,
     ) -> bool:
         documents = t.documents
@@ -474,12 +472,10 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
             criteria.append(
                 documents.c.id.in_(select(tags.c.document_id).where(tags.c.tag_id == tag))
             )
-        if attribute is not None:
-            values = t.document_attributes
+        if field is not None:
+            values = t.document_fields
             criteria.append(
-                documents.c.id.in_(
-                    select(values.c.document_id).where(values.c.attribute_id == attribute)
-                )
+                documents.c.id.in_(select(values.c.document_id).where(values.c.field_id == field))
             )
         if sha256 is not None:
             criteria.append(documents.c.sha256 == sha256.hex)
@@ -491,7 +487,7 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
     async def _entities(self, rows: Sequence[Row[Any]]) -> list[Document]:
         ids = [row.id for row in rows]
         tags = await self._children(t.document_tags, "document_id", ids)
-        attributes = await self._children(t.document_attributes, "document_id", ids)
+        fields = await self._children(t.document_fields, "document_id", ids)
         return [
             Document(
                 id=DocumentId(row.id),
@@ -506,10 +502,7 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
                     None if row.document_type_id is None else DocumentTypeId(row.document_type_id)
                 ),
                 tag_ids={TagId(tag.tag_id) for tag in tags[row.id]},
-                attributes={
-                    AttributeId(value.attribute_id): _attribute_value(value)
-                    for value in attributes[row.id]
-                },
+                fields={FieldId(value.field_id): _field_value(value) for value in fields[row.id]},
                 document_date=row.document_date,
                 channel=Channel(row.channel),
                 lane=None if row.lane is None else Lane(row.lane),
@@ -563,15 +556,15 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
             [{"document_id": entity.id, "tag_id": tag_id} for tag_id in entity.tag_ids],
         )
         await self._insert_many(
-            t.document_attributes,
+            t.document_fields,
             [
-                {"document_id": entity.id, "attribute_id": attribute_id, **_value_columns(value)}
-                for attribute_id, value in entity.attributes.items()
+                {"document_id": entity.id, "field_id": field_id, **_value_columns(value)}
+                for field_id, value in entity.fields.items()
             ],
         )
 
     async def _delete_children(self, ids: list[DocumentId]) -> None:
-        for table in (t.document_tags, t.document_attributes):
+        for table in (t.document_tags, t.document_fields):
             await self._tx.write(delete(table).where(table.c.document_id.in_(ids)))
 
 
@@ -584,8 +577,8 @@ _EMPTY_VALUE: Values = {
 }
 
 
-def _value_columns(value: AttributeValue) -> Values:
-    """The columns of `document_attributes` that hold an attribute value."""
+def _value_columns(value: FieldValue) -> Values:
+    """The columns of `document_fields` that hold a field value."""
     match value:
         case bool():
             columns: Values = {"kind": "boolean", "value_boolean": value}
@@ -597,12 +590,12 @@ def _value_columns(value: AttributeValue) -> Values:
             columns = {"kind": "url", "value_text": url}
         case str():
             columns = {"kind": "text", "value_text": value}
-        case _:  # date; datetime is no attribute value
+        case _:  # date; datetime is no field value
             columns = {"kind": "date", "value_date": value}
     return {**_EMPTY_VALUE, **columns}
 
 
-def _attribute_value(row: Row[Any]) -> AttributeValue:
+def _field_value(row: Row[Any]) -> FieldValue:
     match row.kind:
         case "boolean":
             return bool(row.value_boolean)
@@ -616,7 +609,7 @@ def _attribute_value(row: Row[Any]) -> AttributeValue:
             return row.value_text  # type: ignore[no-any-return]
         case "date":
             return row.value_date  # type: ignore[no-any-return]
-    raise ValueError(f"unknown attribute value kind {row.kind!r}")
+    raise ValueError(f"unknown field value kind {row.kind!r}")
 
 
 # --- processing log -----------------------------------------------------------------------------

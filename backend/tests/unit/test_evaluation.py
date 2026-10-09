@@ -49,7 +49,7 @@ async def test_instructions_in_the_text_change_only_checked_fields(tmp_path: Pat
     assert refused.lane is Lane.RED  # fields outside the schema
     assert "unexpected drawer" in refused.reasons[next(iter(refused.reasons))]
     assert obeyed.document_date is None  # not backed by the text
-    assert "Betrag" not in obeyed.attributes  # invented
+    assert "Betrag" not in obeyed.fields  # invented
 
 
 async def test_a_real_run_needs_a_model(tmp_path: Path) -> None:

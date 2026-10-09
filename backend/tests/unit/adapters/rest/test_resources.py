@@ -27,7 +27,7 @@ async def post(api: Api, path: str, body: Any, headers: dict[str, str]) -> Any:
     return response.json()
 
 
-async def test_metadata_with_master_data_and_attributes(api: Api) -> None:
+async def test_metadata_with_master_data_and_fields(api: Api) -> None:
     admin, owner = await api.admin(), await api.user()
     a, o = auth(admin), auth(owner)
     contact = await post(api, "/contacts", {"name": "ACME Energy"}, a)
@@ -35,14 +35,14 @@ async def test_metadata_with_master_data_and_attributes(api: Api) -> None:
     tag = await post(api, "/tags", {"name": "tax"}, a)
     amount = await post(
         api,
-        "/attributes",
+        "/fields",
         {"name": "Amount", "data_type": "amount", "document_type_ids": [invoice["id"]]},
         a,
     )
-    paid = await post(api, "/attributes", {"name": "Paid", "data_type": "boolean"}, a)
-    due = await post(api, "/attributes", {"name": "Due", "data_type": "date"}, a)
+    paid = await post(api, "/fields", {"name": "Paid", "data_type": "boolean"}, a)
+    due = await post(api, "/fields", {"name": "Due", "data_type": "date"}, a)
     kind = await post(
-        api, "/attributes", {"name": "Kind", "data_type": "choice", "choices": ["a", "b"]}, a
+        api, "/fields", {"name": "Kind", "data_type": "choice", "choices": ["a", "b"]}, a
     )
     assert amount["document_type_ids"] == [invoice["id"]]
     document = await green_document(api, o)
@@ -55,7 +55,7 @@ async def test_metadata_with_master_data_and_attributes(api: Api) -> None:
             "document_type_id": invoice["id"],
             "tag_ids": [tag["id"]],
             "document_date": "2026-09-30",
-            "attributes": {
+            "fields": {
                 amount["id"]: {"amount": "84.20", "currency": "EUR"},
                 paid["id"]: True,
                 due["id"]: "2026-10-15",
@@ -69,7 +69,7 @@ async def test_metadata_with_master_data_and_attributes(api: Api) -> None:
     assert body["title"] == "Electricity" and body["access"] == "read_write"
     assert body["contact_id"] == contact["id"] and body["tag_ids"] == [tag["id"]]
     assert body["document_date"] == "2026-09-30"
-    assert body["attributes"] == {
+    assert body["fields"] == {
         amount["id"]: {"amount": "84.20", "currency": "EUR"},
         paid["id"]: True,
         due["id"]: "2026-10-15",
@@ -79,17 +79,17 @@ async def test_metadata_with_master_data_and_attributes(api: Api) -> None:
     # Left out stays, null removes.
     response = await api.client.patch(
         f"{PREFIX}/documents/{document}",
-        json={"contact_id": None, "attributes": {paid["id"]: None}},
+        json={"contact_id": None, "fields": {paid["id"]: None}},
         headers=o,
     )
     body = response.json()
     assert body["contact_id"] is None and body["title"] == "Electricity"
-    assert paid["id"] not in body["attributes"] and amount["id"] in body["attributes"]
+    assert paid["id"] not in body["fields"] and amount["id"] in body["fields"]
 
     for bad in (
-        {"attributes": {kind["id"]: "c"}},
-        {"attributes": {due["id"]: "tomorrow"}},
-        {"attributes": {amount["id"]: {"amount": "x", "currency": "EUR"}}},
+        {"fields": {kind["id"]: "c"}},
+        {"fields": {due["id"]: "tomorrow"}},
+        {"fields": {amount["id"]: {"amount": "x", "currency": "EUR"}}},
         {"title": None},
         {"unknown": 1},
     ):
@@ -273,20 +273,20 @@ async def test_secrets_do_not_come_back(api: Api) -> None:
     assert "12345678901234" not in response.text
 
 
-async def test_attribute_definitions_change(api: Api) -> None:
+async def test_field_definitions_change(api: Api) -> None:
     admin, owner = await api.admin(), await api.user()
     a = auth(admin)
     kind = await post(
-        api, "/attributes", {"name": "Kind", "data_type": "choice", "choices": ["a", "b"]}, a
+        api, "/fields", {"name": "Kind", "data_type": "choice", "choices": ["a", "b"]}, a
     )
     invoice = await post(api, "/document-types", {"name": "Invoice"}, a)
     document = await green_document(api, auth(owner))
     await api.client.patch(
         f"{PREFIX}/documents/{document}",
-        json={"attributes": {kind["id"]: "a"}},
+        json={"fields": {kind["id"]: "a"}},
         headers=auth(owner),
     )
-    url = f"{PREFIX}/attributes/{kind['id']}"
+    url = f"{PREFIX}/fields/{kind['id']}"
     changed = await api.client.patch(url, json={"name": "Sort", "choices": ["a", "c"]}, headers=a)
     assert changed.status_code == 200, changed.text
     assert changed.json()["choices"] == ["a", "c"] and changed.json()["name"] == "Sort"
