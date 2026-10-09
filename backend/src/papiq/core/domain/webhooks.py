@@ -226,6 +226,16 @@ class Webhook:
         self.encrypted_secret = encrypted_secret
         self.updated_at = now
 
+    def drop_expired_secret(self, now: datetime) -> bool:
+        """Forget the previous secret once its grace period is over. Returns True if it did."""
+        if self.previous_secret is None or (
+            self.previous_valid_until is not None and now < self.previous_valid_until
+        ):
+            return False
+        self.previous_secret = None
+        self.previous_valid_until = None
+        return True
+
     def encrypted_secrets(self, now: datetime) -> list[bytes]:
         """The secrets that sign a request now: the current one, and the previous one during
         the grace period."""
