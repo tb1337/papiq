@@ -3,6 +3,8 @@ export interface Page<T> {
 	items: T[];
 	/** The token for the next page; null on the last one. */
 	next: string | number | null;
+	/** How many items there are in all, if the API says (an estimate for a search). */
+	total?: number | null;
 }
 
 export class PagedList<T> {
@@ -11,6 +13,8 @@ export class PagedList<T> {
 	error = $state<unknown>(null);
 	next = $state<string | number | null>(null);
 	loaded = $state(false);
+	/** `Page.total` of the last page that counted; null while unknown. */
+	total = $state<number | null>(null);
 	#load: (after: string | number | null) => Promise<Page<T>>;
 	// A reload while a page is in flight makes the older answer obsolete.
 	#generation = 0;
@@ -32,6 +36,7 @@ export class PagedList<T> {
 		this.items = [];
 		this.next = null;
 		this.loaded = false;
+		this.total = null;
 		await this.#fetch(null, true);
 	}
 
@@ -47,11 +52,13 @@ export class PagedList<T> {
 		this.loading = false;
 		let items: T[] = [];
 		let next: string | number | null = null;
+		let total: number | null | undefined;
 		try {
 			do {
 				const page = await this.#load(next);
 				items = items.concat(page.items);
 				next = page.next;
+				total = page.total ?? total;
 			} while (next !== null && items.length < count);
 		} catch (error) {
 			// A list already on screen stays; the next event or reload tries again.
@@ -61,6 +68,7 @@ export class PagedList<T> {
 		if (generation !== this.#generation) return;
 		this.items = items;
 		this.next = next;
+		if (total !== undefined) this.total = total;
 		this.error = null;
 		this.loaded = true;
 	}
@@ -74,6 +82,7 @@ export class PagedList<T> {
 			if (generation !== this.#generation) return;
 			this.items = replace ? page.items : this.items.concat(page.items);
 			this.next = page.next;
+			if (page.total !== undefined) this.total = page.total;
 			this.loaded = true;
 		} catch (error) {
 			if (generation === this.#generation) this.error = error;
