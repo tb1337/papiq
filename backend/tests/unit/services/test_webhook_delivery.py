@@ -10,7 +10,7 @@ import pytest
 
 from papiq.core.domain.documents import Document
 from papiq.core.domain.drawers import Drawer, ShareLevel
-from papiq.core.domain.errors import NotFoundError
+from papiq.core.domain.errors import NotFoundError, TooManyAttemptsError
 from papiq.core.domain.events import (
     DocumentDeleted,
     DocumentFiled,
@@ -509,3 +509,24 @@ async def test_the_owner_and_admins_test_a_webhook(world: World) -> None:
     assert world.sender.requests == []
     await service.send_test(admin.id, webhook.id)
     assert len(world.sender.requests) == 1
+
+
+async def test_test_requests_are_limited_per_user_and_window(world: World) -> None:
+    owner, admin = await world.user(), await world.user(role=Role.ADMIN)
+    webhook, _ = await hook(world, owner)
+    policy = WebhookPolicy(test_requests=2, test_window=timedelta(minutes=1))
+    service = world.webhook_delivery(policy)
+    await service.send_test(owner.id, webhook.id)
+    world.clock.advance(timedelta(seconds=20))
+    await service.send_test(owner.id, webhook.id)
+    with pytest.raises(TooManyAttemptsError) as refused:
+        await service.send_test(owner.id, webhook.id)
+    assert refused.value.retry_after == timedelta(seconds=40)
+    assert len(world.sender.requests) == 2
+    # Another user has a window of their own; an unknown webhook does not count.
+    await service.send_test(admin.id, webhook.id)
+    with pytest.raises(NotFoundError):
+        await service.send_test(owner.id, WebhookId(new_id()))
+    world.clock.advance(timedelta(seconds=40))
+    await service.send_test(owner.id, webhook.id)
+    assert len(world.sender.requests) == 4
