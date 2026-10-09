@@ -9,11 +9,13 @@ from uuid import UUID
 import pytest
 
 from papiq.adapters.inbound.rest import PREFIX
+from papiq.core.domain.documents import Document
+from papiq.core.domain.errors import UnprocessableDocumentError
 from papiq.core.domain.identity import TokenScope
-from papiq.core.domain.pipeline import Step
+from papiq.core.domain.pipeline import Step, StepResult
 from papiq.core.domain.users import User
 from papiq.core.services.imports import ImportedClassifyStep, ImportedExtractStep
-from papiq.core.services.pipeline import PlaceholderStep
+from papiq.core.services.pipeline import DeferredResult, PlaceholderStep, StepExecutor
 from tests.api import auth, bearer
 from tests.contracts.processing import SAMPLES
 from tests.unit.adapters.rest.conftest import Api
@@ -116,6 +118,56 @@ async def test_an_admin_uploads_for_another_owner_with_the_metadata(api: Api) ->
     # The admin does not own it.
     other = await api.client.get(f"{DOCUMENTS}?limit=50", headers=auth(admin))
     assert other.json()["items"] == []
+
+
+class FailsOnce:
+    """An OCR that cannot process the first document it sees (red at once), then works."""
+
+    def __init__(self, inner: StepExecutor) -> None:
+        self.inner = inner
+        self.calls = 0
+
+    async def run(self, document: Document) -> StepResult | DeferredResult:
+        self.calls += 1
+        if self.calls == 1:
+            raise UnprocessableDocumentError("the file is damaged or not a valid document")
+        return await self.inner.run(document)
+
+
+async def test_a_red_document_keeps_the_metadata_and_gets_them_when_retried(api: Api) -> None:
+    """The metadata is applied by the classification steps, so a document whose OCR fails is
+    red without it; the receive entry keeps it, and a retry applies it (decision 8, M13)."""
+    executors = api.services.pipeline._executors
+    executors[Step.OCR] = FailsOnce(executors[Step.OCR])
+    admin, owner = await api.admin(), await api.user()
+    data = await master_data(api, admin)
+    response = await upload(
+        api, auth(admin), channel="migration", owner=str(owner.id), metadata=metadata(data)
+    )
+    assert response.status_code == 202, response.text
+    await api.drain()
+    url = response.json()["status_url"]
+    document = (await api.client.get(url, headers=auth(owner))).json()
+    assert (document["lane"], document["processing"]["current_step"]) == ("red", "ocr")
+    assert (document["title"], document["contact_id"], document["attributes"]) == (
+        "scan",
+        None,
+        {},
+    )
+    log = (await api.client.get(f"{DOCUMENTS}/{document['id']}/log", headers=auth(owner))).json()
+    assert log[0]["output"]["imported"]["contact_id"] == data["contact"]["id"]
+
+    retried = await api.client.post(f"{DOCUMENTS}/{document['id']}/retry", headers=auth(owner))
+    assert retried.status_code == 202, retried.text
+    await api.drain()
+    document = (await api.client.get(url, headers=auth(owner))).json()
+    assert (document["lane"], document["processing"]["status"]) == ("green", "completed")
+    assert document["title"] == "Electricity March"
+    assert document["contact_id"] == data["contact"]["id"]
+    assert document["document_type_id"] == data["type"]["id"]
+    assert document["tag_ids"] == [data["tag"]["id"]]
+    assert document["document_date"] == "2026-03-31"
+    assert document["attributes"][data["amount"]["id"]] == {"amount": "84.20", "currency": "EUR"}
 
 
 async def test_the_original_hash_is_in_the_details(api: Api) -> None:
