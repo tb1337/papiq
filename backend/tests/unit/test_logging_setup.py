@@ -83,6 +83,23 @@ def test_the_access_log_hides_the_oidc_callback_query(capsys: pytest.CaptureFixt
     assert "/api/v1/documents?x=1" in output
 
 
+def test_the_access_log_leaves_out_the_health_checks(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging(settings(log_format="json"))
+    access = logging.getLogger("uvicorn.access")
+    for path, status in (
+        ("/api/v1/health", 200),
+        ("/api/v1/health?verbose=1", 503),
+        ("/api/v1/healthy", 404),
+        ("/api/v1/documents", 200),
+    ):
+        access.info('%s - "%s %s HTTP/%s" %d', "172.18.0.1:5000", "GET", path, "1.1", status)
+    lines = capsys.readouterr().err.splitlines()
+    assert ["/api/v1/healthy" in line or "/api/v1/documents" in line for line in lines] == [
+        True,
+        True,
+    ]
+
+
 async def test_a_webhook_url_never_reaches_the_log(capsys: pytest.CaptureFixture[str]) -> None:
     configure_logging(settings(log_format="json", log_level="DEBUG"))
     async with LocalReceiver() as receiver:
