@@ -155,7 +155,9 @@ class _State:
 
     def _header_end(self) -> None:
         name = self._header_field.decode("latin-1").lower()
-        self._headers[name] = self._header_value.decode("utf-8", errors="replace")
+        # As latin-1 the bytes survive `parse_options_header`, which encodes them as latin-1 again;
+        # names and file names are decoded as UTF-8 afterwards (a file name may hold any letter).
+        self._headers[name] = self._header_value.decode("latin-1")
         self._header_field, self._header_value = bytearray(), bytearray()
 
     def _headers_finished(self) -> None:
