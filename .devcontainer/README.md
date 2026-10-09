@@ -36,7 +36,10 @@ Once, in the devcontainer (VS Code: Terminal → Run Task):
 
 1. **Papiq: Devinstanz einrichten** copies `live.env.example` to `live.env` with a fresh
    `PAPIQ_SECRET_KEY` and creates the database `papiq_live` (the bucket comes from
-   `garage-init`, the index from Papiq). It never overwrites an existing `live.env`.
+   `garage-init`, the index from Papiq). It never overwrites an existing `live.env`. In a
+   devcontainer that was started before the bucket `papiq-live` existed, run `garage-init`
+   once (`docker compose -f .devcontainer/compose.yml run --rm garage-init`, from the container
+   or the host) or rebuild the container; `/api/v1/health` says `object_store: failed` until then.
 2. Fill in `live.env`: `PAPIQ_ADMIN_USERNAME` and `PAPIQ_ADMIN_PASSWORD` for the first admin
    (use the user name you have in Paperless, so the migration maps the documents to you), the
    address of your Ollama in `PAPIQ_LLM_BASE_URL` and `PAPIQ_EMBEDDING_BASE_URL` (or remove the
