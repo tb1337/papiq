@@ -223,6 +223,11 @@ docker run -d --name "$prefix-path" -e PAPIQ_DB_SQLITE_PATH=/papiq.db -e PAPIQ_S
   -v "$work/secret_key:/run/secrets/secret_key:ro" "$image" >/dev/null
 wait_for 60 "the container with a database in / stops" exited path || true
 check "a database path in the root folder is refused" grep -q 'is the root folder' <(logs path)
+docker run -d --name "$prefix-dots" -e PAPIQ_STORAGE_PATH=/data/../etc/objects -e PAPIQ_SECRET_KEY_FILE=/run/secrets/secret_key \
+  -v "$work/secret_key:/run/secrets/secret_key:ro" "$image" >/dev/null
+wait_for 60 "the container with '..' in a path stops" exited dots || true
+check "a path with '..' is refused" grep -q "must not contain" <(logs dots)
+check "nothing in /etc was chowned" test "$(docker inspect --format '{{.State.ExitCode}}' "$prefix-dots")" -ne 0
 docker run -d --name "$prefix-role" -e PAPIQ_ROLE=proxy -e PAPIQ_SECRET_KEY_FILE=/run/secrets/secret_key \
   -v "$work/secret_key:/run/secrets/secret_key:ro" "$image" >/dev/null
 wait_for 60 "the container with an invalid role stops" exited role || true
