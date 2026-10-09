@@ -193,6 +193,17 @@ async def test_the_filename_is_reduced_to_its_last_segment(api: Api) -> None:
     assert status.json()["title"] == "rechnung"
 
 
+async def test_a_filename_may_hold_any_letter(api: Api) -> None:
+    owner = await api.user()
+    name = "Ertr\u00e4gnisaufstellung \u2013 2024 \u20ac.pdf"  # beyond Latin-1
+    files = {"file": (name, (SAMPLES / "scan.pdf").read_bytes(), "x/y")}
+    response = await api.client.post(DOCUMENTS, files=files, headers=auth(owner))
+    assert response.status_code == 202, response.text
+    status = await api.client.get(response.json()["status_url"], headers=auth(owner))
+    assert status.json()["original_filename"] == name
+    assert status.json()["title"] == "Ertr\u00e4gnisaufstellung \u2013 2024 \u20ac"
+
+
 async def test_received_files_are_removed(
     api: Api, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
