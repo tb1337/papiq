@@ -30,11 +30,12 @@ stored.
 
 import asyncio
 import logging
+from collections import deque
 from datetime import datetime, timedelta
 from uuid import UUID
 
 from papiq.core.domain.documents import Document
-from papiq.core.domain.errors import ConcurrencyError, NotFoundError
+from papiq.core.domain.errors import ConcurrencyError, NotFoundError, TooManyAttemptsError
 from papiq.core.domain.events import DocumentDeleted, DocumentEvent, DocumentFiled, DomainEvent
 from papiq.core.domain.ids import DocumentId, EventId, UserId, WebhookId, new_id
 from papiq.core.domain.jobs import Job
@@ -94,6 +95,9 @@ class WebhookDeliveryService:
             delay=self._policy.retry_delay,
             max_delay=self._policy.max_retry_delay,
         )
+        # When each user sent test requests, for the limit per window (this process only; a
+        # second API instance would count on its own).
+        self._test_requests: dict[UserId, deque[datetime]] = {}
 
     # --- fan-out --------------------------------------------------------------------------------
 
@@ -150,11 +154,14 @@ class WebhookDeliveryService:
 
     async def send_test(self, actor: UserId, id: WebhookId) -> WebhookDelivery:
         """Owner or admin: send a `webhook.test` request now, once, and return the log row. Works
-        for a switched-off webhook too; does not count towards switching it off."""
+        for a switched-off webhook too; does not count towards switching it off. A test request
+        goes to any address at once, so each user gets `policy.test_requests` per
+        `policy.test_window`; beyond that TooManyAttemptsError says when the next one may go."""
         async with self._uow() as uow:
             webhook = await manageable_webhook(uow, await load_actor(uow, actor), id)
-        event_id = EventId(new_id())
         now = self._clock.now()
+        self._count_test_request(actor, now)
+        event_id = EventId(new_id())
         secrets = self._decrypt(webhook, now)
         response = await self._send(webhook, secrets, event_id, TEST_EVENT, now, None)
         outcome = DeliveryOutcome.DELIVERED if _is_success(response) else DeliveryOutcome.GAVE_UP
@@ -163,6 +170,15 @@ class WebhookDeliveryService:
             await uow.webhooks.add_delivery(delivery)
             await uow.commit()
         return delivery
+
+    def _count_test_request(self, actor: UserId, now: datetime) -> None:
+        window, limit = self._policy.test_window, self._policy.test_requests
+        sent = self._test_requests.setdefault(actor, deque())
+        while sent and sent[0] <= now - window:
+            sent.popleft()
+        if len(sent) >= limit:
+            raise TooManyAttemptsError(sent[0] + window - now)
+        sent.append(now)
 
     async def _run_claimed(self, job: Job) -> None:
         try:

@@ -191,3 +191,16 @@ async def test_a_test_request_is_sent_and_logged(api: Api) -> None:
     assert len(sender.requests) == 1
     assert (await api.client.post(url, headers=auth(admin))).status_code == 200
     assert len(sender.requests) == 2
+
+
+async def test_test_requests_answer_429_beyond_the_limit(api: Api) -> None:
+    user = await api.user()
+    created = await post(api, "/webhooks", BODY, auth(user))
+    url = f"{PREFIX}/webhooks/{created['id']}/test"
+    for _ in range(10):
+        assert (await api.client.post(url, headers=auth(user))).status_code == 200
+    refused = await api.client.post(url, headers=auth(user))
+    assert refused.status_code == 429, refused.text
+    assert refused.headers["Retry-After"] == "60"
+    sender = api.container.webhook_sender
+    assert isinstance(sender, FakeWebhookSender) and len(sender.requests) == 10

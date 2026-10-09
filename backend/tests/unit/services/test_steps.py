@@ -10,7 +10,7 @@ from papiq.adapters.outbound.memory.processing import FAKE_PDF
 from papiq.core.domain.documents import Document
 from papiq.core.domain.pipeline import Lane, Outcome, Step
 from papiq.core.domain.users import User
-from papiq.core.ports import OcrResult
+from papiq.core.ports import OcrResult, ParseResult
 from papiq.core.services.objects import (
     archive_key,
     markdown_key,
@@ -26,9 +26,21 @@ from tests.unit.services.conftest import World
 
 
 class NotPdfa(FakeOcr):
+    def __init__(self, note: str | None = None) -> None:
+        super().__init__()
+        self.note = note
+
     async def make_archive(self, source: Path, target: Path, *, media_type: str) -> OcrResult:
         await super().make_archive(source, target, media_type=media_type)
-        return OcrResult(pages=1, engine="fake-ocr 1", pdfa=False)
+        return OcrResult(pages=1, engine="fake-ocr 1", pdfa=False, note=self.note)
+
+
+class Unsigned(FakeOcr):
+    """PDF/A, but the original's signature is not in the archive."""
+
+    async def make_archive(self, source: Path, target: Path, *, media_type: str) -> OcrResult:
+        await super().make_archive(source, target, media_type=media_type)
+        return OcrResult(pages=1, engine="fake-ocr 1", pdfa=True, note="signature not carried")
 
 
 def pipeline(
@@ -91,9 +103,31 @@ async def test_a_damaged_file_goes_red_at_once(world: World) -> None:
 
 
 async def test_an_archive_that_is_not_pdfa_is_uncertain(world: World) -> None:
-    _, document = await ingest(world, pipeline(world, ocr=NotPdfa()), "scan.pdf")
+    owner, document = await ingest(world, pipeline(world, ocr=NotPdfa()), "scan.pdf")
     assert document.lane is Lane.YELLOW
     assert document.processing.outcomes[Step.OCR] is Outcome.UNCERTAIN
+    entry = (await world.documents.processing_log(owner.id, document.id))[1]
+    assert entry.step is Step.OCR
+    assert entry.result.reason == "the archive could not be made PDF/A"
+    assert "note" not in entry.result.output
+
+
+async def test_the_engines_reason_for_a_plain_pdf_is_in_the_log(world: World) -> None:
+    note = "not PDF/A: Setting Overprint Mode to 1 not permitted in PDF/A-2"
+    owner, document = await ingest(world, pipeline(world, ocr=NotPdfa(note)), "scan.pdf")
+    assert document.lane is Lane.YELLOW
+    entry = (await world.documents.processing_log(owner.id, document.id))[1]
+    assert entry.result.reason == f"the archive could not be made PDF/A: {note}"
+    assert entry.result.output["note"] == note
+
+
+async def test_a_signature_left_out_of_the_archive_is_ok_with_a_note(world: World) -> None:
+    owner, document = await ingest(world, pipeline(world, ocr=Unsigned()), "scan.pdf")
+    assert document.lane is Lane.GREEN
+    entry = (await world.documents.processing_log(owner.id, document.id))[1]
+    assert entry.step is Step.OCR and entry.result.outcome is Outcome.OK
+    assert entry.result.reason == "signature not carried"
+    assert entry.result.output["note"] == "signature not carried"
 
 
 async def test_a_document_without_text_goes_red(world: World) -> None:
@@ -101,8 +135,35 @@ async def test_a_document_without_text_goes_red(world: World) -> None:
     assert document.lane is Lane.RED
     assert document.processing.current_step is Step.PARSE
     entry = (await world.documents.processing_log(owner.id, document.id))[-1]
-    assert entry.result.reason == "no text recognised"
+    assert entry.result.reason == "no text recognised: the pages are blank or hold only pictures"
     assert await world.object_store.exists(markdown_key(document.id))  # kept for inspection
+
+
+class TextLayer(FakeParser):
+    """A parser whose layout analysis found nothing and that fell back to the text layer."""
+
+    async def parse(self, source: Path, *, markdown: Path, structure: Path) -> ParseResult:
+        result = await super().parse(source, markdown=markdown, structure=structure)
+        return ParseResult(pages=result.pages, parser=result.parser, note="text layer used")
+
+
+async def test_a_parser_that_fell_back_to_the_text_layer_is_uncertain(world: World) -> None:
+    store = world.object_store
+    service = world.pipeline(
+        {
+            Step.OCR: OcrStep(store, FakeOcr(), FakePreviewRenderer()),
+            Step.PARSE: ParseStep(store, TextLayer("Lohnabrechnung Februar")),
+        }
+    )
+    owner, document = await ingest(world, service, "scan.pdf")
+    assert document.lane is Lane.YELLOW
+    assert document.processing.outcomes[Step.PARSE] is Outcome.UNCERTAIN
+    entry = (await world.documents.processing_log(owner.id, document.id))[2]
+    assert entry.step is Step.PARSE
+    assert entry.result.reason == "text layer used"
+    assert entry.result.output["note"] == "text layer used"
+    text = await world.object_store.get(markdown_key(document.id))
+    assert text == b"Lohnabrechnung Februar"
 
 
 async def test_reprocessing_from_parse_reuses_the_archive(world: World) -> None:

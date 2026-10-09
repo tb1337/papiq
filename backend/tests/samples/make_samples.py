@@ -7,6 +7,8 @@
 - screenshot.png  text on a transparent background (RGBA)
 - pages.tiff      two scanned pages in one TIFF
 - blank.pdf       a scanned empty page: OCR finds no text
+- signed.pdf      text.pdf with a signature flag (OCRmyPDF refuses it unless told to
+                  invalidate the signature)
 - damaged.pdf     a PDF header followed by garbage
 - unsupported.docx  an Office file (a ZIP archive), not supported
 """
@@ -33,13 +35,15 @@ def page(lines: list[str], size: tuple[int, int] = (1240, 1754)) -> Image.Image:
     return image
 
 
-def text_pdf(lines: list[str]) -> bytes:
-    """A minimal PDF with Helvetica text, written by hand."""
+def text_pdf(lines: list[str], *, signed: bool = False) -> bytes:
+    """A minimal PDF with Helvetica text, written by hand. `signed`: the catalog declares a
+    signature (`/AcroForm /SigFlags 1`), which is what OCRmyPDF checks."""
     content = (
         "BT /F1 24 Tf 72 760 Td " + " ".join(f"({line}) Tj 0 -36 Td" for line in lines) + " ET"
     )
+    acroform = " /AcroForm << /Fields [] /SigFlags 1 >>" if signed else ""
     objects = [
-        "<< /Type /Catalog /Pages 2 0 R >>",
+        f"<< /Type /Catalog /Pages 2 0 R{acroform} >>",
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
         "/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
@@ -65,6 +69,7 @@ def text_pdf(lines: list[str]) -> bytes:
 def main() -> None:
     page(LINES).save(HERE / "scan.pdf", resolution=150)
     (HERE / "text.pdf").write_bytes(text_pdf(LINES))
+    (HERE / "signed.pdf").write_bytes(text_pdf(LINES, signed=True))
     page(LINES, (1000, 1300)).convert("RGB").save(HERE / "photo.jpg", quality=80)
     page(LINES, (900, 1200)).convert("RGB").save(HERE / "lowres.jpg", quality=80, dpi=(72, 72))
     transparent = Image.new("RGBA", (1000, 600), (255, 255, 255, 0))
