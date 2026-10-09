@@ -23,13 +23,17 @@ node_modules/
 # Local data
 data/
 
-# IDE: keep design documents in .idea, ignore JetBrains files
+# IDE: keep design documents in .idea, ignore JetBrains files; VS Code: only the tasks
 .idea/*
 !.idea/*.md
 !.idea/prompts/
 !.idea/reviews/
-.vscode/
+.vscode/*
+!.vscode/tasks.json
 .DS_Store
+
+# The settings of the development instance in the devcontainer (.devcontainer/README.md)
+.devcontainer/live.env
 
 # Secrets of the example stacks (deploy/create-secrets.sh)
 deploy/secrets/
@@ -38,3 +42,6 @@ deploy/backup/
 # Migration client: local state and reports of a run
 migration-state.sqlite*
 migration-reports/
+
+# pnpm store created by runs from the repository root
+.pnpm-store/
