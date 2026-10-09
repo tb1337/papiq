@@ -35,7 +35,8 @@ _WORD = re.compile(r"\w")
 class OcrStep:
     """Archive PDF with text layer and preview of the first page. A damaged or encrypted file
     fails at once (UnprocessableDocumentError, see PipelineService); an archive that is not
-    PDF/A is uncertain."""
+    PDF/A is uncertain, with the engine's reason. An archive that is PDF/A but differs from
+    what was asked (a signature not carried over) is OK with the engine's note as reason."""
 
     def __init__(self, store: ObjectStore, ocr: Ocr, previews: PreviewRenderer) -> None:
         self._store = store
@@ -61,16 +62,25 @@ class OcrStep:
             "pages": result.pages,
             "pdfa": result.pdfa,
         }
+        if result.note is not None:
+            output["note"] = result.note
         if not result.pdfa:
+            reason = "the archive could not be made PDF/A"
+            if result.note is not None:
+                reason = f"{reason}: {result.note}"
             return StepResult(
                 outcome=Outcome.UNCERTAIN,
-                reason="the archive could not be made PDF/A",
+                reason=reason,
                 model_version=result.engine,
                 input=input,
                 output=output,
             )
         return StepResult(
-            outcome=Outcome.OK, model_version=result.engine, input=input, output=output
+            outcome=Outcome.OK,
+            reason=result.note,
+            model_version=result.engine,
+            input=input,
+            output=output,
         )
 
 

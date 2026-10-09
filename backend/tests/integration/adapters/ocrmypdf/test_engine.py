@@ -83,3 +83,12 @@ async def test_the_time_limit_stops_ocr(tmp_path: Path) -> None:
             SAMPLES / "scan.pdf", target, media_type=media_types.PDF
         )
     assert list(tmp_path.iterdir()) == []
+
+
+async def test_a_signed_pdf_gets_its_archive_without_the_signature(tmp_path: Path) -> None:
+    target = tmp_path / "archive.pdf"
+    result = await engine().make_archive(SAMPLES / "signed.pdf", target, media_type=media_types.PDF)
+    assert (result.pages, result.pdfa) == (1, True)
+    assert result.note is not None and "signature" in result.note
+    assert "Rechnung Nummer 4711" in " ".join(text_of(target).split())
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["archive.pdf"]
