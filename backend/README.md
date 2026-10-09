@@ -157,7 +157,7 @@ Receive → OCR → parse → classify → extract attributes → apply rules �
 | Step | Input | Derivatives (object store) | Outcome |
 | --- | --- | --- | --- |
 | OCR (`OcrStep`) | `originals/<sha256>` | `documents/<id>/archive.pdf` (PDF/A with text layer), `documents/<id>/preview.webp` (first page, 400 px wide) | uncertain if the archive is not PDF/A, with the reason; OK with a note if the original's digital signature is not in the archive |
-| Parse (`ParseStep`) | the archive PDF | `documents/<id>/content.md`, `documents/<id>/content.json` (Docling) | failed if no text was recognised |
+| Parse (`ParseStep`) | the archive PDF | `documents/<id>/content.md`, `documents/<id>/content.json` (Docling) | failed if no text was recognised; uncertain if the text is the plain text layer because the layout analysis found none |
 | Classify (`ClassifyStep`) | `content.md`, master data | contact, document type, tags, document date (applied if checked) | see below |
 | Extract attributes (`ExtractAttributesStep`) | `content.md`, the attributes of the type | attribute values (applied if checked) | see below |
 | Apply rules (`ApplyRulesStep`) | `content.md` (only if a rule looks at the text), the rules | drawer, contact, type, title, tags, attributes | uncertain on conflicts, refused actions and forced reviews; see Rules |
@@ -190,6 +190,10 @@ Receive → OCR → parse → classify → extract attributes → apply rules �
   PDF/A without changing its content.
 - Docling uses the text layer of the archive (no OCR of its own) and the layout and table
   models in `PAPIQ_DOCLING_MODELS_PATH`; it never downloads models (`HF_HUB_OFFLINE=1`). The
+  layout model sometimes takes a whole scanned page for a picture (a payslip in the M12 run)
+  and returns no text although OCR recognised some: then the plain text layer of the archive
+  becomes the Markdown, one block per page, the structure stays Docling's, and the step is
+  uncertain with that note, so the owner sees the document before it is filed. The
   image stage `docling-models` downloads the models of the locked Docling version to
   `/opt/docling-models`; the devcontainer has them. Elsewhere:
   `uv run docling-tools models download layout tableformer -o <dir>`.

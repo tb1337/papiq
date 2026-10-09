@@ -86,7 +86,9 @@ class OcrStep:
 
 class ParseStep:
     """Markdown and structure from the archive PDF. A document without any text fails: there
-    is nothing to classify, a person has to look at it."""
+    is nothing to classify, a person has to look at it. A parser that had to fall back (the
+    text layer instead of its layout analysis, see `ParseResult.note`) makes the step
+    uncertain, so the owner sees the document before it is filed."""
 
     def __init__(self, store: ObjectStore, parser: DocumentParser) -> None:
         self._store = store
@@ -118,7 +120,16 @@ class ParseStep:
         if not has_text(text):
             return StepResult(
                 outcome=Outcome.FAILED,
-                reason="no text recognised",
+                reason="no text recognised: the pages are blank or hold only pictures",
+                model_version=result.parser,
+                input=input,
+                output=output,
+            )
+        if result.note is not None:
+            output["note"] = result.note
+            return StepResult(
+                outcome=Outcome.UNCERTAIN,
+                reason=result.note,
                 model_version=result.parser,
                 input=input,
                 output=output,
