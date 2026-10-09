@@ -1044,7 +1044,7 @@ class ConditionSchema(BaseModel):
             "`fields` of a document."
         ),
     )
-    field_id: UUID | None = Field(default=None, description="For `field` `field` only.")
+    field_id: UUID | None = Field(default=None, description="Only when `field` is `field`.")
     case_sensitive: bool = Field(
         default=False, description="For `matches` only; other comparisons ignore case."
     )

@@ -62,6 +62,8 @@ class State:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(path)
         self._db.executescript(SCHEMA)
+        # Papiq 0.1 called fields "attributes".
+        self._db.execute("UPDATE objects SET kind = 'field' WHERE kind = 'attribute'")
         self._db.commit()
 
     def close(self) -> None:

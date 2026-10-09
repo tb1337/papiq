@@ -176,8 +176,8 @@ def decide(
     """Every open field needs a decision: a value (or None) in `changes` (or named in `given`,
     such as the drawer), a value the document has (its owner set it meanwhile; it is kept), or,
     with `accept_suggestions`, a suggestion that can be taken as it is. Suggestions never
-    replace a value. OpenFieldsError lists the fields without a decision. Fields of fields
-    that no longer exist need none. The rules' drawer, title and review always have a value:
+    replace a value. OpenFieldsError lists the fields without a decision. Fields whose definition
+    no longer exists need none. The rules' drawer, title and review always have a value:
     confirming keeps them."""
     accepted: dict[Step, list[str]] = {}
     entered: dict[Step, list[str]] = {}

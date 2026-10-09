@@ -35,7 +35,7 @@ def field_key(id: FieldId) -> str:
 
 
 def field_id_of(field: str) -> str | None:
-    """The field id named by a field, or None for the other fields."""
+    """The field id named by a check name, or None for the other checks."""
     return field.removeprefix(_FIELD_PREFIX) if field.startswith(_FIELD_PREFIX) else None
 
 

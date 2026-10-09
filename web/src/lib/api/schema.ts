@@ -1559,7 +1559,7 @@ export interface components {
 			value?: string | boolean | components['schemas']['MoneyValue'] | string[] | null;
 			/**
 			 * Field Id
-			 * @description For `field` `field` only.
+			 * @description Only when `field` is `field`.
 			 */
 			field_id?: string | null;
 			/**
