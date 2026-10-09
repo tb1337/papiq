@@ -401,8 +401,9 @@ async def test_an_admin_token_does_not_lead_to_a_session(api: Api) -> None:
 
 
 async def test_auth_answers_are_not_stored(api: Api) -> None:
-    """M4-08: answers below /auth carry tokens and secrets; caches must not keep them, also
-    errors. Other answers are left alone."""
+    """M4-08 and 1-04 (M13): answers below /auth carry tokens and secrets, the other answers
+    of the API are personal; caches must not keep them, also errors, and browsers must not
+    sniff their type. Health and the API description are public."""
     user = await api.user("alice")
     answers = [
         await api.client.post(
@@ -415,10 +416,18 @@ async def test_auth_answers_are_not_stored(api: Api) -> None:
         await api.client.get(f"{PREFIX}/auth/oidc/login"),  # 404 without a provider
         await api.client.get(f"{PREFIX}/auth/tokens", headers=auth(user)),  # 403
     ]
+    answers += [
+        await api.client.get(f"{PREFIX}/drawers", headers=auth(user)),
+        await api.client.get(f"{PREFIX}/documents/search", params={"q": "x"}, headers=auth(user)),
+        await api.client.get(f"{PREFIX}/users/{UUID(int=7)}", headers=auth(user)),  # 404
+    ]
     for answer in answers:
         assert answer.headers["cache-control"] == "no-store", answer.request.url
-    other = await api.client.get(f"{PREFIX}/drawers", headers=auth(user))
-    assert "cache-control" not in other.headers
+        assert answer.headers["x-content-type-options"] == "nosniff", answer.request.url
+    for path in ("/health", "/openapi.json"):
+        public = await api.client.get(PREFIX + path)
+        assert public.status_code == 200
+        assert "cache-control" not in public.headers, path
 
 
 async def test_token_expiry_may_have_any_offset(api: Api) -> None:

@@ -57,6 +57,8 @@ services:
     environment:
       GARAGE_ADMIN_URL: http://garage:3903
       GARAGE_ADMIN_TOKEN: *garage-admin-token
+      # The bucket of the development instance (live.env, see README.md).
+      PAPIQ_S3_EXTRA_BUCKETS: papiq-live
     depends_on:
       - garage
     restart: "no"

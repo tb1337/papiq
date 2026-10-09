@@ -682,90 +682,109 @@ development key.
 Variables for the variant that is not selected (for example `PAPIQ_DB_HOST` with
 `PAPIQ_DB_TYPE=sqlite`) are not required, but must still be well-formed if set.
 Choices are case-insensitive; surrounding whitespace is removed and blank values count as unset.
-Durations are seconds (`30`, `1.5`) or ISO 8601 (`PT1H`, `P7D`) and must be positive.
+Durations must be positive.
 
-| Variable | Values / default | Notes |
-| --- | --- | --- |
-| `PAPIQ_ROLE` | `all` (default), `api`, `worker` | Which services run |
-| `PAPIQ_LOG_FORMAT` | `json` (default), `console` | |
-| `PAPIQ_LOG_LEVEL` | `INFO` (default), `DEBUG`, `WARNING`, `ERROR`, `CRITICAL` | |
-| `PAPIQ_DB_TYPE` | `sqlite` (default), `postgres` | |
-| `PAPIQ_DB_SQLITE_PATH` | `data/papiq.db` | SQLite only; local volume (WAL) |
-| `PAPIQ_DB_HOST`, `_NAME`, `_USER` | required for `postgres` | |
-| `PAPIQ_DB_PORT` | `5432` | |
-| `PAPIQ_DB_PASSWORD` | required for `postgres` | *secret* |
-| `PAPIQ_STORAGE_TYPE` | `filesystem` (default), `s3` | |
-| `PAPIQ_STORAGE_PATH` | `data/objects` | filesystem only |
-| `PAPIQ_S3_ENDPOINT_URL`, `_BUCKET` | required for `s3` | |
-| `PAPIQ_S3_REGION` | `us-east-1` | |
-| `PAPIQ_S3_PATH_STYLE` | `true` | |
-| `PAPIQ_S3_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY` | required for `s3` | *secret* |
-| `PAPIQ_API_HOST`, `PAPIQ_API_PORT` | `0.0.0.0`, `8000` | Where the API listens |
-| `PAPIQ_UPLOAD_MAX_SIZE` | `100MiB` | Largest upload; bytes or with unit (`50MB`, `1GiB`) |
-| `PAPIQ_UI_DIR` | unset; `/opt/papiq/ui` in the image | The built web UI (`web/build`), served below `/ui`; `/` leads there. Must contain `index.html` |
-| `PAPIQ_REQUEST_MAX_SIZE` | `1MiB` | Largest body of every other request (JSON); larger ones get `413` |
-| `PAPIQ_FORWARDED_ALLOW_IPS` | unset; required with `PAPIQ_COOKIE_SECURE=true` | Reverse proxies whose `X-Forwarded-For` is trusted (comma-separated). Secure cookies mean a TLS-terminating proxy in front of Papiq: name its address, or the per-source throttle sees only the proxy. `*` only if the proxy sets the header itself, replacing what clients send |
-| `PAPIQ_SECRET_KEY` | required | *secret*; 32 bytes base64 (`openssl rand -base64 32`); encrypts TOTP and webhook secrets, also needed by the worker. Keep it: without it, they cannot be read |
-| `PAPIQ_ADMIN_USERNAME`, `PAPIQ_ADMIN_PASSWORD` | unset | The first admin, see Identity; password *secret*; set both or neither |
-| `PAPIQ_SESSION_IDLE_TIMEOUT` | `P1D` | A session ends when unused this long |
-| `PAPIQ_SESSION_MAX_AGE` | `P30D` | A session ends this long after sign-in; not shorter than the idle timeout |
-| `PAPIQ_COOKIE_SECURE` | `true` | `false` only for development over plain HTTP |
-| `PAPIQ_PUBLIC_URL` | unset | Where browsers reach Papiq (`https://papiq.example.org`); required with OIDC |
-| `PAPIQ_OIDC_ISSUER`, `_CLIENT_ID`, `_CLIENT_SECRET` | unset | OpenID Connect; set all three or none; the issuer is https and compared exactly; secret *secret*. Register `<PAPIQ_PUBLIC_URL>/api/v1/auth/oidc/callback` as redirect URI |
-| `PAPIQ_OIDC_SCOPES` | `openid profile email` | Must contain `openid` |
-| `PAPIQ_OIDC_DISPLAY_NAME` | `Single sign-on` | Name of the provider for the sign-in page |
-| `PAPIQ_OIDC_AUTO_CREATE` | `false` | Create a user at the first sign-in of an unknown provider account |
-| `PAPIQ_OIDC_USERNAME_CLAIM` | `preferred_username` | ID token claim that names such a user |
-| `PAPIQ_WORKER_CONCURRENCY` | `2` | Jobs at the same time; about 2 GB of RAM each (Docling), see Worker |
-| `PAPIQ_WORKER_POLL_INTERVAL` | `1` | Seconds between looks for due jobs |
-| `PAPIQ_WORKER_SHUTDOWN_TIMEOUT` | `30` | Seconds running jobs get to finish on SIGTERM |
-| `PAPIQ_STEP_MAX_ATTEMPTS` | `3` | Attempts of a pipeline step that raises |
-| `PAPIQ_STEP_RETRY_DELAY` | `30` | Seconds before the second attempt, doubling after |
-| `PAPIQ_EVENTS_POLL_INTERVAL` | `1` | Seconds between outbox dispatches |
-| `PAPIQ_EVENTS_MAX_ATTEMPTS` | `10` | Delivery attempts of an event per subscriber |
-| `PAPIQ_CLEANUP_INTERVAL` | `3600` | Seconds between cleanups |
-| `PAPIQ_RETENTION` | `P7D` | Age of finished jobs and delivered events to remove |
-| `PAPIQ_OCR_LANGUAGES` | `deu+eng` | Tesseract languages, joined by `+` |
-| `PAPIQ_OCR_TIMEOUT`, `PAPIQ_PARSE_TIMEOUT` | `600` | Seconds per document and step |
-| `PAPIQ_DOCLING_MODELS_PATH` | `/opt/docling-models` | Docling layout and table models |
-| `PAPIQ_MEILISEARCH_URL` | unset | Without it there is no search |
-| `PAPIQ_MEILISEARCH_API_KEY` | unset | *secret* |
-| `PAPIQ_MEILISEARCH_INDEX` | `papiq-documents` | The active index; a rebuild fills `<name>-rebuild` |
-| `PAPIQ_MEILISEARCH_TIMEOUT`, `PAPIQ_MEILISEARCH_TASK_TIMEOUT` | `30`, `120` | Seconds per request; seconds a write waits for its task |
-| `PAPIQ_SEARCH_LOCALES` | `deu+eng` | Languages of the documents, ISO 639-3 codes joined by `+` |
-| `PAPIQ_SEARCH_SEMANTIC_RATIO` | `0.5` | Weight of the meaning against the words when a request does not say |
-| `PAPIQ_SEARCH_EMBED_TIMEOUT` | `5` | Seconds to wait for the embedding of a query, then words only |
-| `PAPIQ_SEARCH_MAX_TEXT` | `200000` | Characters of text per document in the index |
-| `PAPIQ_SEARCH_CHUNK_SIZE`, `PAPIQ_SEARCH_MAX_CHUNKS` | `1500`, `8` | Characters per section with a vector; sections per document |
-| `PAPIQ_SEARCH_RECONCILE_INTERVAL` | `21600` | Seconds between comparisons of index and database |
-| `PAPIQ_SEARCH_REBUILD_TIMEOUT` | `21600` | Seconds a rebuild may take |
-| `PAPIQ_LLM_BASE_URL`, `_MODEL` | unset | OpenAI-compatible endpoint; set both or neither |
-| `PAPIQ_LLM_API_KEY` | unset | *secret* |
-| `PAPIQ_LLM_TEMPERATURE` | `0` | 0 to 2; 0 for repeatable answers |
-| `PAPIQ_LLM_SEED` | unset | Passed to the endpoint, if set |
-| `PAPIQ_LLM_TIMEOUT` | `300` | Seconds per request |
-| `PAPIQ_LLM_RESPONSE_FORMAT` | `json_schema` | `json_object` for providers without JSON schema support |
-| `PAPIQ_LLM_INPUT_BUDGET` | `12000` | Characters of document text per request |
-| `PAPIQ_LLM_MAX_TAGS` | `200` | Tags listed per request |
-| `PAPIQ_CONFIDENCE_THRESHOLD` | `0.9` | A field passes from this confidence on |
-| `PAPIQ_CONTACT_SUGGEST_THRESHOLD` | `0.75` | An existing contact is suggested from this similarity on; not above the confidence threshold |
-| `PAPIQ_EMBEDDING_BASE_URL`, `_MODEL` | unset | OpenAI-compatible endpoint; set both or neither |
-| `PAPIQ_EMBEDDING_API_KEY` | unset | *secret* |
-| `PAPIQ_EMBEDDING_TIMEOUT` | `60` | Seconds per request |
-| `PAPIQ_EMBEDDING_DIMENSIONS` | unset | Length of the vectors (`bge-m3`: 1024); required with Meilisearch and an embedding endpoint |
-| `PAPIQ_EMBEDDING_QUERY_PREFIX`, `PAPIQ_EMBEDDING_DOCUMENT_PREFIX` | unset | Put before queries and before document sections, for models that ask for it |
-| `PAPIQ_WEBHOOKS_PER_USER` | `20` | Webhooks a user may have |
-| `PAPIQ_WEBHOOK_SECRET_GRACE` | `P1D` | How long the old secret signs after renewing |
-| `PAPIQ_WEBHOOK_TIMEOUT` | `10` | Seconds per delivery attempt (1 to 120) |
-| `PAPIQ_WEBHOOK_MAX_ATTEMPTS` | `10` | Attempts per delivery (1 to 50) |
-| `PAPIQ_WEBHOOK_RETRY_DELAY` | `30` | Seconds before the second attempt, doubling after, at most an hour |
-| `PAPIQ_WEBHOOK_DISABLE_AFTER` | `20` | Deliveries given up in a row until a webhook is switched off |
-| `PAPIQ_WEBHOOK_CONCURRENCY` | `4` | Deliveries at the same time (worker) |
-| `PAPIQ_MCP_ENABLED` | `true` | Serve MCP at `/api/v1/mcp` |
-| `PAPIQ_MCP_TEXT_MAX` | `20000` | Characters one `get_text` call returns at most (1,000 to 1,000,000) |
-| `PAPIQ_RULES_PATTERN_TIMEOUT` | `0.2` | Seconds a regular expression of a rule may run per text or value |
-| `PAPIQ_RULES_MAX_TEXT` | `200000` | Characters of text rules look at (1,000 to 10,000,000) |
-| `PAPIQ_RULES_APPLY_MAX_DOCUMENTS` | `1000` | Documents per retroactive rule application (1 to 100,000) |
+The table names every variable (a test checks it against `settings.py`). **Role** says which
+service reads it: `API`, `Worker` or `both`; a container with `PAPIQ_ROLE=all` needs them all,
+separate API and worker containers only theirs (the connection and storage settings in both).
+Durations are seconds (`30`, `1.5`) or ISO 8601 (`PT1H`, `P7D`).
+
+| Variable | Role | Default | Meaning |
+| --- | --- | --- | --- |
+| `PAPIQ_ROLE` | both | `all` | `all`, `api` or `worker`: which services run (the image's s6 scripts read it) |
+| `PAPIQ_LOG_FORMAT` | both | `json` | `json` or `console` |
+| `PAPIQ_LOG_LEVEL` | both | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+| `PAPIQ_DB_TYPE` | both | `sqlite` | `sqlite` or `postgres` |
+| `PAPIQ_DB_SQLITE_PATH` | both | `data/papiq.db`; image: `/data/papiq.db` | SQLite only; local volume (WAL), never a network share |
+| `PAPIQ_DB_HOST` | both | unset | required for `postgres` |
+| `PAPIQ_DB_PORT` | both | `5432` |  |
+| `PAPIQ_DB_NAME` | both | unset | required for `postgres` |
+| `PAPIQ_DB_USER` | both | unset | required for `postgres` |
+| `PAPIQ_DB_PASSWORD` | both | unset | *secret*; required for `postgres` |
+| `PAPIQ_STORAGE_TYPE` | both | `filesystem` | `filesystem` or `s3` |
+| `PAPIQ_STORAGE_PATH` | both | `data/objects`; image: `/data/objects` | filesystem only |
+| `PAPIQ_S3_ENDPOINT_URL` | both | unset | required for `s3`, e.g. `http://garage:3900` |
+| `PAPIQ_S3_REGION` | both | `us-east-1` |  |
+| `PAPIQ_S3_BUCKET` | both | unset | required for `s3` |
+| `PAPIQ_S3_ACCESS_KEY_ID` | both | unset | *secret*; required for `s3` |
+| `PAPIQ_S3_SECRET_ACCESS_KEY` | both | unset | *secret*; required for `s3` |
+| `PAPIQ_S3_PATH_STYLE` | both | `true` | Path-style addressing (Garage needs it) |
+| `PAPIQ_API_HOST` | API | `0.0.0.0` | Where the API listens |
+| `PAPIQ_API_PORT` | API | `8000` |  |
+| `PAPIQ_UPLOAD_MAX_SIZE` | API | `100MiB` | Largest upload; bytes or with unit (`50MB`, `1GiB`); a proxy's body limit must allow it |
+| `PAPIQ_REQUEST_MAX_SIZE` | API | `1MiB` | Largest body of every other request (JSON); larger ones get `413` |
+| `PAPIQ_UI_DIR` | API | unset; image: `/opt/papiq/ui` | The built web UI (`web/build`), served below `/ui`; `/` leads there. Must contain `index.html`; unset serves the API only |
+| `PAPIQ_FORWARDED_ALLOW_IPS` | API | unset; required with `PAPIQ_COOKIE_SECURE=true` | Reverse proxies whose `X-Forwarded-For` is trusted (comma-separated). Secure cookies mean a TLS-terminating proxy in front of Papiq: name its address, or the per-source throttle sees only the proxy. `*` only if the proxy sets the header itself, replacing what clients send |
+| `PAPIQ_SECRET_KEY` | both | required | *secret*; 32 bytes base64 (`openssl rand -base64 32`); encrypts TOTP and webhook secrets, the worker decrypts the latter to sign. Keep it: without it they cannot be read. The development key is refused with secure cookies |
+| `PAPIQ_ADMIN_USERNAME` | API | unset | The first admin, created at API start while there is no active admin; set together with the password |
+| `PAPIQ_ADMIN_PASSWORD` | API | unset | *secret*; see above |
+| `PAPIQ_SESSION_IDLE_TIMEOUT` | API | `P1D` | A session ends when unused this long |
+| `PAPIQ_SESSION_MAX_AGE` | API | `P30D` | A session ends this long after sign-in; not shorter than the idle timeout |
+| `PAPIQ_COOKIE_SECURE` | API | `true` | `false` only for development over plain HTTP |
+| `PAPIQ_PUBLIC_URL` | API | unset | Where browsers reach Papiq (`https://papiq.example.org`); required with OIDC |
+| `PAPIQ_OIDC_ISSUER` | API | unset | OpenID Connect: set issuer, client id and client secret together or none; the issuer is `https` and compared exactly. Register `<PAPIQ_PUBLIC_URL>/api/v1/auth/oidc/callback` as redirect URI |
+| `PAPIQ_OIDC_CLIENT_ID` | API | unset | see above |
+| `PAPIQ_OIDC_CLIENT_SECRET` | API | unset | *secret*; see above |
+| `PAPIQ_OIDC_SCOPES` | API | `openid profile email` | Must contain `openid` |
+| `PAPIQ_OIDC_DISPLAY_NAME` | API | `Single sign-on` | Name of the provider on the sign-in page |
+| `PAPIQ_OIDC_AUTO_CREATE` | API | `false` | Create a user at the first sign-in of an unknown provider account |
+| `PAPIQ_OIDC_USERNAME_CLAIM` | API | `preferred_username` | ID token claim that names such a user |
+| `PAPIQ_WEBHOOKS_PER_USER` | API | `20` | Webhooks a user may have |
+| `PAPIQ_WEBHOOK_SECRET_GRACE` | API | `P1D` | How long the old secret signs after renewing; the cleanup drops it afterwards |
+| `PAPIQ_WEBHOOK_TIMEOUT` | Worker | `10` | Seconds per delivery attempt (1 to 120) |
+| `PAPIQ_WEBHOOK_MAX_ATTEMPTS` | Worker | `10` | Attempts per delivery (1 to 50) |
+| `PAPIQ_WEBHOOK_RETRY_DELAY` | Worker | `30` | Seconds before the second attempt, doubling after, at most an hour |
+| `PAPIQ_WEBHOOK_DISABLE_AFTER` | Worker | `20` | Deliveries given up in a row until a webhook is switched off |
+| `PAPIQ_WEBHOOK_CONCURRENCY` | Worker | `4` | Deliveries at the same time |
+| `PAPIQ_MCP_ENABLED` | API | `true` | Serve MCP at `/api/v1/mcp` |
+| `PAPIQ_MCP_TEXT_MAX` | API | `20000` | Characters one `get_text` call returns at most (1,000 to 1,000,000) |
+| `PAPIQ_WORKER_CONCURRENCY` | Worker | `2` | Jobs at the same time; about 2 GB of RAM each (Docling), see Worker |
+| `PAPIQ_WORKER_POLL_INTERVAL` | Worker | `1` | Seconds between looks for due jobs |
+| `PAPIQ_WORKER_SHUTDOWN_TIMEOUT` | Worker | `30` | Seconds running jobs get to finish on SIGTERM |
+| `PAPIQ_STEP_MAX_ATTEMPTS` | Worker | `3` | Attempts of a pipeline step that raises |
+| `PAPIQ_STEP_RETRY_DELAY` | Worker | `30` | Seconds before the second attempt, doubling after |
+| `PAPIQ_EVENTS_POLL_INTERVAL` | Worker | `1` | Seconds between outbox dispatches |
+| `PAPIQ_EVENTS_MAX_ATTEMPTS` | Worker | `10` | Delivery attempts of an event per subscriber |
+| `PAPIQ_CLEANUP_INTERVAL` | Worker | `3600` | Seconds between cleanups |
+| `PAPIQ_RETENTION` | Worker | `P7D` | Age of finished jobs, delivered events and webhook log rows to remove |
+| `PAPIQ_OCR_LANGUAGES` | Worker | `deu+eng` | Tesseract languages, joined by `+` |
+| `PAPIQ_OCR_TIMEOUT` | Worker | `600` | Seconds per document for OCR |
+| `PAPIQ_PARSE_TIMEOUT` | Worker | `600` | Seconds per document for parsing (Docling) |
+| `PAPIQ_DOCLING_MODELS_PATH` | Worker | `/opt/docling-models` | Docling layout and table models |
+| `PAPIQ_MEILISEARCH_URL` | both | unset | Without it there is no search (the API searches, the worker indexes) |
+| `PAPIQ_MEILISEARCH_API_KEY` | both | unset | *secret*; the master key or a key with access to the index |
+| `PAPIQ_MEILISEARCH_INDEX` | both | `papiq-documents` | The active index; a rebuild fills `<name>-rebuild` and swaps it in |
+| `PAPIQ_MEILISEARCH_TIMEOUT` | both | `30` | Seconds per request |
+| `PAPIQ_MEILISEARCH_TASK_TIMEOUT` | Worker | `120` | Seconds a write waits for its task |
+| `PAPIQ_SEARCH_LOCALES` | both | `deu+eng` | Languages of the documents, ISO 639-3 codes joined by `+` (index settings) |
+| `PAPIQ_SEARCH_SEMANTIC_RATIO` | API | `0.5` | Weight of the meaning against the words when a request does not say |
+| `PAPIQ_SEARCH_EMBED_TIMEOUT` | API | `5` | Seconds to wait for the embedding of a query, then words only |
+| `PAPIQ_SEARCH_MAX_TEXT` | Worker | `200000` | Characters of text per document in the index |
+| `PAPIQ_SEARCH_CHUNK_SIZE` | Worker | `1500` | Characters per section with a vector |
+| `PAPIQ_SEARCH_MAX_CHUNKS` | Worker | `8` | Sections with a vector per document |
+| `PAPIQ_SEARCH_RECONCILE_INTERVAL` | Worker | `21600` | Seconds between comparisons of index and database |
+| `PAPIQ_SEARCH_REBUILD_TIMEOUT` | Worker | `21600` | Seconds a rebuild may take |
+| `PAPIQ_LLM_BASE_URL` | Worker | unset | OpenAI-compatible endpoint with version path (`http://ollama:11434/v1`); set together with the model or neither |
+| `PAPIQ_LLM_MODEL` | Worker | unset | see above |
+| `PAPIQ_LLM_API_KEY` | Worker | unset | *secret* |
+| `PAPIQ_LLM_TEMPERATURE` | Worker | `0` | 0 to 2; 0 for repeatable answers |
+| `PAPIQ_LLM_SEED` | Worker | unset | Passed to the endpoint, if set |
+| `PAPIQ_LLM_TIMEOUT` | Worker | `300` | Seconds per request (`600` on a CPU) |
+| `PAPIQ_LLM_RESPONSE_FORMAT` | Worker | `json_schema` | `json_object` for providers without JSON schema support |
+| `PAPIQ_LLM_INPUT_BUDGET` | Worker | `12000` | Characters of document text per request |
+| `PAPIQ_LLM_MAX_TAGS` | Worker | `200` | Tags listed per request |
+| `PAPIQ_EMBEDDING_BASE_URL` | both | unset | OpenAI-compatible endpoint; set together with the model or neither (the worker embeds sections, the API embeds queries) |
+| `PAPIQ_EMBEDDING_MODEL` | both | unset | see above |
+| `PAPIQ_EMBEDDING_API_KEY` | both | unset | *secret* |
+| `PAPIQ_EMBEDDING_TIMEOUT` | both | `60` | Seconds per request |
+| `PAPIQ_EMBEDDING_DIMENSIONS` | both | unset | Length of the vectors (`snowflake-arctic-embed2`, `bge-m3`: 1024); required with Meilisearch and an embedding endpoint |
+| `PAPIQ_EMBEDDING_QUERY_PREFIX` | API | unset | Put before queries, for models that ask for it (`query:`) |
+| `PAPIQ_EMBEDDING_DOCUMENT_PREFIX` | Worker | unset | Put before document sections, for models that ask for it |
+| `PAPIQ_CONFIDENCE_THRESHOLD` | Worker | `0.9` | A field passes from this confidence on |
+| `PAPIQ_CONTACT_SUGGEST_THRESHOLD` | Worker | `0.75` | An existing contact is suggested from this similarity on; not above the confidence threshold |
+| `PAPIQ_RULES_PATTERN_TIMEOUT` | both | `0.2` | Seconds a regular expression of a rule may run per text or value (worker: rules; API: previews) |
+| `PAPIQ_RULES_MAX_TEXT` | both | `200000` | Characters of text rules look at (1,000 to 10,000,000) |
+| `PAPIQ_RULES_APPLY_MAX_DOCUMENTS` | both | `1000` | Documents per retroactive rule application (1 to 100,000) |
 
 ## Tests
 
