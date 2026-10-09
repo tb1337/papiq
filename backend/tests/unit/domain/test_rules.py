@@ -362,7 +362,7 @@ INVALID_CONDITIONS: list[tuple[JsonObject, str]] = [
     # field_id exactly for field conditions
     ({"field": "field", "op": "present"}, "field_id is given exactly"),
     ({"field": "contact", "op": "present", "field_id": ID}, "field_id is given exactly"),
-    ({"field": "field", "op": "present", "field_id": "x"}, "field: 'x' is no id"),
+    ({"field": "field", "op": "present", "field_id": "x"}, "field_id: 'x' is no id"),
     # unknown names
     ({"field": "amount", "op": "is", "value": "1"}, "field: unknown value 'amount'"),
     ({"field": "contact", "op": "between", "value": ID}, "op: unknown value 'between'"),

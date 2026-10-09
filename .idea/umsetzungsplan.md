@@ -76,12 +76,12 @@ flowchart LR
 
 **Ziel:** Fachlogik ohne jede Technik, vollständig testbar.
 
-- Entitäten: Nutzer, Rolle, Dokument, Kontakt, Dokumenttyp, Tag, Feld-Definition und -Wert, Schublade, Freigabe, Lane, Verarbeitungsschritt.
+- Entitäten: Nutzer, Rolle, Dokument, Kontakt, Dokumenttyp, Tag, Felddefinition und -wert, Schublade, Freigabe, Lane, Verarbeitungsschritt.
 - Rechteprüfung (Besitzer, Schublade, Freigabe lesen/schreiben).
 - Zustandsautomat der Pipeline und Lane-Berechnung (schlechtestes Schrittergebnis).
 - Ports mit echten async Signaturen; In-Memory-Adapter für jeden Port; Vertragstest-Suiten.
 
-**Vorher klären:** Feld-Datentypen.
+**Vorher klären:** Felddatentypen.
 
 **Fertig, wenn:** Kern-Tests decken Rechte, Zustandsautomat und Lanes ab; Import-Verträge grün.
 
@@ -141,7 +141,7 @@ flowchart LR
 **Ziel:** Dokumente werden klassifiziert und landen in Grün, Gelb oder Rot.
 
 - LLM- und Embedding-Adapter (OpenAI-kompatibel), strukturierte Ausgabe mit festem Schema.
-- Klassifizierung (Kontakt, Typ, Tags), Feld-Extraktion je Dokumenttyp.
+- Klassifizierung (Kontakt, Typ, Tags), Feldextraktion je Dokumenttyp.
 - Konfidenz aus prüfbaren Fakten (Abgleich, Liste, Wert im Text); neue Gegebenheiten → Gelb.
 - Posteingang (API): gelbe und rote Dokumente nur für den Besitzer.
 - Kleiner Bewertungssatz aus Beispieldokumenten, um Modelle vergleichen zu können.

@@ -64,7 +64,7 @@ function cond(
 	return { field, op, value, field_id: null, case_sensitive: false, ...extra };
 }
 
-const attr = (n: number, op: ApiCondition['op'], value: ApiCondition['value'] = null) =>
+const fieldCondition = (n: number, op: ApiCondition['op'], value: ApiCondition['value'] = null) =>
 	cond('field', op, value, { field_id: ID(n) });
 
 const EVERY_CONDITION: ApiCondition[] = [
@@ -85,20 +85,20 @@ const EVERY_CONDITION: ApiCondition[] = [
 	cond('document_date', 'gt', '2025-12-31'),
 	cond('document_date', 'lt', '2027-01-01'),
 	cond('document_date', 'present'),
-	attr(101, 'is', 'ACME'),
-	attr(101, 'in', ['ACME', 'Globex']),
-	attr(101, 'contains', 'acme'),
-	attr(101, 'matches', '^A'),
-	attr(102, 'is', 'https://example.org'),
-	attr(103, 'gt', '12.5'),
-	attr(103, 'is', '3'),
-	attr(104, 'lt', { amount: '100', currency: 'EUR' }),
-	attr(105, 'gt', '2026-01-01'),
-	attr(106, 'is', true),
-	attr(106, 'is', false),
-	attr(106, 'missing'),
-	attr(107, 'is', 'monthly'),
-	attr(107, 'in', ['monthly', 'yearly'])
+	fieldCondition(101, 'is', 'ACME'),
+	fieldCondition(101, 'in', ['ACME', 'Globex']),
+	fieldCondition(101, 'contains', 'acme'),
+	fieldCondition(101, 'matches', '^A'),
+	fieldCondition(102, 'is', 'https://example.org'),
+	fieldCondition(103, 'gt', '12.5'),
+	fieldCondition(103, 'is', '3'),
+	fieldCondition(104, 'lt', { amount: '100', currency: 'EUR' }),
+	fieldCondition(105, 'gt', '2026-01-01'),
+	fieldCondition(106, 'is', true),
+	fieldCondition(106, 'is', false),
+	fieldCondition(106, 'missing'),
+	fieldCondition(107, 'is', 'monthly'),
+	fieldCondition(107, 'in', ['monthly', 'yearly'])
 ];
 
 const EVERY_ACTION: ApiDefinition['actions'] = [
@@ -331,7 +331,7 @@ describe('errors of saving', () => {
 			{
 				all: [
 					cond('contact', 'is', ID(1)),
-					{ any: [cond('tags', 'in', [ID(4)]), attr(103, 'gt', '1')], not: false }
+					{ any: [cond('tags', 'in', [ID(4)]), fieldCondition(103, 'gt', '1')], not: false }
 				],
 				not: false
 			},

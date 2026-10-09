@@ -24,7 +24,7 @@
 		type Operator
 	} from '#lib/rules/model.ts';
 
-	// One condition: field (and field), comparison and the value it needs.
+	// One condition: condition field (and the field), comparison and the value it needs.
 	let {
 		condition,
 		lookup,

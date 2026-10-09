@@ -17,7 +17,7 @@ const FIELD_LABELS: Record<string, () => string> = {
 export function fieldLabel(field: string, lookup: Lookup | null): string {
 	if (field.startsWith('field:')) {
 		const id = field.slice('field:'.length);
-		return lookup?.fields.find((field) => field.id === id)?.name ?? field;
+		return lookup?.fields.find((entry) => entry.id === id)?.name ?? field;
 	}
 	return FIELD_LABELS[field]?.() ?? field;
 }

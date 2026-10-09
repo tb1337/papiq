@@ -136,7 +136,7 @@ async def verify(
                     found.get("active"),
                 )
     ids.usernames[norm(me["username"])] = me["id"]
-    fields = {int(item["id"]): item for item in snapshot.custom_fields}
+    custom_fields = {int(item["id"]): item for item in snapshot.custom_fields}
     for entry in state.objects("field"):
         if entry["papiq_id"] is None:
             continue
@@ -154,7 +154,7 @@ async def verify(
         if entry["source_id"] in ("asn", "notes"):
             ids.specs[key] = ASN_SPEC if key == "asn" else NOTES_SPEC
         else:
-            spec, _ = field_spec(fields[int(entry["source_id"])])
+            spec, _ = field_spec(custom_fields[int(entry["source_id"])])
             if spec is not None:
                 ids.specs[key] = spec
                 if found["data_type"] != spec.data_type:
@@ -173,7 +173,7 @@ async def verify(
     users = {int(user["id"]): user for user in snapshot.users}
     expected: dict[int, Prepared] = {
         int(document["id"]): prepare(
-            document, ids=ids, users=users, custom_fields=fields, currency=config.currency
+            document, ids=ids, users=users, custom_fields=custom_fields, currency=config.currency
         )
         for document in snapshot.documents
     }

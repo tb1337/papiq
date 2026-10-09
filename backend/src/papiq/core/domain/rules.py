@@ -845,7 +845,7 @@ def group_from_json(data: JsonValue, where: str = "conditions") -> Group:
 def condition_from_json(data: JsonValue, where: str = "condition") -> Condition:
     object_ = _object(data, where)
     _only(object_, {"field", "op", "value", "field_id", "case_sensitive"}, where)
-    field = object_.get("field_id")
+    field_id = object_.get("field_id")
     case_sensitive = object_.get("case_sensitive", False)
     if not isinstance(case_sensitive, bool):
         raise ValidationError(f"{where}.case_sensitive: expected true or false")
@@ -854,7 +854,7 @@ def condition_from_json(data: JsonValue, where: str = "condition") -> Condition:
             field=_enum(ConditionField, object_.get("field"), f"{where}.field"),
             op=_enum(Operator, object_.get("op"), f"{where}.op"),
             value=object_.get("value"),
-            field_id=None if field is None else FieldId(_uuid(field, "field")),
+            field_id=None if field_id is None else FieldId(_uuid(field_id, "field_id")),
             case_sensitive=case_sensitive,
         )
     except ValidationError as error:

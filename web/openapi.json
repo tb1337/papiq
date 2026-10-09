@@ -11928,7 +11928,7 @@
               }
             ],
             "title": "Field Id",
-            "description": "For `field` `field` only."
+            "description": "Only when `field` is `field`."
           },
           "case_sensitive": {
             "type": "boolean",
