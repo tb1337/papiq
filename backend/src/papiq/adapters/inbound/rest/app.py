@@ -119,7 +119,11 @@ def create_app(context: ApiContext) -> FastAPI:
         limit=context.max_request_size,
         exempt={("POST", f"{PREFIX}/documents")},  # the upload has its own limit
     )
-    app.add_middleware(NoStore, prefix=f"{PREFIX}/auth")
+    app.add_middleware(
+        NoStore,
+        prefix=PREFIX,
+        public=(f"{PREFIX}/health", f"{PREFIX}/docs", f"{PREFIX}/openapi.json", f"{PREFIX}/redoc"),
+    )
     for router in (
         account.public,
         account.router,
