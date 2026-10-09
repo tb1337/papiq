@@ -3,6 +3,16 @@
 `--skip-text` leaves pages that already have text alone; `--output-type pdfa` makes the archive
 PDF/A. The output is written next to the target and renamed when complete.
 
+Two things make OCRmyPDF refuse or downgrade a file, and both get a second run:
+
+- A digitally signed PDF (exit code 2, "digital signature"): the second run passes
+  `--invalidate-digital-signatures`. The original is never changed; only the archive lacks the
+  signature, and `OcrResult.note` says so.
+- A file whose PDF/A conversion fails outright (exit code 1, e.g. an unusual colour space):
+  the second run writes a plain PDF (`--output-type pdf`); `pdfa` is False and `note` names the
+  reason. Exit code 10 means OCRmyPDF itself fell back to a plain PDF (Ghostscript refused a
+  construct of the file); the reason is read from its output.
+
 Images are prepared before OCRmyPDF sees them (`prepare_image`):
 
 - The page size follows from the resolution. Photos often state none, or 72 dpi, which gives
@@ -19,6 +29,7 @@ OCRmyPDF's exit codes tell permanent problems (damaged or encrypted input) from 
 import asyncio
 import importlib.metadata
 import logging
+import re
 import sys
 import uuid
 from collections.abc import Sequence
@@ -28,7 +39,7 @@ from pathlib import Path
 from PIL import Image, ImageSequence
 
 from papiq.adapters.outbound.pdfium import count_pages
-from papiq.adapters.outbound.system import run_process
+from papiq.adapters.outbound.system import Completed, run_process
 from papiq.core.domain import media_types
 from papiq.core.domain.errors import UnprocessableDocumentError
 from papiq.core.ports.ocr import OcrResult
@@ -36,15 +47,29 @@ from papiq.core.ports.ocr import OcrResult
 log = logging.getLogger(__name__)
 
 # ocrmypdf.ExitCode
+_BAD_ARGS = 1  # also raised for files that need other options, e.g. a colour conversion
 _INPUT_FILE = 2
 _ALREADY_DONE_OCR = 6
 _ENCRYPTED_PDF = 8
 _PDFA_CONVERSION_FAILED = 10
 _UNPROCESSABLE = {
     _INPUT_FILE: "the file is damaged or not a valid document",
-    _ALREADY_DONE_OCR: "the file cannot be processed (e.g. digitally signed)",
+    _ALREADY_DONE_OCR: "the file cannot be processed",
     _ENCRYPTED_PDF: "the PDF is encrypted",
 }
+_SIGNATURE_HINT = "digital signature"
+SIGNATURE_NOTE = (
+    "the original is digitally signed; the archive does not carry the signature "
+    "(the original is unchanged)"
+)
+# Known reasons a first run fails with exit code 1, in words for the processing log.
+_KNOWN_ERRORS = {
+    "ColorConversionNeededError": "the colour space of the file cannot be represented in PDF/A",
+}
+_ERROR_LINE = re.compile(r"^(\w+Error): ?(.*)$")
+_GHOSTSCRIPT_LINE = re.compile(r"^GPL Ghostscript [\d.]+: (.*)$")
+_PDFA_ISSUE = re.compile(r"conversion to PDF/A did not succeed \(issue: (.+?)\)")
+_NOTE_MAX = 300
 
 A4_LONG_EDGE = 11.69  # inches
 PLAUSIBLE_PAGE = (3.0, 17.0)  # long edge in inches: from a receipt to A3
@@ -69,48 +94,80 @@ class OcrmypdfEngine:
 
     async def make_archive(self, source: Path, target: Path, *, media_type: str) -> OcrResult:
         temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp.pdf")
+        prepared = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp.tiff")
+        try:
+            extra: list[str] = []
+            if media_type != media_types.PDF:
+                source, dpi = await asyncio.to_thread(prepare_image, source, prepared)
+                extra = ["--image-dpi", str(dpi)]
+            pdfa, notes = await self._convert(source, temporary, extra)
+            pages = await asyncio.to_thread(count_pages, temporary)
+            await asyncio.to_thread(temporary.replace, target)
+        finally:
+            for path in (temporary, prepared):
+                await asyncio.to_thread(path.unlink, missing_ok=True)
+        if not pdfa:
+            log.warning("archive is not PDF/A", extra={"source": str(source), "notes": notes})
+        return OcrResult(
+            pages=pages,
+            engine=await self._engine_name(),
+            pdfa=pdfa,
+            note=_join(notes),
+        )
+
+    async def _convert(
+        self, source: Path, output: Path, extra: Sequence[str]
+    ) -> tuple[bool, list[str]]:
+        """Run OCRmyPDF, with a second run where it helps (see the module). Returns whether the
+        output is PDF/A, and the notes for the processing log."""
+        notes: list[str] = []
+        invalidate = False
+        completed = await self._run(source, output, extra, pdfa=True, invalidate=False)
+        if completed.returncode == _INPUT_FILE and _SIGNATURE_HINT in completed.stderr:
+            invalidate = True
+            notes.append(SIGNATURE_NOTE)
+            completed = await self._run(source, output, extra, pdfa=True, invalidate=True)
+        pdfa = True
+        if completed.returncode == _BAD_ARGS:
+            notes.append(f"not PDF/A: {_error_reason(completed.stderr)}")
+            pdfa = False
+            completed = await self._run(source, output, extra, pdfa=False, invalidate=invalidate)
+        code = completed.returncode
+        if code in _UNPROCESSABLE:
+            raise UnprocessableDocumentError(
+                f"{_UNPROCESSABLE[code]}: {_last_line(completed.stderr)}"
+            )
+        if code not in (0, _PDFA_CONVERSION_FAILED):
+            raise RuntimeError(
+                f"ocrmypdf failed with exit code {code}: {_last_line(completed.stderr)}"
+            )
+        if code == _PDFA_CONVERSION_FAILED:
+            pdfa = False
+            notes.append(f"not PDF/A: {pdfa_reasons(completed.stderr)}")
+        return pdfa, notes
+
+    async def _run(
+        self, source: Path, output: Path, extra: Sequence[str], *, pdfa: bool, invalidate: bool
+    ) -> Completed:
         args = [
             sys.executable,
             "-m",
             "ocrmypdf",
-            "--quiet",
+            "-v1",  # Ghostscript's messages name the reason when PDF/A fails
             "--skip-text",
             "--output-type",
-            "pdfa",
+            "pdfa" if pdfa else "pdf",
             "--rotate-pages",
             "--deskew",
             "--language",
             self._languages,
             "--jobs",
             str(self._jobs),
+            *extra,
         ]
-        prepared = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp.tiff")
-        try:
-            if media_type != media_types.PDF:
-                source, dpi = await asyncio.to_thread(prepare_image, source, prepared)
-                args += ["--image-dpi", str(dpi)]
-            completed = await run_process(
-                [*args, str(source), str(temporary)], timeout=self._timeout
-            )
-            code = completed.returncode
-            if code in _UNPROCESSABLE:
-                raise UnprocessableDocumentError(
-                    f"{_UNPROCESSABLE[code]}: {_last_line(completed.stderr)}"
-                )
-            if code not in (0, _PDFA_CONVERSION_FAILED):
-                raise RuntimeError(
-                    f"ocrmypdf failed with exit code {code}: {_last_line(completed.stderr)}"
-                )
-            if code == _PDFA_CONVERSION_FAILED:
-                log.warning("archive is not PDF/A", extra={"source": str(source)})
-            pages = await asyncio.to_thread(count_pages, temporary)
-            await asyncio.to_thread(temporary.replace, target)
-        finally:
-            for path in (temporary, prepared):
-                await asyncio.to_thread(path.unlink, missing_ok=True)
-        return OcrResult(
-            pages=pages, engine=await self._engine_name(), pdfa=code != _PDFA_CONVERSION_FAILED
-        )
+        if invalidate:
+            args.append("--invalidate-digital-signatures")
+        return await run_process([*args, str(source), str(output)], timeout=self._timeout)
 
     async def _engine_name(self) -> str:
         if self._engine is None:
@@ -151,6 +208,46 @@ def image_dpi(size: tuple[int, int], stated: object) -> int:
         if resolution > 0 and PLAUSIBLE_PAGE[0] <= long_edge / resolution <= PLAUSIBLE_PAGE[1]:
             return max(1, round(resolution))
     return max(1, round(long_edge / A4_LONG_EDGE))
+
+
+def pdfa_reasons(stderr: str) -> str:
+    """Why OCRmyPDF (exit code 10) wrote a plain PDF, from its verbose output: Ghostscript's
+    messages about PDF/A, else the issue OCRmyPDF names, else a generic word."""
+    reasons: list[str] = []
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    for number, line in enumerate(lines):
+        match = _GHOSTSCRIPT_LINE.match(line)
+        if match is None:
+            continue
+        message = match.group(1)
+        # Ghostscript wraps a message over two lines.
+        if number + 1 < len(lines) and not _GHOSTSCRIPT_LINE.match(lines[number + 1]):
+            follower = lines[number + 1]
+            if "PDF/A" in follower and not follower.startswith("Page "):
+                message = f"{message} {follower}"
+        if "PDF/A" in message and message not in reasons:
+            reasons.append(message)
+    if not reasons:
+        issue = _PDFA_ISSUE.search(stderr)
+        reasons.append(issue.group(1) if issue else "Ghostscript could not convert the file")
+    return "; ".join(reasons)
+
+
+def _error_reason(stderr: str) -> str:
+    """The error OCRmyPDF reported, in words where known, else its first line."""
+    for line in stderr.strip().splitlines():
+        match = _ERROR_LINE.match(line.strip())
+        if match is not None:
+            name, rest = match.groups()
+            return _KNOWN_ERRORS.get(name, f"{name}: {rest}".strip(": "))
+    return _last_line(stderr)
+
+
+def _join(notes: Sequence[str]) -> str | None:
+    if not notes:
+        return None
+    text = "; ".join(notes)
+    return text if len(text) <= _NOTE_MAX else text[: _NOTE_MAX - 1] + "…"
 
 
 def _ocr_ready(image: Image.Image) -> Image.Image:
