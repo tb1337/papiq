@@ -171,3 +171,15 @@ def test_addresses_lose_their_credentials() -> None:
     assert public("https://user:secret@host:8000/base?x=1") == "https://host:8000/base"
     assert public("http://localhost:8765") == "http://localhost:8765"
     assert public(None) is None
+
+
+async def test_a_run_notes_that_a_document_was_repaired_since(setup: Setup) -> None:
+    setup.papiq.lanes["scan-12.pdf"] = "red"
+    assert await setup.run("run") == 0
+    assert setup.report("run")["lanes"] == {"green": 7, "red": 1}
+    document = titled(setup, "Document 12")
+    document["_lane"] = "green"  # retried and fixed in Papiq
+    assert await setup.run("run") == 0
+    report = setup.report("run")
+    assert report["lanes"] == {"green": 8}
+    assert next(d for d in report["documents"] if d["id"] == 12)["reason"] is None

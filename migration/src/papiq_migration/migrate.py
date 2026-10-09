@@ -25,7 +25,7 @@ from papiq_migration.mapping import (
 from papiq_migration.paperless import Paperless, PaperlessError, Snapshot
 from papiq_migration.papiq import ApiError, Papiq
 from papiq_migration.prepare import Ids, Prepared, prepare
-from papiq_migration.state import DOCUMENT_DONE, State
+from papiq_migration.state import DOCUMENT_DONE, DocumentRow, State
 
 NEW, EXISTING, OMITTED, FAILED = "new", "existing", "omitted", "failed"
 DONE_PIPELINE = ("completed", "failed", "review")
@@ -488,6 +488,8 @@ class Migration:
             return
         if prior is not None and prior.status in DOCUMENT_DONE:
             self.totals.resumed += 1
+            if prior.papiq_id and prior.status != "skipped" and prior.lane != "green":
+                await self._refresh(prior)
             return
         assert self._target is not None
         papiq_id = prior.papiq_id if prior is not None and prior.status == "uploaded" else None
@@ -552,6 +554,20 @@ class Migration:
             reason=reason,
             pipeline_seconds=self._clock() - waited,
         )
+
+    async def _refresh(self, row: DocumentRow) -> None:
+        """A document that was not green may have been repaired since (retried, confirmed):
+        note its lane as it is now."""
+        assert self._target is not None and row.papiq_id is not None
+        try:
+            document = await self._target.document(row.papiq_id)
+        except ApiError:
+            return
+        lane = document.get("lane")
+        if document["processing"]["status"] not in DONE_PIPELINE or lane == row.lane:
+            return
+        reason = None if lane == "green" else await self._why_not_green(row.papiq_id)
+        self._state.put_document(row.source_id, row.status, lane=lane, reason=reason)
 
     async def _upload(
         self, item: Prepared, drawers: dict[str, str], detail: dict[str, Any]
