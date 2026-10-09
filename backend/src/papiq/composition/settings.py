@@ -424,13 +424,23 @@ def _missing(settings: Settings, selector: str, *names: str) -> list[str]:
     ]
 
 
+# Variables of the migration client (`migration/`), which shares the environment of the
+# development instance; they are no settings of Papiq itself.
+MIGRATION_PREFIX = ENV_PREFIX + "MIGRATION_"
+
+
 def find_unknown_variables(environ: Mapping[str, str] | None = None) -> list[str]:
-    """`PAPIQ_` variables that match no setting; usually typos."""
+    """`PAPIQ_` variables that match no setting; usually typos. The migration client's
+    `PAPIQ_MIGRATION_*` are left alone."""
     environ = os.environ if environ is None else environ
     secrets = {_env(name) + FILE_SUFFIX for name in _secret_fields(Settings)}
     known = {_env(name) for name in Settings.model_fields} | secrets
     return sorted(
-        key for key in environ if key.upper().startswith(ENV_PREFIX) and key.upper() not in known
+        key
+        for key in environ
+        if key.upper().startswith(ENV_PREFIX)
+        and not key.upper().startswith(MIGRATION_PREFIX)
+        and key.upper() not in known
     )
 
 

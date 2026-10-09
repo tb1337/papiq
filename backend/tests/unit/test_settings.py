@@ -1,3 +1,4 @@
+import re
 from datetime import timedelta
 from pathlib import Path
 
@@ -6,6 +7,7 @@ import pytest
 from papiq.composition.errors import ConfigurationError
 from papiq.composition.settings import (
     DEVELOPMENT_SECRET_KEY,
+    ENV_PREFIX,
     Settings,
     find_unknown_variables,
     load_settings,
@@ -335,6 +337,15 @@ def test_file_variant_exists_only_for_secrets(
 def test_unknown_variables_are_listed(monkeypatch: pytest.MonkeyPatch) -> None:
     set_env(monkeypatch, {"PAPIQ_DB_TYPO": "x", "PAPIQ_ROLE": "all", "UNRELATED": "y"})
     assert find_unknown_variables() == ["PAPIQ_DB_TYPO"]
+
+
+def test_variables_of_the_migration_client_are_not_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The development instance shares its environment with `papiq-migration`."""
+    set_env(
+        monkeypatch,
+        {"PAPIQ_MIGRATION_PAPERLESS_URL": "http://paperless:8000", "PAPIQ_MIGRATION_TYPO": "x"},
+    )
+    assert find_unknown_variables() == []
 
 
 def test_variables_of_the_image_are_not_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -678,3 +689,20 @@ def test_invalid_search_settings(monkeypatch: pytest.MonkeyPatch, name: str, val
         return
     with pytest.raises(ConfigurationError, match=name):
         load_settings()
+
+
+README = Path(__file__).parents[2] / "README.md"
+_DOCUMENTED = re.compile(r"^\| `(PAPIQ_[A-Z0-9_]+)` \| (API|Worker|both) \| ", re.MULTILINE)
+
+
+def test_every_setting_is_documented_with_its_role() -> None:
+    """backend/README.md, section Configuration, is the one place for all `PAPIQ_` variables:
+    one row per setting with its role (API, Worker or both), default and meaning."""
+    documented = _DOCUMENTED.findall(README.read_text(encoding="utf-8"))
+    names = [name for name, _ in documented]
+    expected = [ENV_PREFIX + name.upper() for name in Settings.model_fields]
+    assert sorted(names) == sorted(expected), (
+        f"missing in README: {sorted(set(expected) - set(names))}; "
+        f"unknown in README: {sorted(set(names) - set(expected))}"
+    )
+    assert len(names) == len(set(names)), "a variable is documented twice"

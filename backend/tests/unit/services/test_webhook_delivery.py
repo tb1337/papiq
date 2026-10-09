@@ -498,6 +498,21 @@ async def test_the_test_request_is_sent_once_and_logged(world: World) -> None:
     assert (await world.webhooks.get(user.id, webhook.id)).failed_streak == 0
 
 
+async def test_a_test_request_with_an_unusable_secret_is_logged_as_given_up(world: World) -> None:
+    """2-04 (M13): like a delivery, not a 500."""
+    user = await world.user()
+    webhook, _ = await hook(world, user)
+    async with world.uow() as uow:
+        stored = await uow.webhooks.get(webhook.id)
+        stored.encrypted_secret = b"garbage" * 8
+        await uow.webhooks.update(stored)
+        await uow.commit()
+    row = await world.webhook_delivery().send_test(user.id, webhook.id)
+    assert row.outcome is DeliveryOutcome.GAVE_UP and "secret" in (row.error or "")
+    assert world.sender.requests == []
+    assert await log(world, webhook) == [row]
+
+
 async def test_the_owner_and_admins_test_a_webhook(world: World) -> None:
     admin, owner, other = await world.user(role=Role.ADMIN), await world.user(), await world.user()
     webhook, _ = await hook(world, owner)

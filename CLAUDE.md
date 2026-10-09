@@ -11,7 +11,8 @@ Paperless-ngx. Python backend, hexagonal (ports and adapters); the REST API is t
 | `web/` | Web UI: SvelteKit single-page app below `/ui`, client generated from `web/openapi.json` (see `web/README.md`) |
 | `migration/` | Paperless-ngx migration client: separate uv project `papiq_migration` (`plan`, `run`, `verify`; see `migration/README.md`) |
 | `deploy/` | Runtime image files (s6-overlay services, `image/rootfs`), example Compose stacks (SQLite, Postgres + Garage), `test-image.sh`, `README.md` (operation, backup) |
-| `.devcontainer/` | Devcontainer: Compose services (Postgres, Garage, Meilisearch) and dev credentials |
+| `.devcontainer/` | Devcontainer: Compose services (Postgres, Garage, Meilisearch), dev credentials, the development instance (`README.md`, `live.env.example`, `live-setup.sh`) |
+| `.vscode/tasks.json` | VS Code tasks that run the development instance from the devcontainer (start, stop, migrate, UI, reindex, migration) |
 | `Dockerfile` | Stages `base`, `deps`, `docling-models`, `app`, `s6`, `web` (UI build), `dev` (devcontainer) and `runtime` (production image) |
 | `.idea/` | Design documents in German: `architektur.md` (binding), `umsetzungsplan.md` |
 
@@ -83,6 +84,15 @@ changes in `migration/` its checks.
 - State change, domain events and follow-up jobs go through one `UnitOfWork` and one commit.
 - The web UI talks to the REST API only. Every text a user reads is in `web/messages/{en,de}.json`;
   a test fails on raw text in markup.
+
+## Labels
+
+Every pull request carries exactly one category label from `.github/labels.yml` (`new-feature`,
+`bugfix`, `enhancement`, `refactor`, `performance`, `maintenance`, `ci`, `documentation`,
+`dependencies`, `dev-deps`, `breaking-change`); the Release Drafter builds the release notes from
+them. A pull request that changes only `.idea/` gets `skip-changelog`. The version bump follows
+the labels (`breaking-change` or `major`: major; `new-feature` or `minor`: minor; else patch).
+Tobi publishes and tags the release from the draft.
 
 ## Language
 

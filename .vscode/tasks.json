@@ -1,0 +1,142 @@
+{
+	// Papiq as a development instance inside the devcontainer (see .devcontainer/README.md).
+	// Every task runs in /workspaces/papiq with the settings of .devcontainer/live.env (not in the
+	// repository; "Papiq: Devinstanz einrichten" creates it). Nothing starts on its own.
+	"version": "2.0.0",
+	"options": {
+		"shell": { "executable": "/bin/bash", "args": ["-c"] }
+	},
+	"tasks": [
+		{
+			"label": "Papiq: Devinstanz einrichten",
+			"detail": "Once: live.env from the example, database papiq_live, bucket papiq-live",
+			"type": "shell",
+			"command": ".devcontainer/live-setup.sh",
+			"problemMatcher": []
+		},
+		{
+			"label": "Papiq: Schema migrieren",
+			"detail": "Bring the database of the dev instance to the newest schema",
+			"type": "shell",
+			"command": "set -a && . .devcontainer/live.env && set +a && cd backend && uv run python -m papiq.composition migrate",
+			"problemMatcher": []
+		},
+		{
+			"label": "Papiq: UI bauen",
+			"detail": "Build the web UI into web/build; the API serves it below /ui",
+			"type": "shell",
+			"command": "cd web && pnpm build",
+			"problemMatcher": []
+		},
+		{
+			"label": "Papiq: API",
+			"detail": "REST API, MCP and the built UI on http://localhost:8000/ui/",
+			"type": "shell",
+			"command": "set -a && . .devcontainer/live.env && set +a && cd backend && uv run python -m papiq.composition api",
+			"isBackground": true,
+			"problemMatcher": {
+				"owner": "papiq",
+				"pattern": { "regexp": "^$" },
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": "configuration valid",
+					"endsPattern": "Application startup complete|Uvicorn running on"
+				}
+			},
+			"presentation": { "group": "papiq", "panel": "dedicated", "reveal": "always" },
+			"dependsOrder": "sequence",
+			"dependsOn": ["Papiq: Schema migrieren", "Papiq: UI bauen"]
+		},
+		{
+			"label": "Papiq: Worker",
+			"detail": "Pipeline, events, webhooks, search index",
+			"type": "shell",
+			"command": "set -a && . .devcontainer/live.env && set +a && cd backend && uv run python -m papiq.composition worker",
+			"isBackground": true,
+			"problemMatcher": {
+				"owner": "papiq",
+				"pattern": { "regexp": "^$" },
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": "configuration valid",
+					"endsPattern": "worker started"
+				}
+			},
+			"presentation": { "group": "papiq", "panel": "dedicated", "reveal": "always" },
+			"dependsOn": ["Papiq: Schema migrieren"]
+		},
+		{
+			"label": "Papiq starten",
+			"detail": "Migrate, build the UI, then API and worker side by side",
+			"dependsOrder": "parallel",
+			"dependsOn": ["Papiq: API", "Papiq: Worker"],
+			"problemMatcher": []
+		},
+		{
+			"label": "Papiq stoppen",
+			"detail": "End the API and the worker tasks",
+			"type": "shell",
+			"command": "echo '${input:stopApi}${input:stopWorker}' >/dev/null; echo 'Papiq stopped'",
+			"problemMatcher": []
+		},
+		{
+			"label": "Papiq: UI dev",
+			"detail": "Vite on http://localhost:5173/ui/ with /api proxied to the API on :8000",
+			"type": "shell",
+			"command": "cd web && pnpm dev",
+			"isBackground": true,
+			"problemMatcher": {
+				"owner": "papiq",
+				"pattern": { "regexp": "^$" },
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": "VITE",
+					"endsPattern": "Local:"
+				}
+			},
+			"presentation": { "group": "papiq", "panel": "dedicated" }
+		},
+		{
+			"label": "Papiq: Suche neu aufbauen",
+			"detail": "Rebuild the search index of the dev instance (reindex)",
+			"type": "shell",
+			"command": "set -a && . .devcontainer/live.env && set +a && cd backend && uv run python -m papiq.composition reindex",
+			"problemMatcher": []
+		},
+		{
+			"label": "Migration: plan",
+			"detail": "Trial run against Paperless: reads, writes nothing",
+			"type": "shell",
+			"command": "set -a && . .devcontainer/live.env && set +a && cd migration && uv run papiq-migration plan",
+			"problemMatcher": []
+		},
+		{
+			"label": "Migration: run",
+			"detail": "Take the Paperless archive over into the dev instance (Ctrl-C stops, run again continues)",
+			"type": "shell",
+			"command": "set -a && . .devcontainer/live.env && set +a && cd migration && uv run papiq-migration run",
+			"problemMatcher": []
+		},
+		{
+			"label": "Migration: verify",
+			"detail": "Compare Paperless and Papiq object by object",
+			"type": "shell",
+			"command": "set -a && . .devcontainer/live.env && set +a && cd migration && uv run papiq-migration verify",
+			"problemMatcher": []
+		}
+	],
+	"inputs": [
+		{
+			"id": "stopApi",
+			"type": "command",
+			"command": "workbench.action.tasks.terminate",
+			"args": "Papiq: API"
+		},
+		{
+			"id": "stopWorker",
+			"type": "command",
+			"command": "workbench.action.tasks.terminate",
+			"args": "Papiq: Worker"
+		}
+	]
+}
