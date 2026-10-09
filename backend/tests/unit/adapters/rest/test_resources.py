@@ -246,11 +246,12 @@ async def test_user_management(api: Api) -> None:
 
 async def test_the_last_admin_stays(api: Api) -> None:
     admin = await api.admin("root")
-    for body in ({"role": "user"}, {"active": False}):
-        response = await api.client.patch(
-            f"{PREFIX}/users/{admin.id}", json=body, headers=auth(admin)
-        )
-        assert response.status_code == 409
+    async with api.sign_in(admin) as session:  # a token changes no role or admin state
+        for body in ({"role": "user"}, {"active": False}):
+            response = await session.client.patch(
+                f"{PREFIX}/users/{admin.id}", json=body, headers=session.headers
+            )
+            assert response.status_code == 409, response.text
     response = await api.client.delete(f"{PREFIX}/users/{admin.id}", headers=auth(admin))
     assert response.status_code == 409
 

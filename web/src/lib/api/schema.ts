@@ -359,7 +359,7 @@ export interface paths {
 		head?: never;
 		/**
 		 * Change role or state
-		 * @description Admins only. Deactivating ends the user's sessions and blocks their API tokens. The last active admin stays an active admin (409).
+		 * @description Admins only. Deactivating ends the user's sessions and blocks their API tokens. The last active admin stays an active admin (409). Changing a role, or deactivating an admin, needs a session, as for `/auth/*`: an API token only deactivates and reactivates users (e.g. a migration).
 		 */
 		patch: operations['update_user_api_v1_users__id__patch'];
 		trace?: never;
