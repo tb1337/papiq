@@ -84,14 +84,20 @@ AttributeJson = Annotated[
 ]
 
 
+def decimal_text(value: Decimal) -> str:
+    """A decimal in plain notation (`53350000`, `12.50`), never `5.335E+7`: `str(Decimal)` keeps
+    the exponent a value arrived with."""
+    return format(value, "f")
+
+
 def attribute_json(value: AttributeValue) -> str | bool | MoneyValue:
     match value:
         case bool() | str():
             return value
         case Money(amount=amount, currency=currency):
-            return MoneyValue(amount=str(amount), currency=currency)
+            return MoneyValue(amount=decimal_text(amount), currency=currency)
         case Decimal():
-            return str(value)
+            return decimal_text(value)
         case Url(value=url):
             return url
         case _:  # date
