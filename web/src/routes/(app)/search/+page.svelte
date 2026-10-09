@@ -25,7 +25,6 @@
 	// The search box follows the URL (back button, links) until the user types.
 	let text = $derived(query);
 	let lookup = $state<Lookup | null>(null);
-	let total = $state<number | null>(null);
 
 	const list = new PagedList(async (offset) => {
 		const data = await unwrap(
@@ -35,16 +34,17 @@
 				}
 			})
 		);
-		total = data.estimated_total;
-		return { items: data.items, next: data.next_offset };
+		return { items: data.items, next: data.next_offset, total: data.estimated_total };
 	});
+	// The total belongs to the page it came with: an answer the list discards is not counted.
+	const total = $derived(list.total);
 
 	$effect(() => {
 		void page.url.search;
 		if (query === '') {
 			list.items = [];
 			list.loaded = false;
-			total = null;
+			list.total = null;
 		} else {
 			void list.reload();
 		}
