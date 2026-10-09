@@ -33,7 +33,7 @@ export default defineConfig({
 					'style-src-attr': ['unsafe-inline'],
 					// PDF.js runs in a worker from this site.
 					'worker-src': ['self'],
-					'img-src': ['self', 'data:', 'blob:'],
+					'img-src': ['self'],
 					'font-src': ['self'],
 					'connect-src': ['self'],
 					'object-src': ['none'],
