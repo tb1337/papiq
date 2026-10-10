@@ -127,7 +127,7 @@ async def test_a_huge_value_is_left_out_not_the_whole_document(setup: Setup) -> 
     setup.archive.documents[0]["custom_fields"].append({"field": 2, "value": "x" * 60_000})
     assert await setup.run("run") == 0
     document = titled(setup, "Document 10")
-    assert len(json.dumps(document["attributes"])) < 45_000
+    assert len(json.dumps(document["fields"])) < 45_000
     row = next(d for d in setup.report("run")["documents"] if d["id"] == 10)
     assert any("too large" in note for note in row["notes"])
 

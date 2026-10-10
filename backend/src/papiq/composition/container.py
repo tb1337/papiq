@@ -73,7 +73,7 @@ from papiq.core.services.auth import AuthService, SessionPolicy
 from papiq.core.services.classification.steps import (
     ClassificationPolicy,
     ClassifyStep,
-    ExtractAttributesStep,
+    ExtractFieldsStep,
 )
 from papiq.core.services.documents import DocumentService
 from papiq.core.services.drawers import DrawerService
@@ -400,7 +400,7 @@ LEASE_MARGIN = timedelta(minutes=2)
 
 
 def policy_of(settings: Settings) -> ClassificationPolicy:
-    """Thresholds and limits of classification and attribute extraction."""
+    """Thresholds and limits of classification and field extraction."""
     return ClassificationPolicy(
         accept=settings.confidence_threshold,
         suggest_contact=settings.contact_suggest_threshold,
@@ -451,7 +451,7 @@ def search_policy_of(settings: Settings) -> SearchPolicy:
 def build_services(container: Container, settings: Settings | None = None) -> Services:
     """The use cases; tuning (retries, time limits, cleanup) from `settings`, or the defaults.
 
-    OCR, parsing, classification and attribute extraction run on the container's adapters
+    OCR, parsing, classification and field extraction run on the container's adapters
     (without a language model, classification is uncertain), then the rules and filing.
     """
     settings = settings or Settings.model_construct()
@@ -465,8 +465,8 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
     executors[Step.CLASSIFY] = ImportedClassifyStep(
         uow, ClassifyStep(uow, store, model, clock, policy)
     )
-    executors[Step.EXTRACT_ATTRIBUTES] = ImportedExtractStep(
-        uow, ExtractAttributesStep(uow, store, model, clock, policy)
+    executors[Step.EXTRACT_FIELDS] = ImportedExtractStep(
+        uow, ExtractFieldsStep(uow, store, model, clock, policy)
     )
     executors[Step.APPLY_RULES] = ApplyRulesStep(
         uow, store, container.patterns, max_text=settings.rules_max_text

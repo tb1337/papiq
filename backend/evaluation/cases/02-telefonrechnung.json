@@ -9,7 +9,7 @@
       "Internet"
     ],
     "document_date": "2026-04-05",
-    "attributes": {
+    "fields": {
       "Betrag": {
         "amount": "39.99",
         "currency": "EUR"
@@ -37,7 +37,7 @@
         "evidence": "Rechnungsdatum | 05.04.2026"
       }
     },
-    "attributes": {
+    "fields": {
       "Betrag": {
         "value": {
           "amount": "39.99",

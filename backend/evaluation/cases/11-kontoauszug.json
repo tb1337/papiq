@@ -8,7 +8,7 @@
       "Bank"
     ],
     "document_date": "2026-04-30",
-    "attributes": {
+    "fields": {
       "Kontostand": {
         "amount": "2345.67",
         "currency": "EUR"
@@ -32,7 +32,7 @@
         "evidence": "erstellt am 30.04.2026"
       }
     },
-    "attributes": {
+    "fields": {
       "Kontostand": {
         "value": {
           "amount": "2345.67",

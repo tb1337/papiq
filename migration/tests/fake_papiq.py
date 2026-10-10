@@ -24,7 +24,7 @@ class FakePapiq:
     contacts: dict[str, dict[str, Any]] = field(default_factory=dict)
     document_types: dict[str, dict[str, Any]] = field(default_factory=dict)
     tags: dict[str, dict[str, Any]] = field(default_factory=dict)
-    attributes: dict[str, dict[str, Any]] = field(default_factory=dict)
+    fields: dict[str, dict[str, Any]] = field(default_factory=dict)
     drawers: dict[str, dict[str, Any]] = field(
         default_factory=lambda: {
             f"default:{ADMIN['id']}": {
@@ -80,13 +80,13 @@ class FakePapiq:
             "/contacts": self.contacts,
             "/document-types": self.document_types,
             "/tags": self.tags,
-            "/attributes": self.attributes,
+            "/fields": self.fields,
             "/drawers": self.drawers,
         }
         if path in simple:
             return self._collection(path, simple[path], method, body)
-        if found := re.fullmatch(r"/(users|attributes)/([^/]+)", path):
-            store = self.users if found[1] == "users" else self.attributes
+        if found := re.fullmatch(r"/(users|fields)/([^/]+)", path):
+            store = self.users if found[1] == "users" else self.fields
             if method == "PATCH" and found[2] in store:
                 if "active" in body:
                     store[found[2]]["active"] = body["active"]
@@ -146,7 +146,7 @@ class FakePapiq:
                 "is_default": False,
                 "shares": [],
             }
-        elif path == "/attributes":
+        elif path == "/fields":
             item = {
                 "id": id,
                 "name": name,
@@ -222,7 +222,7 @@ class FakePapiq:
             "document_type_id": metadata.get("document_type_id"),
             "tag_ids": sorted(metadata.get("tag_ids", [])),
             "document_date": metadata.get("document_date"),
-            "attributes": metadata.get("attributes", {}),
+            "fields": metadata.get("fields", {}),
             "lane": None,
             "processing": {"status": "processing", "current_step": "ocr", "run": 1, "outcomes": {}},
             "_lane": self.lanes.get(filename, "green"),
@@ -243,7 +243,7 @@ class FakePapiq:
                 "ocr",
                 "parse",
                 "classify",
-                "extract_attributes",
+                "extract_fields",
                 "apply_rules",
                 "file",
             ]

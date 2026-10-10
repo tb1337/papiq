@@ -6,7 +6,7 @@ const lookup = {
 	contacts: [{ id: 'c1', name: 'ACME', created_at: '' }],
 	documentTypes: [],
 	tags: [{ id: 't1', name: 'Tax', created_at: '' }],
-	attributes: [{ id: 'a1', name: 'Due', data_type: 'date' }],
+	fields: [{ id: 'a1', name: 'Due', data_type: 'date' }],
 	drawers: [],
 	users: [{ id: 'u1', username: 'alice' }]
 } as unknown as Lookup;
@@ -25,7 +25,7 @@ describe('describing changes', () => {
 	});
 
 	it('names fields', () => {
-		expect(fieldLabel('attribute:a1', lookup)).toBe('Due');
-		expect(fieldLabel('attribute:zz', lookup)).toBe('attribute:zz');
+		expect(fieldLabel('field:a1', lookup)).toBe('Due');
+		expect(fieldLabel('field:zz', lookup)).toBe('field:zz');
 	});
 });

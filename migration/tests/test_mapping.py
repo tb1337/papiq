@@ -76,7 +76,7 @@ def test_empty_values_are_left_out(raw: Any) -> None:
     assert convert_value(field("string"), raw, "EUR").value is None
 
 
-def test_every_field_type_has_an_attribute_type_except_document_links() -> None:
+def test_every_field_type_has_an_field_type_except_document_links() -> None:
     expected = {
         "string": "text",
         "longtext": "text",

@@ -4,10 +4,10 @@ from decimal import Decimal
 
 import pytest
 
-from papiq.core.domain.attributes import AttributeDefinition, AttributeType, Money, Url
 from papiq.core.domain.documents import Document, DocumentChanges
 from papiq.core.domain.drawers import Drawer, ShareLevel
 from papiq.core.domain.errors import ConcurrencyError, ConflictError, NotFoundError
+from papiq.core.domain.fields import FieldDefinition, FieldType, Money, Url
 from papiq.core.domain.ids import DocumentId, DrawerId, new_id
 from papiq.core.domain.master_data import Contact, DocumentType, Tag
 from papiq.core.domain.permissions import can_read_document
@@ -334,25 +334,25 @@ class UnitOfWorkContract:
                 await uow.contacts.add(Contact.create(name="stadtwerke", now=NOW))
                 await uow.commit()
 
-    async def test_attribute_definition_round_trip(self, uow_factory: UnitOfWorkFactory) -> None:
+    async def test_field_definition_round_trip(self, uow_factory: UnitOfWorkFactory) -> None:
         invoice = DocumentType.create(name="Invoice", now=NOW)
-        bound = AttributeDefinition.create(
+        bound = FieldDefinition.create(
             name="Billing period",
-            data_type=AttributeType.CHOICE,
+            data_type=FieldType.CHOICE,
             now=NOW,
             document_type_ids=[invoice.id],
             choices=["monthly", "yearly"],
         )
-        global_ = AttributeDefinition.create(name="Note", data_type=AttributeType.TEXT, now=NOW)
+        global_ = FieldDefinition.create(name="Note", data_type=FieldType.TEXT, now=NOW)
         async with uow_factory() as uow:
             await uow.document_types.add(invoice)
-            await uow.attributes.add(bound)
-            await uow.attributes.add(global_)
+            await uow.fields.add(bound)
+            await uow.fields.add(global_)
             await uow.commit()
         async with uow_factory() as uow:
-            assert await uow.attributes.get(bound.id) == bound
-            assert await uow.attributes.get(global_.id) == global_
-            assert await uow.attributes.find_by_name("NOTE") == global_
+            assert await uow.fields.get(bound.id) == bound
+            assert await uow.fields.get(global_.id) == global_
+            assert await uow.fields.find_by_name("NOTE") == global_
 
     # --- documents ------------------------------------------------------------------------------
 
@@ -364,22 +364,22 @@ class UnitOfWorkContract:
         invoice = DocumentType.create(name="Invoice", now=NOW)
         tags = [Tag.create(name=name, now=NOW) for name in ("a", "b")]
         definitions = [
-            AttributeDefinition.create(
+            FieldDefinition.create(
                 name=f"field {data_type}",
                 data_type=data_type,
                 now=NOW,
-                choices=["x", "y"] if data_type is AttributeType.CHOICE else (),
+                choices=["x", "y"] if data_type is FieldType.CHOICE else (),
             )
-            for data_type in AttributeType
+            for data_type in FieldType
         ]
-        values: dict[AttributeType, object] = {
-            AttributeType.TEXT: "Contract 7",
-            AttributeType.NUMBER: Decimal("1234.5678"),
-            AttributeType.AMOUNT: Money(Decimal("-12.30"), "CHF"),
-            AttributeType.DATE: date(2026, 2, 28),
-            AttributeType.BOOLEAN: False,
-            AttributeType.CHOICE: "y",
-            AttributeType.LINK: Url("https://example.org/contract?id=7"),
+        values: dict[FieldType, object] = {
+            FieldType.TEXT: "Contract 7",
+            FieldType.NUMBER: Decimal("1234.5678"),
+            FieldType.AMOUNT: Money(Decimal("-12.30"), "CHF"),
+            FieldType.DATE: date(2026, 2, 28),
+            FieldType.BOOLEAN: False,
+            FieldType.CHOICE: "y",
+            FieldType.LINK: Url("https://example.org/contract?id=7"),
         }
         document = builders.document(owner, drawer)
         document.apply_changes(
@@ -389,7 +389,7 @@ class UnitOfWorkContract:
                 document_type_id=invoice.id,
                 tag_ids=frozenset(tag.id for tag in tags),
                 document_date=date(2026, 3, 1),
-                attributes={d.id: values[d.data_type] for d in definitions},
+                fields={d.id: values[d.data_type] for d in definitions},
             ),
             {d.id: d for d in definitions},
             NOW,
@@ -402,7 +402,7 @@ class UnitOfWorkContract:
             for tag in tags:
                 await uow.tags.add(tag)
             for definition in definitions:
-                await uow.attributes.add(definition)
+                await uow.fields.add(definition)
             await uow.documents.add(document)
             await uow.commit()
         async with uow_factory() as uow:
@@ -735,30 +735,30 @@ class UnitOfWorkContract:
             await uow.lock("originals/abc")
             await uow.commit()
 
-    async def test_attribute_values_in_use(self, uow_factory: UnitOfWorkFactory) -> None:
+    async def test_field_values_in_use(self, uow_factory: UnitOfWorkFactory) -> None:
         owner, drawer = await owner_with_drawer(uow_factory)
         invoice = DocumentType.create(name="Invoice", now=NOW)
         letter = DocumentType.create(name="Letter", now=NOW)
-        kind = AttributeDefinition.create(
-            name="Kind", data_type=AttributeType.CHOICE, now=NOW, choices=["a", "b", "c"]
+        kind = FieldDefinition.create(
+            name="Kind", data_type=FieldType.CHOICE, now=NOW, choices=["a", "b", "c"]
         )
         typed, untyped = builders.document(owner, drawer), builders.document(owner, drawer)
         definitions = {kind.id: kind}
         typed.apply_changes(
-            DocumentChanges(document_type_id=invoice.id, attributes={kind.id: "a"}),
+            DocumentChanges(document_type_id=invoice.id, fields={kind.id: "a"}),
             definitions,
             NOW,
         )
-        untyped.apply_changes(DocumentChanges(attributes={kind.id: "b"}), definitions, NOW)
+        untyped.apply_changes(DocumentChanges(fields={kind.id: "b"}), definitions, NOW)
         async with uow_factory() as uow:
             for item in (invoice, letter):
                 await uow.document_types.add(item)
-            await uow.attributes.add(kind)
+            await uow.fields.add(kind)
             await uow.documents.add(typed)
             await uow.documents.add(untyped)
             await uow.commit()
         async with uow_factory() as uow:
-            in_use = uow.documents.attribute_in_use
+            in_use = uow.documents.field_in_use
             assert await in_use(kind.id)
             assert await in_use(kind.id, values=["a", "c"])
             assert not await in_use(kind.id, values=["c"])
@@ -789,23 +789,23 @@ class UnitOfWorkContract:
         contact = Contact.create(name="ACME", now=NOW)
         document_type = DocumentType.create(name="Invoice", now=NOW)
         tag = Tag.create(name="tax", now=NOW)
-        attribute = AttributeDefinition.create(name="note", data_type=AttributeType.TEXT, now=NOW)
+        field = FieldDefinition.create(name="note", data_type=FieldType.TEXT, now=NOW)
         document = builders.document(owner, drawer)
         document.apply_changes(
             DocumentChanges(
                 contact_id=contact.id,
                 document_type_id=document_type.id,
                 tag_ids=frozenset({tag.id}),
-                attributes={attribute.id: "x"},
+                fields={field.id: "x"},
             ),
-            {attribute.id: attribute},
+            {field.id: field},
             NOW,
         )
         async with uow_factory() as uow:
             await uow.contacts.add(contact)
             await uow.document_types.add(document_type)
             await uow.tags.add(tag)
-            await uow.attributes.add(attribute)
+            await uow.fields.add(field)
             await uow.documents.add(document)
             await uow.commit()
         unused_tag = Tag.create(name="unused", now=NOW)
@@ -815,7 +815,7 @@ class UnitOfWorkContract:
             assert await uow.documents.exists(contact=contact.id)
             assert await uow.documents.exists(document_type=document_type.id)
             assert await uow.documents.exists(tag=tag.id)
-            assert await uow.documents.exists(attribute=attribute.id)
+            assert await uow.documents.exists(field=field.id)
             assert await uow.documents.exists(owner=owner.id, tag=tag.id)
             assert not await uow.documents.exists(owner=stranger.id)
             assert not await uow.documents.exists(drawer=empty.id)

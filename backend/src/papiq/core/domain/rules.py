@@ -3,22 +3,22 @@
 A rule has a scope, triggers, a tree of conditions and actions:
 
 - Scope: a global rule is made by an admin and acts on every document, but only on tags,
-  attributes and reviews (nothing that changes who sees a document). A user rule is made by any
+  fields and reviews (nothing that changes who sees a document). A user rule is made by any
   user and acts on that user's own documents with all actions; it files only into drawers its
   owner may write to.
 - Triggers: a document arriving (`ingest`, the pipeline step `apply_rules`) and a document being
   changed by a person (`change`).
 - Conditions: groups of `all` (and) or `any` (or), each may be negated; a condition is field,
   operator and value.
-- Actions: set drawer, contact, type, title or an attribute, add or remove tags, force a review.
+- Actions: set drawer, contact, type, title or a field, add or remove tags, force a review.
 
 The definition (name, priority, triggers, conditions, actions) is versioned: every change makes
 a new version; old versions stay readable so the processing log can refer to them. Enabling and
 disabling are state, not content, and make no version.
 
 Definitions are stored as JSON (`definition_to_json`, `definition_from_json`). Values in
-conditions and actions keep their JSON form (attribute values as `attribute_to_json` writes
-them) and are read with the attribute definitions where needed (`check_attributes`).
+conditions and actions keep their JSON form (field values as `field_to_json` writes
+them) and are read with the field definitions where needed (`check_fields`).
 """
 
 import re
@@ -30,16 +30,16 @@ from enum import StrEnum
 from typing import Literal, Self
 from uuid import UUID
 
-from papiq.core.domain.attributes import AttributeDefinition, AttributeType
-from papiq.core.domain.classification import attribute_from_json
+from papiq.core.domain.classification import field_from_json
 from papiq.core.domain.documents import Channel
 from papiq.core.domain.errors import ValidationError
+from papiq.core.domain.fields import FieldDefinition, FieldType
 from papiq.core.domain.ids import (
-    AttributeId,
     ContactId,
     DocumentId,
     DocumentTypeId,
     DrawerId,
+    FieldId,
     RuleApplicationId,
     RuleId,
     TagId,
@@ -79,7 +79,7 @@ class ConditionField(StrEnum):
     TAGS = "tags"
     CHANNEL = "channel"
     TEXT = "text"
-    ATTRIBUTE = "attribute"
+    FIELD = "field"
     DOCUMENT_DATE = "document_date"
 
 
@@ -111,8 +111,8 @@ _FIELD_OPERATORS: dict[ConditionField, frozenset[Operator]] = {
 }
 _ID_FIELDS = frozenset({ConditionField.CONTACT, ConditionField.DOCUMENT_TYPE, ConditionField.TAGS})
 _ORDERED = frozenset({Operator.IS, Operator.GT, Operator.LT, Operator.PRESENT, Operator.MISSING})
-ATTRIBUTE_OPERATORS: dict[AttributeType, frozenset[Operator]] = {
-    AttributeType.TEXT: frozenset(
+FIELD_TYPE_OPERATORS: dict[FieldType, frozenset[Operator]] = {
+    FieldType.TEXT: frozenset(
         {
             Operator.IS,
             Operator.IN,
@@ -122,7 +122,7 @@ ATTRIBUTE_OPERATORS: dict[AttributeType, frozenset[Operator]] = {
             Operator.MISSING,
         }
     ),
-    AttributeType.LINK: frozenset(
+    FieldType.LINK: frozenset(
         {
             Operator.IS,
             Operator.IN,
@@ -132,11 +132,11 @@ ATTRIBUTE_OPERATORS: dict[AttributeType, frozenset[Operator]] = {
             Operator.MISSING,
         }
     ),
-    AttributeType.NUMBER: _ORDERED,
-    AttributeType.AMOUNT: _ORDERED,
-    AttributeType.DATE: _ORDERED,
-    AttributeType.BOOLEAN: frozenset({Operator.IS, Operator.PRESENT, Operator.MISSING}),
-    AttributeType.CHOICE: frozenset({Operator.IS, Operator.IN, Operator.PRESENT, Operator.MISSING}),
+    FieldType.NUMBER: _ORDERED,
+    FieldType.AMOUNT: _ORDERED,
+    FieldType.DATE: _ORDERED,
+    FieldType.BOOLEAN: frozenset({Operator.IS, Operator.PRESENT, Operator.MISSING}),
+    FieldType.CHOICE: frozenset({Operator.IS, Operator.IN, Operator.PRESENT, Operator.MISSING}),
 }
 
 
@@ -146,22 +146,19 @@ ATTRIBUTE_OPERATORS: dict[AttributeType, frozenset[Operator]] = {
 @dataclass(frozen=True, kw_only=True)
 class Condition:
     """Field, operator and value. `value` is None for `present` and `missing`, a list for
-    `in`, otherwise one value. `attribute_id` names the attribute of an `attribute` condition;
+    `in`, otherwise one value. `field_id` names the field of a `field` condition;
     `case_sensitive` applies to `matches` only."""
 
     field: ConditionField
     op: Operator
     value: JsonValue = None
-    attribute_id: AttributeId | None = None
+    field_id: FieldId | None = None
     case_sensitive: bool = False
 
     def __post_init__(self) -> None:
-        if (self.field is ConditionField.ATTRIBUTE) != (self.attribute_id is not None):
-            raise ValidationError("attribute_id is given exactly for attribute conditions")
-        if (
-            self.field is not ConditionField.ATTRIBUTE
-            and self.op not in _FIELD_OPERATORS[self.field]
-        ):
+        if (self.field is ConditionField.FIELD) != (self.field_id is not None):
+            raise ValidationError("field_id is given exactly for field conditions")
+        if self.field is not ConditionField.FIELD and self.op not in _FIELD_OPERATORS[self.field]:
             raise ValidationError(f"operator '{self.op}' does not apply to {self.field}")
         if self.case_sensitive and self.op is not Operator.MATCHES:
             raise ValidationError("case_sensitive applies to 'matches' only")
@@ -201,8 +198,8 @@ class Condition:
                     _pattern(value)
             case ConditionField.DOCUMENT_DATE:
                 _date(value)
-            case ConditionField.ATTRIBUTE:
-                # Checked against the definition by `check_attributes`; here only patterns.
+            case ConditionField.FIELD:
+                # Checked against the definition by `check_fields`; here only patterns.
                 if self.op is Operator.MATCHES:
                     _text(value, MAX_PATTERN)
                     _pattern(value)
@@ -304,16 +301,16 @@ class RemoveTags:
 
 
 @dataclass(frozen=True)
-class SetAttribute:
-    """`value` in the JSON form of the attribute's type (`attribute_to_json`)."""
+class SetField:
+    """`value` in the JSON form of the field's type (`field_to_json`)."""
 
-    attribute_id: AttributeId
+    field_id: FieldId
     value: JsonValue
-    type: Literal["set_attribute"] = "set_attribute"
+    type: Literal["set_field"] = "set_field"
 
     def __post_init__(self) -> None:
         if self.value is None:
-            raise ValidationError("set_attribute needs a value")
+            raise ValidationError("set_field needs a value")
 
 
 @dataclass(frozen=True)
@@ -334,11 +331,11 @@ type Action = (
     | SetTitle
     | AddTags
     | RemoveTags
-    | SetAttribute
+    | SetField
     | ForceReview
 )
 
-GLOBAL_ACTIONS: tuple[type, ...] = (AddTags, RemoveTags, SetAttribute, ForceReview)
+GLOBAL_ACTIONS: tuple[type, ...] = (AddTags, RemoveTags, SetField, ForceReview)
 """What a global rule may do: nothing that changes who sees a document."""
 
 
@@ -352,14 +349,14 @@ class References:
     contacts: frozenset[ContactId] = frozenset()
     document_types: frozenset[DocumentTypeId] = frozenset()
     tags: frozenset[TagId] = frozenset()
-    attributes: frozenset[AttributeId] = frozenset()
+    fields: frozenset[FieldId] = frozenset()
     drawers: frozenset[DrawerId] = frozenset()
 
 
 @dataclass(frozen=True, kw_only=True)
 class RuleDefinition:
     """The versioned content of a rule. Checked here for everything that needs no stored
-    data; `check_scope` and `check_attributes` do the rest."""
+    data; `check_scope` and `check_fields` do the rest."""
 
     name: str
     conditions: Group
@@ -404,7 +401,7 @@ class RuleDefinition:
         contacts: set[ContactId] = set()
         types: set[DocumentTypeId] = set()
         tags: set[TagId] = set()
-        attributes: set[AttributeId] = set()
+        fields: set[FieldId] = set()
         drawers: set[DrawerId] = set()
         for condition in self.conditions.conditions():
             match condition.field:
@@ -414,9 +411,9 @@ class RuleDefinition:
                     types.update(DocumentTypeId(id) for id in _ids(condition))
                 case ConditionField.TAGS:
                     tags.update(TagId(id) for id in _ids(condition))
-                case ConditionField.ATTRIBUTE:
-                    assert condition.attribute_id is not None
-                    attributes.add(condition.attribute_id)
+                case ConditionField.FIELD:
+                    assert condition.field_id is not None
+                    fields.add(condition.field_id)
         for action in self.actions:
             match action:
                 case SetDrawer(drawer_id=drawer):
@@ -427,13 +424,13 @@ class RuleDefinition:
                     types.add(document_type)
                 case AddTags(tag_ids=ids) | RemoveTags(tag_ids=ids):
                     tags.update(ids)
-                case SetAttribute(attribute_id=attribute):
-                    attributes.add(attribute)
+                case SetField(field_id=field):
+                    fields.add(field)
         return References(
             frozenset(contacts),
             frozenset(types),
             frozenset(tags),
-            frozenset(attributes),
+            frozenset(fields),
             frozenset(drawers),
         )
 
@@ -444,11 +441,11 @@ class RuleDefinition:
         )
 
     def patterns(self) -> set[tuple[str, str, bool]]:
-        """The regular expressions of the conditions: target (`text` or an attribute id),
+        """The regular expressions of the conditions: target (`text` or a field id),
         pattern and case setting."""
         return {
             (
-                "text" if condition.attribute_id is None else str(condition.attribute_id),
+                "text" if condition.field_id is None else str(condition.field_id),
                 str(condition.value),
                 condition.case_sensitive,
             )
@@ -464,48 +461,48 @@ def _ids(condition: Condition) -> list[UUID]:
 def _single_key(action: Action) -> str | None:
     """The field an action sets alone; two such actions in one rule contradict each other."""
     match action:
-        case SetAttribute(attribute_id=attribute):
-            return f"attribute:{attribute}"
+        case SetField(field_id=field):
+            return f"field:{field}"
         case AddTags() | RemoveTags() | ForceReview():
             return None
     return action.type
 
 
 def check_scope(definition: RuleDefinition, scope: RuleScope) -> None:
-    """A global rule may only tag, set attributes and force a review."""
+    """A global rule may only tag, set fields and force a review."""
     if scope is RuleScope.GLOBAL:
         for index, action in enumerate(definition.actions):
             if not isinstance(action, GLOBAL_ACTIONS):
                 raise ValidationError(
                     f"actions[{index}]: a global rule cannot {action.type}: global rules only "
-                    "add or remove tags, set attributes and force a review"
+                    "add or remove tags, set fields and force a review"
                 )
 
 
-def check_attributes(
-    definition: RuleDefinition, definitions: Mapping[AttributeId, AttributeDefinition]
+def check_fields(
+    definition: RuleDefinition, definitions: Mapping[FieldId, FieldDefinition]
 ) -> None:
-    """Conditions and actions on attributes fit the attribute's data type. ValidationError
-    otherwise, naming the place; a missing attribute is a ValidationError too."""
+    """Conditions and actions on fields fit the field's data type. ValidationError
+    otherwise, naming the place; a missing field is a ValidationError too."""
     for place, condition in condition_places(definition.conditions):
-        if condition.field is not ConditionField.ATTRIBUTE:
+        if condition.field is not ConditionField.FIELD:
             continue
-        assert condition.attribute_id is not None
+        assert condition.field_id is not None
         with _at(place):
-            attribute = _attribute(definitions, condition.attribute_id)
-            if condition.op not in ATTRIBUTE_OPERATORS[attribute.data_type]:
+            field = _field(definitions, condition.field_id)
+            if condition.op not in FIELD_TYPE_OPERATORS[field.data_type]:
                 raise ValidationError(
-                    f"operator '{condition.op}' does not apply to attribute '{attribute.name}' "
-                    f"({attribute.data_type})"
+                    f"operator '{condition.op}' does not apply to field '{field.name}' "
+                    f"({field.data_type})"
                 )
             if condition.op in (Operator.CONTAINS, Operator.MATCHES):
                 continue
             for value in condition.values:
-                attribute_from_json(attribute, value)
+                field_from_json(field, value)
     for index, action in enumerate(definition.actions):
-        if isinstance(action, SetAttribute):
+        if isinstance(action, SetField):
             with _at(f"actions[{index}]"):
-                attribute_from_json(_attribute(definitions, action.attribute_id), action.value)
+                field_from_json(_field(definitions, action.field_id), action.value)
 
 
 def condition_places(group: Group, where: str = "conditions") -> Iterator[tuple[str, Condition]]:
@@ -527,13 +524,11 @@ def _at(place: str) -> Iterator[None]:
         raise ValidationError(f"{place}: {error}") from None
 
 
-def _attribute(
-    definitions: Mapping[AttributeId, AttributeDefinition], id: AttributeId
-) -> AttributeDefinition:
+def _field(definitions: Mapping[FieldId, FieldDefinition], id: FieldId) -> FieldDefinition:
     try:
         return definitions[id]
     except KeyError:
-        raise ValidationError(f"attribute {id} does not exist") from None
+        raise ValidationError(f"field {id} does not exist") from None
 
 
 # --- rule -------------------------------------------------------------------------------------
@@ -767,8 +762,8 @@ def group_to_json(group: Group) -> JsonObject:
 
 def condition_to_json(condition: Condition) -> JsonObject:
     data: JsonObject = {"field": condition.field.value, "op": condition.op.value}
-    if condition.attribute_id is not None:
-        data["attribute_id"] = str(condition.attribute_id)
+    if condition.field_id is not None:
+        data["field_id"] = str(condition.field_id)
     if condition.value is not None:
         data["value"] = condition.value
     if condition.case_sensitive:
@@ -788,8 +783,8 @@ def action_to_json(action: Action) -> JsonObject:
             return {"type": action.type, "template": template}
         case AddTags(tag_ids=tags) | RemoveTags(tag_ids=tags):
             return {"type": action.type, "tag_ids": _strings(sorted(str(tag) for tag in tags))}
-        case SetAttribute(attribute_id=attribute, value=value):
-            return {"type": action.type, "attribute_id": str(attribute), "value": value}
+        case SetField(field_id=field, value=value):
+            return {"type": action.type, "field_id": str(field), "value": value}
         case ForceReview(reason=reason):
             return {"type": action.type, "reason": reason}
 
@@ -849,8 +844,8 @@ def group_from_json(data: JsonValue, where: str = "conditions") -> Group:
 
 def condition_from_json(data: JsonValue, where: str = "condition") -> Condition:
     object_ = _object(data, where)
-    _only(object_, {"field", "op", "value", "attribute_id", "case_sensitive"}, where)
-    attribute = object_.get("attribute_id")
+    _only(object_, {"field", "op", "value", "field_id", "case_sensitive"}, where)
+    field_id = object_.get("field_id")
     case_sensitive = object_.get("case_sensitive", False)
     if not isinstance(case_sensitive, bool):
         raise ValidationError(f"{where}.case_sensitive: expected true or false")
@@ -859,7 +854,7 @@ def condition_from_json(data: JsonValue, where: str = "condition") -> Condition:
             field=_enum(ConditionField, object_.get("field"), f"{where}.field"),
             op=_enum(Operator, object_.get("op"), f"{where}.op"),
             value=object_.get("value"),
-            attribute_id=None if attribute is None else AttributeId(_uuid(attribute, "attribute")),
+            field_id=None if field_id is None else FieldId(_uuid(field_id, "field_id")),
             case_sensitive=case_sensitive,
         )
     except ValidationError as error:
@@ -895,10 +890,10 @@ def action_from_json(data: JsonValue, where: str = "action") -> Action:
                     raise ValidationError("tag_ids: expected a list")
                 tags = frozenset(TagId(_uuid(item, "tag_ids")) for item in ids)
                 return AddTags(tags) if kind == "add_tags" else RemoveTags(tags)
-            case "set_attribute":
-                _only(object_, {"type", "attribute_id", "value"}, where)
-                return SetAttribute(
-                    AttributeId(_uuid(object_.get("attribute_id"), "attribute_id")),
+            case "set_field":
+                _only(object_, {"type", "field_id", "value"}, where)
+                return SetField(
+                    FieldId(_uuid(object_.get("field_id"), "field_id")),
                     object_.get("value"),
                 )
             case "force_review":

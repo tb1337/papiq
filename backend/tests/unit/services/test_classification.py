@@ -1,4 +1,4 @@
-"""Classification and attribute extraction with a fake language model: every check, the
+"""Classification and field extraction with a fake language model: every check, the
 answer handling, and the way through the pipeline."""
 
 from collections.abc import Callable
@@ -10,10 +10,10 @@ from typing import Any
 import pytest
 
 from papiq.adapters.outbound.memory import FakeLanguageModel
-from papiq.core.domain.attributes import AttributeDefinition, AttributeType, Money
-from papiq.core.domain.classification import FieldCheck, attribute_field, checks_from_json
+from papiq.core.domain.classification import FieldCheck, checks_from_json, field_key
 from papiq.core.domain.documents import UNSET, Document, DocumentChanges
 from papiq.core.domain.errors import LanguageModelError
+from papiq.core.domain.fields import FieldDefinition, FieldType, Money
 from papiq.core.domain.json_value import JsonObject
 from papiq.core.domain.master_data import Contact, DocumentType, Tag
 from papiq.core.domain.pipeline import Lane, Outcome, ProcessingStatus, Step, StepResult
@@ -22,7 +22,7 @@ from papiq.core.services.classification.steps import (
     NO_MODEL,
     ClassificationPolicy,
     ClassifyStep,
-    ExtractAttributesStep,
+    ExtractFieldsStep,
 )
 from papiq.core.services.objects import markdown_key
 from papiq.core.services.pipeline import MetadataResult, StepExecutor
@@ -56,7 +56,7 @@ class Seeded:
     contacts: dict[str, Contact]
     types: dict[str, DocumentType]
     tags: dict[str, Tag]
-    attributes: dict[str, AttributeDefinition]
+    fields: dict[str, FieldDefinition]
 
 
 async def seed(world: World, contacts: tuple[str, ...] = ()) -> Seeded:
@@ -65,16 +65,16 @@ async def seed(world: World, contacts: tuple[str, ...] = ()) -> Seeded:
         contacts={name: Contact.create(name=name, now=NOW) for name in names},
         types={name: DocumentType.create(name=name, now=NOW) for name in ("Rechnung", "Vertrag")},
         tags={name: Tag.create(name=name, now=NOW) for name in ("Strom", "Versicherung")},
-        attributes={},
+        fields={},
     )
     invoice = seeded.types["Rechnung"].id
     for name, data_type, scope in [
-        ("Rechnungsbetrag", AttributeType.AMOUNT, [invoice]),
-        ("Rechnungsnummer", AttributeType.TEXT, [invoice]),
-        ("Fällig am", AttributeType.DATE, [invoice]),
-        ("Bezahlt", AttributeType.BOOLEAN, None),
+        ("Rechnungsbetrag", FieldType.AMOUNT, [invoice]),
+        ("Rechnungsnummer", FieldType.TEXT, [invoice]),
+        ("Fällig am", FieldType.DATE, [invoice]),
+        ("Bezahlt", FieldType.BOOLEAN, None),
     ]:
-        seeded.attributes[name] = AttributeDefinition.create(
+        seeded.fields[name] = FieldDefinition.create(
             name=name, data_type=data_type, document_type_ids=scope, now=NOW
         )
     async with world.uow() as uow:
@@ -84,8 +84,8 @@ async def seed(world: World, contacts: tuple[str, ...] = ()) -> Seeded:
             await uow.document_types.add(kind)
         for tag in seeded.tags.values():
             await uow.tags.add(tag)
-        for attribute in seeded.attributes.values():
-            await uow.attributes.add(attribute)
+        for field in seeded.fields.values():
+            await uow.fields.add(field)
         await uow.commit()
     return seeded
 
@@ -103,7 +103,7 @@ def classification(**changes: Any) -> JsonObject:
 
 
 def extraction(**values: Any) -> JsonObject:
-    """Answer for the attributes in key order: Bezahlt, Fällig am, Rechnungsbetrag,
+    """Answer for the fields in key order: Bezahlt, Fällig am, Rechnungsbetrag,
     Rechnungsnummer (sorted by name)."""
     defaults: dict[str, Any] = {
         "a1": {"value": None, "evidence": None},
@@ -114,7 +114,7 @@ def extraction(**values: Any) -> JsonObject:
         },
         "a4": {"value": "R-2026-0815", "evidence": None},
     }
-    return {"attributes": defaults | values}
+    return {"fields": defaults | values}
 
 
 def model(*answers: JsonObject | str) -> FakeLanguageModel:
@@ -145,8 +145,8 @@ def classify_step(world: World, fake: FakeLanguageModel | None, **policy: Any) -
     )
 
 
-def extract_step(world: World, fake: FakeLanguageModel | None) -> ExtractAttributesStep:
-    return ExtractAttributesStep(world.uow, world.object_store, fake, world.clock)
+def extract_step(world: World, fake: FakeLanguageModel | None) -> ExtractFieldsStep:
+    return ExtractFieldsStep(world.uow, world.object_store, fake, world.clock)
 
 
 def checks(result: StepResult) -> dict[str, FieldCheck]:
@@ -438,7 +438,7 @@ async def test_many_tags_list_those_named_in_the_text_first(world: World) -> Non
     assert request.user.count("- Aaa") == 2
 
 
-# --- attributes -------------------------------------------------------------------------------
+# --- fields -------------------------------------------------------------------------------
 
 
 async def extract(
@@ -451,26 +451,26 @@ async def extract(
     return seeded, result
 
 
-def attribute_check(seeded: Seeded, result: MetadataResult, name: str) -> FieldCheck:
-    return checks(result.result)[attribute_field(seeded.attributes[name].id)]
+def field_check(seeded: Seeded, result: MetadataResult, name: str) -> FieldCheck:
+    return checks(result.result)[field_key(seeded.fields[name].id)]
 
 
-async def test_verified_attributes_are_applied(world: World) -> None:
+async def test_verified_fields_are_applied(world: World) -> None:
     seeded, result = await extract(world, extraction())
     assert result.result.outcome is Outcome.OK
-    attributes = seeded.attributes
-    assert result.changes.attributes == {
-        attributes["Rechnungsbetrag"].id: Money(Decimal("84.20"), "EUR"),
-        attributes["Rechnungsnummer"].id: "R-2026-0815",
-        attributes["Fällig am"].id: date(2026, 4, 15),
+    fields = seeded.fields
+    assert result.changes.fields == {
+        fields["Rechnungsbetrag"].id: Money(Decimal("84.20"), "EUR"),
+        fields["Rechnungsnummer"].id: "R-2026-0815",
+        fields["Fällig am"].id: date(2026, 4, 15),
     }
-    paid = attribute_check(seeded, result, "Bezahlt")
-    assert paid.ok and paid.value is None  # a global attribute may be missing
-    assert result.result.input["attributes"] == {
-        "a1": str(attributes["Bezahlt"].id),
-        "a2": str(attributes["Fällig am"].id),
-        "a3": str(attributes["Rechnungsbetrag"].id),
-        "a4": str(attributes["Rechnungsnummer"].id),
+    paid = field_check(seeded, result, "Bezahlt")
+    assert paid.ok and paid.value is None  # a global field may be missing
+    assert result.result.input["fields"] == {
+        "a1": str(fields["Bezahlt"].id),
+        "a2": str(fields["Fällig am"].id),
+        "a3": str(fields["Rechnungsbetrag"].id),
+        "a4": str(fields["Rechnungsnummer"].id),
     }
 
 
@@ -545,15 +545,15 @@ async def test_verified_attributes_are_applied(world: World) -> None:
         ),
     ],
 )
-async def test_uncertain_attributes(
+async def test_uncertain_fields(
     world: World, answer: dict[str, Any], name: str, reason: str, suggestion: object
 ) -> None:
     seeded, result = await extract(world, extraction(**answer))
-    check = attribute_check(seeded, result, name)
+    check = field_check(seeded, result, name)
     assert check.outcome is Outcome.UNCERTAIN
     assert check.reason == reason
     assert check.suggestion == suggestion
-    assert seeded.attributes[name].id not in result.changes.attributes
+    assert seeded.fields[name].id not in result.changes.fields
     assert result.result.outcome is Outcome.UNCERTAIN
 
 
@@ -565,11 +565,11 @@ async def test_a_date_equal_to_the_document_date_is_only_suggested(world: World)
     answer = extraction(a2={"value": "2026-03-31", "evidence": "Musterstadt, 31.03.2026"})
     result = await extract_step(world, model(answer)).run(document)
     assert isinstance(result, MetadataResult)
-    check = attribute_check(seeded, result, "Fällig am")
+    check = field_check(seeded, result, "Fällig am")
     assert check.outcome is Outcome.UNCERTAIN
     assert check.reason == "'Fällig am': the same date as the document date"
     assert check.suggestion == "2026-03-31"
-    assert seeded.attributes["Fällig am"].id not in result.changes.attributes
+    assert seeded.fields["Fällig am"].id not in result.changes.fields
 
 
 async def test_values_are_read_leniently(world: World) -> None:
@@ -580,20 +580,18 @@ async def test_values_are_read_leniently(world: World) -> None:
             a3={"value": {"amount": "84,2", "currency": "eur"}, "evidence": None},
         ),
     )
-    attributes = seeded.attributes
-    assert result.changes.attributes[attributes["Rechnungsbetrag"].id] == Money(
-        Decimal("84.2"), "EUR"
-    )
-    assert result.changes.attributes[attributes["Bezahlt"].id] is True
+    fields = seeded.fields
+    assert result.changes.fields[fields["Rechnungsbetrag"].id] == Money(Decimal("84.2"), "EUR")
+    assert result.changes.fields[fields["Bezahlt"].id] is True
 
 
-async def test_no_attributes_no_question(world: World) -> None:
+async def test_no_fields_no_question(world: World) -> None:
     await seed(world)
-    document = await document_with(world)  # no type: only the global attribute applies
+    document = await document_with(world)  # no type: only the global field applies
     async with world.uow() as uow:
-        for attribute in await uow.attributes.list_all():
-            if attribute.is_global:
-                await uow.attributes.remove(attribute.id)
+        for field in await uow.fields.list_all():
+            if field.is_global:
+                await uow.fields.remove(field.id)
         await uow.commit()
     fake = model(extraction())
     result = await extract_step(world, fake).run(document)
@@ -602,21 +600,21 @@ async def test_no_attributes_no_question(world: World) -> None:
     assert await extract_step(world, None).run(document) == result
 
 
-async def test_attributes_without_a_model(world: World) -> None:
+async def test_fields_without_a_model(world: World) -> None:
     seeded = await seed(world)
     document = await document_with(world, type=seeded.types["Rechnung"])
     result = await extract_step(world, None).run(document)
     assert result == StepResult(outcome=Outcome.UNCERTAIN, reason=NO_MODEL)
 
 
-async def test_extraction_prompt_names_type_and_attributes(world: World) -> None:
+async def test_extraction_prompt_names_type_and_fields(world: World) -> None:
     seeded = await seed(world)
     fake = model(extraction())
     await extract_step(world, fake).run(await document_with(world, type=seeded.types["Rechnung"]))
     (request,) = fake.requests
     assert 'The document is of type "Rechnung".' in request.user
     assert '- a3: "Rechnungsbetrag" (object with amount' in request.user
-    assert request.schema_name == "attributes"
+    assert request.schema_name == "fields"
 
 
 # --- through the pipeline ---------------------------------------------------------------------
@@ -632,7 +630,7 @@ async def run(world: World, fake: FakeLanguageModel) -> tuple[Any, Document]:
     owner = await world.user()
     executors: dict[Step, StepExecutor] = {
         Step.CLASSIFY: classify_step(world, fake),
-        Step.EXTRACT_ATTRIBUTES: extract_step(world, fake),
+        Step.EXTRACT_FIELDS: extract_step(world, fake),
     }
     pipeline = world.pipeline(executors)
     document = await pipeline.receive(owner.id, incoming(b"%PDF-1.7\n%%EOF\n"), filename="a.pdf")
@@ -651,9 +649,7 @@ async def test_a_verified_document_is_filed_green(world: World) -> None:
     assert document.document_type_id == seeded.types["Rechnung"].id
     assert document.tag_ids == {seeded.tags["Strom"].id}
     assert document.document_date == date(2026, 3, 31)
-    assert document.attributes[seeded.attributes["Rechnungsbetrag"].id] == Money(
-        Decimal("84.20"), "EUR"
-    )
+    assert document.fields[seeded.fields["Rechnungsbetrag"].id] == Money(Decimal("84.20"), "EUR")
     assert "document.filed" in world.event_types()
     log = await world.documents.processing_log(owner.id, document.id)
     classified = next(entry for entry in log if entry.step is Step.CLASSIFY)

@@ -1,4 +1,4 @@
-"""Attribute definitions (Paperless-ngx: custom fields) and the values they accept."""
+"""Field definitions (Paperless-ngx: custom fields) and the values they accept."""
 
 import re
 from collections.abc import Collection
@@ -10,14 +10,14 @@ from typing import Self
 from urllib.parse import urlsplit
 
 from papiq.core.domain.errors import ValidationError
-from papiq.core.domain.ids import AttributeId, DocumentTypeId, new_id
+from papiq.core.domain.ids import DocumentTypeId, FieldId, new_id
 from papiq.core.domain.master_data import MasterData
 from papiq.core.domain.validation import require_name
 
 _CURRENCY = re.compile(r"[A-Z]{3}")
 
 
-class AttributeType(StrEnum):
+class FieldType(StrEnum):
     TEXT = "text"
     NUMBER = "number"
     AMOUNT = "amount"
@@ -59,46 +59,46 @@ class Url:
             raise ValidationError(f"URL must be absolute http(s), got {self.value!r}")
 
 
-type AttributeValue = str | Decimal | Money | date | bool | Url
+type FieldValue = str | Decimal | Money | date | bool | Url
 
 
 @dataclass(kw_only=True)
-class AttributeDefinition(MasterData):
+class FieldDefinition(MasterData):
     """A freely definable field with a fixed data type.
 
-    Scope: `document_type_ids is None` means global (every document); otherwise the attribute
+    Scope: `document_type_ids is None` means global (every document); otherwise the field
     applies only to documents of one of the listed types. `choices` is used by CHOICE only.
     """
 
-    id: AttributeId
-    data_type: AttributeType
+    id: FieldId
+    data_type: FieldType
     document_type_ids: frozenset[DocumentTypeId] | None = None
     choices: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        if self.data_type is AttributeType.CHOICE:
+        if self.data_type is FieldType.CHOICE:
             choices = tuple(require_name(choice, "choice") for choice in self.choices)
             if not choices:
-                raise ValidationError("a choice attribute needs at least one choice")
+                raise ValidationError("a choice field needs at least one choice")
             if len(set(choices)) != len(choices):
                 raise ValidationError("choices must be unique")
             self.choices = choices
         elif self.choices:
-            raise ValidationError("only choice attributes have choices")
+            raise ValidationError("only choice fields have choices")
 
     @classmethod
     def create(
         cls,
         *,
         name: str,
-        data_type: AttributeType,
+        data_type: FieldType,
         now: datetime,
         document_type_ids: Collection[DocumentTypeId] | None = None,
         choices: Collection[str] = (),
     ) -> Self:
         return cls(
-            id=AttributeId(new_id()),
+            id=FieldId(new_id()),
             name=name,
             data_type=data_type,
             document_type_ids=None if document_type_ids is None else frozenset(document_type_ids),
@@ -107,12 +107,12 @@ class AttributeDefinition(MasterData):
         )
 
     def change_choices(self, choices: Collection[str]) -> frozenset[str]:
-        """New choices for a choice attribute; returns the choices that are gone. Values in
+        """New choices for a choice field; returns the choices that are gone. Values in
         use are the caller's to check."""
-        if self.data_type is not AttributeType.CHOICE:
-            raise ValidationError("only choice attributes have choices")
+        if self.data_type is not FieldType.CHOICE:
+            raise ValidationError("only choice fields have choices")
         old = set(self.choices)
-        changed = AttributeDefinition(**{**self.__dict__, "choices": tuple(choices)})
+        changed = FieldDefinition(**{**self.__dict__, "choices": tuple(choices)})
         self.choices = changed.choices
         return frozenset(old - set(self.choices))
 
@@ -134,25 +134,23 @@ class AttributeDefinition(MasterData):
             return True
         return document_type_id in self.document_type_ids
 
-    def validate(self, value: object) -> AttributeValue:
+    def validate(self, value: object) -> FieldValue:
         """Return the value if it fits the data type, else raise ValidationError."""
         match self.data_type:
-            case AttributeType.TEXT if isinstance(value, str) and value.strip():
+            case FieldType.TEXT if isinstance(value, str) and value.strip():
                 return value
-            case AttributeType.NUMBER if isinstance(value, Decimal) and value.is_finite():
+            case FieldType.NUMBER if isinstance(value, Decimal) and value.is_finite():
                 return value
-            case AttributeType.NUMBER if isinstance(value, int) and not isinstance(value, bool):
+            case FieldType.NUMBER if isinstance(value, int) and not isinstance(value, bool):
                 return Decimal(value)
-            case AttributeType.AMOUNT if isinstance(value, Money):
+            case FieldType.AMOUNT if isinstance(value, Money):
                 return value
-            case AttributeType.DATE if isinstance(value, date) and not isinstance(value, datetime):
+            case FieldType.DATE if isinstance(value, date) and not isinstance(value, datetime):
                 return value
-            case AttributeType.BOOLEAN if isinstance(value, bool):
+            case FieldType.BOOLEAN if isinstance(value, bool):
                 return value
-            case AttributeType.CHOICE if isinstance(value, str) and value in self.choices:
+            case FieldType.CHOICE if isinstance(value, str) and value in self.choices:
                 return value
-            case AttributeType.LINK if isinstance(value, Url):
+            case FieldType.LINK if isinstance(value, Url):
                 return value
-        raise ValidationError(
-            f"attribute '{self.name}' ({self.data_type}) does not accept {value!r}"
-        )
+        raise ValidationError(f"field '{self.name}' ({self.data_type}) does not accept {value!r}")

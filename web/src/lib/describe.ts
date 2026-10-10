@@ -13,11 +13,11 @@ const FIELD_LABELS: Record<string, () => string> = {
 	correspondent: m.field_contact
 };
 
-/** The name of a field in a change: `attribute:<id>` shows the attribute's name. */
+/** The name of a field in a change: `field:<id>` shows the field's name. */
 export function fieldLabel(field: string, lookup: Lookup | null): string {
-	if (field.startsWith('attribute:')) {
-		const id = field.slice('attribute:'.length);
-		return lookup?.attributes.find((attribute) => attribute.id === id)?.name ?? field;
+	if (field.startsWith('field:')) {
+		const id = field.slice('field:'.length);
+		return lookup?.fields.find((entry) => entry.id === id)?.name ?? field;
 	}
 	return FIELD_LABELS[field]?.() ?? field;
 }

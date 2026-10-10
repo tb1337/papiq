@@ -8,7 +8,7 @@
       "Strom"
     ],
     "document_date": "2026-03-31",
-    "attributes": {
+    "fields": {
       "Betrag": {
         "amount": "84.20",
         "currency": "EUR"
@@ -35,7 +35,7 @@
         "evidence": "Musterstadt, 31.03.2026"
       }
     },
-    "attributes": {
+    "fields": {
       "Betrag": {
         "value": {
           "amount": "84.20",

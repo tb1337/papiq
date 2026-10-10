@@ -13,7 +13,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from papiq.core.domain.attributes import AttributeDefinition, AttributeType
+from papiq.core.domain.fields import FieldDefinition, FieldType
 from papiq.core.domain.json_value import JsonObject, JsonValue
 
 _EVIDENCE_LENGTH = 500  # characters of a quoted passage that are kept
@@ -90,19 +90,19 @@ def parse_classify(content: str) -> ClassifyAnswer:
     )
 
 
-# --- attributes -------------------------------------------------------------------------------
+# --- fields -------------------------------------------------------------------------------
 
 
-def attribute_keys(definitions: Sequence[AttributeDefinition]) -> dict[str, AttributeDefinition]:
-    """Short keys for the attributes (`a1`, `a2`, ...): names may be any text, keys are safe
+def field_keys(definitions: Sequence[FieldDefinition]) -> dict[str, FieldDefinition]:
+    """Short keys for the fields (`a1`, `a2`, ...): names may be any text, keys are safe
     as JSON property names in every provider's schema dialect."""
     return {f"a{index}": definition for index, definition in enumerate(definitions, start=1)}
 
 
-def extract_schema(keys: dict[str, AttributeDefinition]) -> JsonObject:
+def extract_schema(keys: dict[str, FieldDefinition]) -> JsonObject:
     return _object(
         {
-            "attributes": _object(
+            "fields": _object(
                 {key: _proposal(_value_schema(definition)) for key, definition in keys.items()}
             )
         }
@@ -111,17 +111,17 @@ def extract_schema(keys: dict[str, AttributeDefinition]) -> JsonObject:
 
 def parse_extract(content: str, keys: Sequence[str]) -> dict[str, Proposal]:
     data = _load(content)
-    _require_fields(data, ("attributes",), "the answer")
-    attributes = data["attributes"]
-    if not isinstance(attributes, dict):
-        raise AnswerError("attributes: expected an object")
-    _require_fields(attributes, keys, "attributes")
-    return {key: _parse_proposal(attributes[key], f"attributes.{key}") for key in keys}
+    _require_fields(data, ("fields",), "the answer")
+    fields = data["fields"]
+    if not isinstance(fields, dict):
+        raise AnswerError("fields: expected an object")
+    _require_fields(fields, keys, "fields")
+    return {key: _parse_proposal(fields[key], f"fields.{key}") for key in keys}
 
 
-def _value_schema(definition: AttributeDefinition) -> JsonObject:
+def _value_schema(definition: FieldDefinition) -> JsonObject:
     match definition.data_type:
-        case AttributeType.AMOUNT:
+        case FieldType.AMOUNT:
             amount: JsonObject = {
                 "type": "object",
                 "properties": {"amount": {"type": "string"}, "currency": {"type": "string"}},
@@ -129,9 +129,9 @@ def _value_schema(definition: AttributeDefinition) -> JsonObject:
                 "additionalProperties": False,
             }
             return {"anyOf": [amount, {"type": "null"}]}
-        case AttributeType.BOOLEAN:
+        case FieldType.BOOLEAN:
             return {"type": ["boolean", "null"]}
-        case AttributeType.CHOICE:
+        case FieldType.CHOICE:
             return {"type": ["string", "null"], "enum": [*definition.choices, None]}
         case _:
             return dict(_TEXT_OR_NULL)

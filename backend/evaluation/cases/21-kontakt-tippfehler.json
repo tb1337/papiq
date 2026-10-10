@@ -8,7 +8,7 @@
       "Wohnung"
     ],
     "document_date": "2026-06-30",
-    "attributes": {
+    "fields": {
       "Betrag": {
         "amount": "96.00",
         "currency": "EUR"
@@ -34,7 +34,7 @@
         "evidence": "Musterstadt, 30.06.2026"
       }
     },
-    "attributes": {
+    "fields": {
       "Betrag": {
         "value": {
           "amount": "96.00",

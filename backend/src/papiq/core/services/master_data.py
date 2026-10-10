@@ -2,10 +2,10 @@ from collections.abc import Awaitable, Callable, Collection
 from datetime import datetime
 from typing import Any
 
-from papiq.core.domain.attributes import AttributeDefinition, AttributeType
 from papiq.core.domain.documents import UNSET, Unset
 from papiq.core.domain.errors import ConflictError, PermissionDeniedError
-from papiq.core.domain.ids import AttributeId, ContactId, DocumentTypeId, TagId, UserId
+from papiq.core.domain.fields import FieldDefinition, FieldType
+from papiq.core.domain.ids import ContactId, DocumentTypeId, FieldId, TagId, UserId
 from papiq.core.domain.master_data import Contact, DocumentType, MasterData, Tag
 from papiq.core.domain.permissions import can_manage_master_data
 from papiq.core.domain.rules import References
@@ -29,12 +29,12 @@ def _tags(uow: UnitOfWork) -> NamedRepository[TagId, Tag]:
     return uow.tags
 
 
-def _attributes(uow: UnitOfWork) -> NamedRepository[AttributeId, AttributeDefinition]:
-    return uow.attributes
+def _fields(uow: UnitOfWork) -> NamedRepository[FieldId, FieldDefinition]:
+    return uow.fields
 
 
 class MasterDataService:
-    """Contacts, document types, tags and attribute definitions. Changes are admin-only."""
+    """Contacts, document types, tags and field definitions. Changes are admin-only."""
 
     def __init__(
         self, uow: UnitOfWorkFactory, clock: Clock, *, index_renames: bool = False
@@ -66,17 +66,17 @@ class MasterDataService:
     async def rename_tag(self, actor: UserId, id: TagId, name: str) -> Tag:
         return await self._rename(actor, _tags, id, name, index_as="tag")
 
-    async def create_attribute(
+    async def create_field(
         self,
         actor: UserId,
         name: str,
-        data_type: AttributeType,
+        data_type: FieldType,
         *,
         document_type_ids: Collection[DocumentTypeId] | None = None,
         choices: Collection[str] = (),
-    ) -> AttributeDefinition:
-        """`document_type_ids=None` creates a global attribute."""
-        definition = AttributeDefinition.create(
+    ) -> FieldDefinition:
+        """`document_type_ids=None` creates a global field."""
+        definition = FieldDefinition.create(
             name=name,
             data_type=data_type,
             now=self._now(),
@@ -88,30 +88,30 @@ class MasterDataService:
             for document_type in definition.document_type_ids or ():
                 await uow.document_types.get(document_type)
 
-        return await self._create(actor, _attributes, definition, check)
+        return await self._create(actor, _fields, definition, check)
 
-    async def change_attribute(
+    async def change_field(
         self,
         actor: UserId,
-        id: AttributeId,
+        id: FieldId,
         *,
         name: str | None = None,
         choices: Collection[str] | None = None,
         document_type_ids: Collection[DocumentTypeId] | Unset | None = UNSET,
-    ) -> AttributeDefinition:
+    ) -> FieldDefinition:
         """Admins only. Name; choices (adding is free, removing only what no document uses);
         scope (`None`: global; widening is free, narrowing only while no document outside the
         new scope has a value). The data type never changes. ConflictError if values are in
         use."""
         async with self._uow() as uow:
             await _require_admin(uow, actor)
-            definition = await uow.attributes.get(id)
+            definition = await uow.fields.get(id)
             if name is not None:
                 definition.rename(name)
-                await _check_name_free(uow.attributes, definition)
+                await _check_name_free(uow.fields, definition)
             if choices is not None:
                 removed = definition.change_choices(choices)
-                if removed and await uow.documents.attribute_in_use(id, values=removed):
+                if removed and await uow.documents.field_in_use(id, values=removed):
                     raise ConflictError(f"documents use the choices {', '.join(sorted(removed))}")
             if not isinstance(document_type_ids, Unset):
                 for document_type in document_type_ids or ():
@@ -121,26 +121,24 @@ class MasterDataService:
                 if (
                     narrower
                     and scope is not None
-                    and await uow.documents.attribute_in_use(id, outside_types=scope)
+                    and await uow.documents.field_in_use(id, outside_types=scope)
                 ):
                     raise ConflictError("documents outside the new scope have values")
-            await uow.attributes.update(definition)
+            await uow.fields.update(definition)
             if choices is not None:
-                attributes = {item.id: item for item in await uow.attributes.list_all()}
-                attributes[definition.id] = definition
+                fields = {item.id: item for item in await uow.fields.list_all()}
+                fields[definition.id] = definition
                 await disable_rules(
                     uow,
                     self._now(),
-                    f"attribute '{definition.name}' no longer allows a value the rule uses",
-                    misfits(definition.id, attributes),
+                    f"field '{definition.name}' no longer allows a value the rule uses",
+                    misfits(definition.id, fields),
                 )
             await uow.commit()
         return definition
 
-    async def rename_attribute(
-        self, actor: UserId, id: AttributeId, name: str
-    ) -> AttributeDefinition:
-        return await self._rename(actor, _attributes, id, name)
+    async def rename_field(self, actor: UserId, id: FieldId, name: str) -> FieldDefinition:
+        return await self._rename(actor, _fields, id, name)
 
     # --- reading (every signed-in user) ----------------------------------------------------------
 
@@ -153,8 +151,8 @@ class MasterDataService:
     async def list_tags(self, actor: UserId) -> list[Tag]:
         return await self._list(actor, _tags)
 
-    async def list_attributes(self, actor: UserId) -> list[AttributeDefinition]:
-        return await self._list(actor, _attributes)
+    async def list_fields(self, actor: UserId) -> list[FieldDefinition]:
+        return await self._list(actor, _fields)
 
     async def get_contact(self, actor: UserId, id: ContactId) -> Contact:
         return await self._get(actor, _contacts, id)
@@ -165,8 +163,8 @@ class MasterDataService:
     async def get_tag(self, actor: UserId, id: TagId) -> Tag:
         return await self._get(actor, _tags, id)
 
-    async def get_attribute(self, actor: UserId, id: AttributeId) -> AttributeDefinition:
-        return await self._get(actor, _attributes, id)
+    async def get_field(self, actor: UserId, id: FieldId) -> FieldDefinition:
+        return await self._get(actor, _fields, id)
 
     # --- deleting (admins; only what no document uses) -------------------------------------------
 
@@ -184,8 +182,7 @@ class MasterDataService:
             if await uow.documents.exists(document_type=id):
                 return True
             return any(
-                id in (attribute.document_type_ids or ())
-                for attribute in await uow.attributes.list_all()
+                id in (field.document_type_ids or ()) for field in await uow.fields.list_all()
             )
 
         await self._delete(
@@ -201,13 +198,13 @@ class MasterDataService:
             ("tag", lambda refs: refs.tags),
         )
 
-    async def delete_attribute(self, actor: UserId, id: AttributeId) -> None:
+    async def delete_field(self, actor: UserId, id: FieldId) -> None:
         await self._delete(
             actor,
-            _attributes,
+            _fields,
             id,
-            lambda uow: uow.documents.exists(attribute=id),
-            ("attribute", lambda refs: refs.attributes),
+            lambda uow: uow.documents.exists(field=id),
+            ("field", lambda refs: refs.fields),
         )
 
     async def _list[E: MasterData](self, actor: UserId, repository: Repo[E]) -> list[E]:

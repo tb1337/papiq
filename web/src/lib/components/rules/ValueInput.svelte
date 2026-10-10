@@ -1,15 +1,15 @@
 <script lang="ts">
 	import NativeSelect from '#lib/components/NativeSelect.svelte';
 	import { Input } from '#lib/components/ui/input/index.ts';
-	import type { Attribute } from '#lib/masterdata.svelte.ts';
+	import type { FieldDefinition } from '#lib/masterdata.svelte.ts';
 	import { m } from '#lib/paraglide/messages.js';
 	import type { Value } from '#lib/rules/model.ts';
 
-	// One value of an attribute in its JSON form: text, number and date as text, yes/no as a
-	// boolean, an amount with its currency, a choice from the attribute's list. `textual` asks for
+	// One value of a field in its JSON form: text, number and date as text, yes/no as a
+	// boolean, an amount with its currency, a choice from the field's list. `textual` asks for
 	// plain text whatever the type (`contains`, `matches`).
 	let {
-		attribute,
+		field,
 		value,
 		onchange,
 		label,
@@ -17,7 +17,7 @@
 		invalid = false,
 		textual = false
 	}: {
-		attribute: Attribute | null;
+		field: FieldDefinition | null;
 		value: Value;
 		onchange: (value: Value) => void;
 		label: string;
@@ -26,7 +26,7 @@
 		textual?: boolean;
 	} = $props();
 
-	const type = $derived(textual ? 'text' : (attribute?.data_type ?? 'text'));
+	const type = $derived(textual ? 'text' : (field?.data_type ?? 'text'));
 	const text = $derived(
 		typeof value === 'string' ? value : typeof value === 'number' ? String(value) : ''
 	);
@@ -39,8 +39,8 @@
 	);
 	const choices = $derived([
 		{ value: '', label: m.rule_choose() },
-		...(attribute?.choices ?? []).map((choice) => ({ value: choice, label: choice })),
-		...(text && !(attribute?.choices ?? []).includes(text)
+		...(field?.choices ?? []).map((choice) => ({ value: choice, label: choice })),
+		...(text && !(field?.choices ?? []).includes(text)
 			? [{ value: text, label: `${text} (${m.rule_unknown()})` }]
 			: [])
 	]);
@@ -71,7 +71,7 @@
 			class="min-w-0 flex-1"
 		/>
 		<Input
-			aria-label={m.attribute_currency()}
+			aria-label={m.field_currency()}
 			maxlength={3}
 			value={money.currency}
 			oninput={(event) => onchange({ ...money, currency: event.currentTarget.value.toUpperCase() })}

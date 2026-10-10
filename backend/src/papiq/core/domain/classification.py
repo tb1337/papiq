@@ -1,4 +1,4 @@
-"""Results of classification and attribute extraction, field by field.
+"""Results of classification and field extraction, field by field.
 
 Each field the model proposed is checked against facts; a `FieldCheck` records the proposal,
 the check and its outcome. Checks are stored in the processing log (output of the classify and
@@ -11,15 +11,15 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Self
 
-from papiq.core.domain.attributes import (
-    AttributeDefinition,
-    AttributeType,
-    AttributeValue,
+from papiq.core.domain.errors import ValidationError
+from papiq.core.domain.fields import (
+    FieldDefinition,
+    FieldType,
+    FieldValue,
     Money,
     Url,
 )
-from papiq.core.domain.errors import ValidationError
-from papiq.core.domain.ids import AttributeId
+from papiq.core.domain.ids import FieldId
 from papiq.core.domain.json_value import JsonObject, JsonValue
 from papiq.core.domain.pipeline import Outcome
 
@@ -27,16 +27,16 @@ CONTACT = "contact"
 DOCUMENT_TYPE = "document_type"
 TAGS = "tags"
 DOCUMENT_DATE = "document_date"
-_ATTRIBUTE_PREFIX = "attribute:"
+_FIELD_PREFIX = "field:"
 
 
-def attribute_field(id: AttributeId) -> str:
-    return f"{_ATTRIBUTE_PREFIX}{id}"
+def field_key(id: FieldId) -> str:
+    return f"{_FIELD_PREFIX}{id}"
 
 
-def attribute_of(field: str) -> str | None:
-    """The attribute id named by a field, or None for the other fields."""
-    return field.removeprefix(_ATTRIBUTE_PREFIX) if field.startswith(_ATTRIBUTE_PREFIX) else None
+def field_id_of(field: str) -> str | None:
+    """The field id named by a check name, or None for the other checks."""
+    return field.removeprefix(_FIELD_PREFIX) if field.startswith(_FIELD_PREFIX) else None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -45,10 +45,10 @@ class FieldCheck:
 
     - `proposed`: what the model answered for the field, unchanged.
     - `evidence`: the excerpt the model quoted, if any.
-    - `value`: the checked value as JSON (contact or type id, tag ids, ISO date, attribute
+    - `value`: the checked value as JSON (contact or type id, tag ids, ISO date, field
       value), set if the field is OK; it was applied to the document.
     - `suggestion`: for an uncertain field, a value a person may accept as it is (an existing
-      contact, a date or attribute value that is valid but not shown in the text).
+      contact, a date or field value that is valid but not shown in the text).
     - `new_name`: the name of a contact or type the model proposed that does not exist; only
       an admin can create it.
     """
@@ -126,10 +126,10 @@ def _optional_text(value: JsonValue) -> str | None:
     return value if isinstance(value, str) else None
 
 
-# --- attribute values as JSON -----------------------------------------------------------------
+# --- field values as JSON -----------------------------------------------------------------
 
 
-def attribute_to_json(value: AttributeValue) -> JsonValue:
+def field_to_json(value: FieldValue) -> JsonValue:
     """Text, choice and link as text; number as decimal text; amount as `{amount, currency}`;
     date as ISO text; yes/no as boolean."""
     match value:
@@ -145,24 +145,24 @@ def attribute_to_json(value: AttributeValue) -> JsonValue:
             return value.value
 
 
-def attribute_from_json(definition: AttributeDefinition, data: JsonValue) -> AttributeValue:
-    """The value of `definition` from its JSON form (as `attribute_to_json` writes it), checked
+def field_from_json(definition: FieldDefinition, data: JsonValue) -> FieldValue:
+    """The value of `definition` from its JSON form (as `field_to_json` writes it), checked
     against the definition. ValidationError if it does not fit."""
     value: object = data
     try:
         match definition.data_type:
-            case AttributeType.NUMBER if isinstance(data, str | int) and not isinstance(data, bool):
+            case FieldType.NUMBER if isinstance(data, str | int) and not isinstance(data, bool):
                 value = Decimal(str(data))
-            case AttributeType.AMOUNT if isinstance(data, dict):
+            case FieldType.AMOUNT if isinstance(data, dict):
                 amount, currency = data.get("amount"), data.get("currency")
                 if isinstance(amount, str | int) and not isinstance(amount, bool):
                     value = Money(Decimal(str(amount)), str(currency))
-            case AttributeType.DATE if isinstance(data, str):
+            case FieldType.DATE if isinstance(data, str):
                 value = date.fromisoformat(data)
-            case AttributeType.LINK if isinstance(data, str):
+            case FieldType.LINK if isinstance(data, str):
                 value = Url(data)
     except (InvalidOperation, ValueError, ValidationError):
         raise ValidationError(
-            f"attribute '{definition.name}' ({definition.data_type}) does not accept {data!r}"
+            f"field '{definition.name}' ({definition.data_type}) does not accept {data!r}"
         ) from None
     return definition.validate(value)

@@ -539,7 +539,7 @@ MASTER_DATA = {
     "contacts": {"name": "X"},
     "document-types": {"name": "X"},
     "tags": {"name": "X"},
-    "attributes": {"name": "X", "data_type": "text"},
+    "fields": {"name": "X", "data_type": "text"},
 }
 NOT_ADMIN = {"owner": 403, "reader": 403, "writer": 403, "stranger": 403, "read_token": 403}
 

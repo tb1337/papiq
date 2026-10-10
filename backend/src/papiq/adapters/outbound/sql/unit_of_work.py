@@ -30,11 +30,11 @@ from papiq.adapters.outbound.sql.identity import (
 )
 from papiq.adapters.outbound.sql.job_queue import SqlJobQueue
 from papiq.adapters.outbound.sql.repositories import (
-    SqlAttributeRepository,
     SqlContactRepository,
     SqlDocumentRepository,
     SqlDocumentTypeRepository,
     SqlDrawerRepository,
+    SqlFieldRepository,
     SqlProcessingLog,
     SqlTagRepository,
     SqlUserRepository,
@@ -92,7 +92,7 @@ class SqlUnitOfWork:
         self.contacts = SqlContactRepository(self._tx)
         self.document_types = SqlDocumentTypeRepository(self._tx)
         self.tags = SqlTagRepository(self._tx)
-        self.attributes = SqlAttributeRepository(self._tx)
+        self.fields = SqlFieldRepository(self._tx)
         self.documents = SqlDocumentRepository(self._tx)
         self.processing_log = SqlProcessingLog(self._tx)
         self.rules = SqlRuleRepository(self._tx)

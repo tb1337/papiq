@@ -15,26 +15,26 @@
 	import { Textarea } from '#lib/components/ui/textarea/index.ts';
 	import type { components } from '#lib/api/schema.ts';
 	import { describeError } from '#lib/errors.ts';
-	import type { Attribute, MasterData } from '#lib/masterdata.svelte.ts';
+	import type { FieldDefinition, MasterData } from '#lib/masterdata.svelte.ts';
 	import { m } from '#lib/paraglide/messages.js';
 
-	type DataType = components['schemas']['AttributeType'];
+	type DataType = components['schemas']['FieldType'];
 	const TYPES: DataType[] = ['text', 'number', 'amount', 'date', 'boolean', 'choice', 'link'];
 	const typeLabel: Record<DataType, () => string> = {
-		text: m.attr_type_text,
-		number: m.attr_type_number,
-		amount: m.attr_type_amount,
-		date: m.attr_type_date,
-		boolean: m.attr_type_boolean,
-		choice: m.attr_type_choice,
-		link: m.attr_type_link
+		text: m.field_def_type_text,
+		number: m.field_def_type_number,
+		amount: m.field_def_type_amount,
+		date: m.field_def_type_date,
+		boolean: m.field_def_type_boolean,
+		choice: m.field_def_type_choice,
+		link: m.field_def_type_link
 	};
 
-	let attributes = $state<Attribute[] | null>(null);
+	let fields = $state<FieldDefinition[] | null>(null);
 	let types = $state<MasterData[]>([]);
 	let problem = $state<string | null>(null);
-	let editing = $state<Attribute | 'new' | null>(null);
-	let removing = $state<Attribute | null>(null);
+	let editing = $state<FieldDefinition | 'new' | null>(null);
+	let removing = $state<FieldDefinition | null>(null);
 
 	// The form of the dialog.
 	let name = $state('');
@@ -47,8 +47,8 @@
 
 	async function load() {
 		try {
-			[attributes, types] = await Promise.all([
-				unwrap(api.GET('/api/v1/attributes')),
+			[fields, types] = await Promise.all([
+				unwrap(api.GET('/api/v1/fields')),
 				unwrap(api.GET('/api/v1/document-types'))
 			]);
 			problem = null;
@@ -58,7 +58,7 @@
 	}
 	onMount(() => void load());
 
-	function open(target: Attribute | 'new') {
+	function open(target: FieldDefinition | 'new') {
 		editing = target;
 		error = null;
 		const have = target === 'new' ? null : target;
@@ -69,10 +69,10 @@
 		choices = have ? have.choices.join('\n') : '';
 	}
 
-	const scopeText = (attribute: Attribute) =>
-		attribute.document_type_ids === null
-			? m.attr_scope_global()
-			: attribute.document_type_ids
+	const scopeText = (field: FieldDefinition) =>
+		field.document_type_ids === null
+			? m.field_def_scope_global()
+			: field.document_type_ids
 					.map((id) => types.find((type) => type.id === id)?.name ?? id)
 					.join(', ');
 
@@ -89,7 +89,7 @@
 		try {
 			if (editing === 'new') {
 				await unwrap(
-					api.POST('/api/v1/attributes', {
+					api.POST('/api/v1/fields', {
 						body: {
 							name: name.trim(),
 							data_type: dataType,
@@ -100,7 +100,7 @@
 				);
 			} else {
 				await unwrap(
-					api.PATCH('/api/v1/attributes/{id}', {
+					api.PATCH('/api/v1/fields/{id}', {
 						params: { path: { id: editing.id } },
 						body: {
 							name: name.trim(),
@@ -122,7 +122,7 @@
 
 	async function remove() {
 		if (!removing) return;
-		await unwrap(api.DELETE('/api/v1/attributes/{id}', { params: { path: { id: removing.id } } }));
+		await unwrap(api.DELETE('/api/v1/fields/{id}', { params: { path: { id: removing.id } } }));
 		toast.success(m.master_deleted());
 		await load();
 	}
@@ -136,14 +136,14 @@
 	<div>
 		<Button onclick={() => open('new')}>
 			<Plus aria-hidden="true" />
-			{m.master_add_attribute()}
+			{m.master_add_field()}
 		</Button>
 	</div>
 	{#if problem}
 		<p class="text-destructive" role="alert">{problem}</p>
-	{:else if !attributes}
+	{:else if !fields}
 		<p class="text-muted-foreground">{m.loading()}</p>
-	{:else if attributes.length === 0}
+	{:else if fields.length === 0}
 		<p
 			class="rounded-2xl border border-dashed bg-card px-6 py-10 text-center text-muted-foreground"
 		>
@@ -151,29 +151,29 @@
 		</p>
 	{:else}
 		<ul class="flex flex-col gap-2">
-			{#each attributes as attribute (attribute.id)}
+			{#each fields as field (field.id)}
 				<li class="flex items-center gap-3 rounded-2xl border bg-card px-4 py-2">
 					<div class="flex min-w-0 flex-1 flex-col">
-						<span class="truncate">{attribute.name}</span>
+						<span class="truncate">{field.name}</span>
 						<span class="truncate text-sm text-muted-foreground">
-							{typeLabel[attribute.data_type]()} · {scopeText(attribute)}
-							{#if attribute.choices.length > 0}
-								· {attribute.choices.join(', ')}{/if}
+							{typeLabel[field.data_type]()} · {scopeText(field)}
+							{#if field.choices.length > 0}
+								· {field.choices.join(', ')}{/if}
 						</span>
 					</div>
 					<Button
 						variant="ghost"
 						size="icon"
-						aria-label={m.master_rename({ name: attribute.name })}
-						onclick={() => open(attribute)}
+						aria-label={m.master_rename({ name: field.name })}
+						onclick={() => open(field)}
 					>
 						<Pencil aria-hidden="true" />
 					</Button>
 					<Button
 						variant="ghost"
 						size="icon"
-						aria-label={m.master_delete({ name: attribute.name })}
-						onclick={() => (removing = attribute)}
+						aria-label={m.master_delete({ name: field.name })}
+						onclick={() => (removing = field)}
 					>
 						<Trash2 aria-hidden="true" />
 					</Button>
@@ -187,17 +187,17 @@
 	<Dialog.Content class="max-w-lg">
 		<form class="flex flex-col gap-4" onsubmit={save} novalidate>
 			<Dialog.Header>
-				<Dialog.Title>{editing === 'new' ? m.master_add_attribute() : m.attr_edit()}</Dialog.Title>
-				<Dialog.Description>{m.attr_hint()}</Dialog.Description>
+				<Dialog.Title>{editing === 'new' ? m.master_add_field() : m.field_def_edit()}</Dialog.Title>
+				<Dialog.Description>{m.field_def_hint()}</Dialog.Description>
 			</Dialog.Header>
 			<Field.Field>
-				<Field.Label for="attr-name">{m.field_name()}</Field.Label>
-				<Input id="attr-name" bind:value={name} maxlength={200} required />
+				<Field.Label for="field-def-name">{m.field_name()}</Field.Label>
+				<Input id="field-def-name" bind:value={name} maxlength={200} required />
 			</Field.Field>
 			<Field.Field>
-				<Field.Label for="attr-type">{m.attr_type()}</Field.Label>
+				<Field.Label for="field-def-type">{m.field_def_type()}</Field.Label>
 				<NativeSelect
-					id="attr-type"
+					id="field-def-type"
 					bind:value={dataType as string}
 					disabled={editing !== 'new'}
 					options={TYPES.map((type) => ({ value: type, label: typeLabel[type]() }))}
@@ -205,16 +205,16 @@
 			</Field.Field>
 			{#if isChoice}
 				<Field.Field>
-					<Field.Label for="attr-choices">{m.attr_choices()}</Field.Label>
-					<Textarea id="attr-choices" bind:value={choices} rows={4} />
-					<Field.Description>{m.attr_choices_hint()}</Field.Description>
+					<Field.Label for="field-def-choices">{m.field_def_choices()}</Field.Label>
+					<Textarea id="field-def-choices" bind:value={choices} rows={4} />
+					<Field.Description>{m.field_def_choices_hint()}</Field.Description>
 				</Field.Field>
 			{/if}
 			<fieldset class="flex flex-col gap-2">
-				<legend class="mb-1 text-sm font-medium">{m.attr_scope()}</legend>
+				<legend class="mb-1 text-sm font-medium">{m.field_def_scope()}</legend>
 				<label class="flex items-center gap-2 text-sm">
 					<input type="checkbox" bind:checked={global} class="size-4 accent-primary" />
-					{m.attr_scope_global()}
+					{m.field_def_scope_global()}
 				</label>
 				{#if !global}
 					{#each types as type (type.id)}

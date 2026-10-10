@@ -1,8 +1,8 @@
 import pytest
 
-from papiq.core.domain.attributes import AttributeType
 from papiq.core.domain.documents import DocumentChanges
 from papiq.core.domain.errors import ConflictError, NotFoundError, PermissionDeniedError
+from papiq.core.domain.fields import FieldType
 from papiq.core.domain.ids import ContactId, DocumentTypeId, new_id
 from papiq.core.domain.users import Role
 from tests.builders import incoming
@@ -15,20 +15,20 @@ async def test_admin_maintains_master_data(world: World) -> None:
     contact = await service.create_contact(admin.id, "Stadtwerke")
     invoice = await service.create_document_type(admin.id, "Invoice")
     tag = await service.create_tag(admin.id, "Tax")
-    total = await service.create_attribute(
-        admin.id, "Total", AttributeType.AMOUNT, document_type_ids=[invoice.id]
+    total = await service.create_field(
+        admin.id, "Total", FieldType.AMOUNT, document_type_ids=[invoice.id]
     )
-    period = await service.create_attribute(
-        admin.id, "Period", AttributeType.CHOICE, choices=["monthly", "yearly"]
+    period = await service.create_field(
+        admin.id, "Period", FieldType.CHOICE, choices=["monthly", "yearly"]
     )
     assert (await service.rename_contact(admin.id, contact.id, "SWK")).name == "SWK"
     assert (await service.rename_document_type(admin.id, invoice.id, "Bill")).name == "Bill"
     assert (await service.rename_tag(admin.id, tag.id, "Taxes")).name == "Taxes"
-    assert (await service.rename_attribute(admin.id, total.id, "Sum")).name == "Sum"
+    assert (await service.rename_field(admin.id, total.id, "Sum")).name == "Sum"
     async with world.uow() as uow:
         assert (await uow.contacts.get(contact.id)).name == "SWK"
-        assert (await uow.attributes.get(total.id)).document_type_ids == frozenset({invoice.id})
-        assert (await uow.attributes.get(period.id)).is_global
+        assert (await uow.fields.get(total.id)).document_type_ids == frozenset({invoice.id})
+        assert (await uow.fields.get(period.id)).is_global
 
 
 async def test_only_admins_change_master_data(world: World) -> None:
@@ -44,7 +44,7 @@ async def test_only_admins_change_master_data(world: World) -> None:
     with pytest.raises(PermissionDeniedError):
         await service.create_tag(user.id, "x")
     with pytest.raises(PermissionDeniedError):
-        await service.create_attribute(user.id, "x", AttributeType.TEXT)
+        await service.create_field(user.id, "x", FieldType.TEXT)
 
 
 async def test_names_are_unique_per_kind(world: World) -> None:
@@ -60,11 +60,11 @@ async def test_names_are_unique_per_kind(world: World) -> None:
     assert (await service.rename_tag(admin.id, other.id, "CAR")).name == "CAR"
 
 
-async def test_attribute_needs_existing_document_types(world: World) -> None:
+async def test_field_needs_existing_document_types(world: World) -> None:
     admin = await world.user(role=Role.ADMIN)
     with pytest.raises(NotFoundError):
-        await world.master_data.create_attribute(
-            admin.id, "Total", AttributeType.NUMBER, document_type_ids=[DocumentTypeId(new_id())]
+        await world.master_data.create_field(
+            admin.id, "Total", FieldType.NUMBER, document_type_ids=[DocumentTypeId(new_id())]
         )
 
 
@@ -79,8 +79,8 @@ async def test_everyone_reads_master_data_sorted(world: World) -> None:
     assert await world.master_data.list_contacts(user.id) == [contact]
     invoice = await world.master_data.create_document_type(admin.id, "Invoice")
     assert await world.master_data.get_document_type(user.id, invoice.id) == invoice
-    note = await world.master_data.create_attribute(admin.id, "Note", AttributeType.TEXT)
-    assert await world.master_data.list_attributes(user.id) == [note]
+    note = await world.master_data.create_field(admin.id, "Note", FieldType.TEXT)
+    assert await world.master_data.list_fields(user.id) == [note]
     with pytest.raises(NotFoundError):
         await world.master_data.get_contact(user.id, ContactId(new_id()))
 
@@ -90,8 +90,8 @@ async def test_only_unused_master_data_is_deleted_by_admins(world: World) -> Non
     contact = await world.master_data.create_contact(admin.id, "ACME")
     tag = await world.master_data.create_tag(admin.id, "tax")
     invoice = await world.master_data.create_document_type(admin.id, "Invoice")
-    bound = await world.master_data.create_attribute(
-        admin.id, "Amount", AttributeType.AMOUNT, document_type_ids=[invoice.id]
+    bound = await world.master_data.create_field(
+        admin.id, "Amount", FieldType.AMOUNT, document_type_ids=[invoice.id]
     )
     unused = await world.master_data.create_tag(admin.id, "unused")
     document = await world.pipeline().receive(owner.id, incoming(b"%PDF-1.7 x"), filename="x.pdf")
@@ -106,33 +106,33 @@ async def test_only_unused_master_data_is_deleted_by_admins(world: World) -> Non
     for delete in (
         world.master_data.delete_contact(admin.id, contact.id),
         world.master_data.delete_tag(admin.id, tag.id),
-        world.master_data.delete_document_type(admin.id, invoice.id),  # an attribute uses it
+        world.master_data.delete_document_type(admin.id, invoice.id),  # a field uses it
     ):
         with pytest.raises(ConflictError):
             await delete
     await world.master_data.delete_tag(admin.id, unused.id)
-    await world.master_data.delete_attribute(admin.id, bound.id)
+    await world.master_data.delete_field(admin.id, bound.id)
     await world.master_data.delete_document_type(admin.id, invoice.id)
     assert [t.name for t in await world.master_data.list_tags(admin.id)] == ["tax"]
     with pytest.raises(NotFoundError):
         await world.master_data.delete_tag(admin.id, unused.id)
 
 
-async def test_attribute_definitions_change_without_breaking_values(world: World) -> None:
+async def test_field_definitions_change_without_breaking_values(world: World) -> None:
     admin, owner = await world.user(role=Role.ADMIN), await world.user()
     invoice = await world.master_data.create_document_type(admin.id, "Invoice")
     letter = await world.master_data.create_document_type(admin.id, "Letter")
-    kind = await world.master_data.create_attribute(
-        admin.id, "Kind", AttributeType.CHOICE, choices=["a", "b"]
+    kind = await world.master_data.create_field(
+        admin.id, "Kind", FieldType.CHOICE, choices=["a", "b"]
     )
     document = await world.pipeline().receive(owner.id, incoming(b"%PDF-1.7 x"), filename="x.pdf")
     await world.drain()
     await world.documents.update_metadata(
         owner.id,
         document.id,
-        DocumentChanges(document_type_id=invoice.id, attributes={kind.id: "a"}),
+        DocumentChanges(document_type_id=invoice.id, fields={kind.id: "a"}),
     )
-    change = world.master_data.change_attribute
+    change = world.master_data.change_field
 
     with pytest.raises(PermissionDeniedError):
         await change(owner.id, kind.id, name="Sort")
@@ -148,7 +148,7 @@ async def test_attribute_definitions_change_without_breaking_values(world: World
     await change(admin.id, kind.id, document_type_ids=None)
     with pytest.raises(NotFoundError):
         await change(admin.id, kind.id, document_type_ids=[DocumentTypeId(new_id())])
-    stored = await world.master_data.get_attribute(owner.id, kind.id)
+    stored = await world.master_data.get_field(owner.id, kind.id)
     assert stored.choices == ("c", "a") and stored.document_type_ids is None
     document_now = await world.documents.get(owner.id, document.id)
-    assert document_now.attributes == {kind.id: "a"}
+    assert document_now.fields == {kind.id: "a"}

@@ -101,27 +101,27 @@ contacts = _master_data("contacts")
 document_types = _master_data("document_types")
 tags = _master_data("tags")
 
-attribute_definitions = Table(
-    "attribute_definitions",
+field_definitions = Table(
+    "field_definitions",
     metadata,
     Column("id", Uuid, primary_key=True),
     Column("name", Text, nullable=False),
     Column("name_key", Text, nullable=False, unique=True),
     Column("data_type", Text, nullable=False),
-    # False: the attribute applies to the types in `attribute_document_types` only (maybe none).
+    # False: the field applies to the types in `field_document_types` only (maybe none).
     Column("is_global", Boolean, nullable=False),
     Column("choices", json_type(), nullable=False),
     Column("created_at", UtcDateTime, nullable=False),
     Column("version", Integer, nullable=False),
 )
 
-attribute_document_types = Table(
-    "attribute_document_types",
+field_document_types = Table(
+    "field_document_types",
     metadata,
     Column(
-        "attribute_id",
+        "field_id",
         Uuid,
-        ForeignKey("attribute_definitions.id", ondelete="CASCADE"),
+        ForeignKey("field_definitions.id", ondelete="CASCADE"),
         primary_key=True,
     ),
     Column("document_type_id", Uuid, ForeignKey("document_types.id"), primary_key=True),
@@ -163,11 +163,11 @@ document_tags = Table(
 )
 
 # One typed column per kind of value; `kind` says which one is set and how to read it.
-document_attributes = Table(
-    "document_attributes",
+document_fields = Table(
+    "document_fields",
     metadata,
     Column("document_id", Uuid, ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True),
-    Column("attribute_id", Uuid, ForeignKey("attribute_definitions.id"), primary_key=True),
+    Column("field_id", Uuid, ForeignKey("field_definitions.id"), primary_key=True),
     Column("kind", Text, nullable=False),  # text, url, decimal, money, date, boolean
     Column("value_text", Text, nullable=True),
     Column("value_decimal", ExactDecimal, nullable=True),

@@ -232,7 +232,7 @@ async def test_a_document_is_sent_whole() -> None:
         document_type="Rechnung",
         tag_ids=(tag,),
         tags=("Energie",),
-        attributes=("Betrag: 12.50 EUR",),
+        fields=("Betrag: 12.50 EUR",),
         document_date=date(2026, 3, 3),
         vectors=((0.5, 0.25), (1.0, 0.0)),
         embedding=EmbeddingStamp("bge-m3", "d1"),

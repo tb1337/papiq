@@ -23,12 +23,12 @@ from papiq.core.ports.parser import DocumentParser, ParseResult
 from papiq.core.ports.patterns import PatternMatcher
 from papiq.core.ports.preview import PreviewRenderer
 from papiq.core.ports.repository import (
-    AttributeDefinitionRepository,
     ContactRepository,
     DocumentFilter,
     DocumentRepository,
     DocumentTypeRepository,
     DrawerRepository,
+    FieldDefinitionRepository,
     NamedRepository,
     ProcessingLog,
     Repository,
@@ -50,7 +50,6 @@ from papiq.core.ports.webhook_sender import WebhookRequest, WebhookResponse, Web
 
 __all__ = [
     "ApiTokenRepository",
-    "AttributeDefinitionRepository",
     "Clock",
     "ContactRepository",
     "CredentialRepository",
@@ -66,6 +65,7 @@ __all__ = [
     "EventBus",
     "EventHandler",
     "ExternalIdentityRepository",
+    "FieldDefinitionRepository",
     "IndexBuild",
     "JobQueue",
     "LanguageModel",

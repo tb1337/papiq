@@ -12,11 +12,11 @@ from papiq.core.ports.identity import (
 )
 from papiq.core.ports.job_queue import JobQueue
 from papiq.core.ports.repository import (
-    AttributeDefinitionRepository,
     ContactRepository,
     DocumentRepository,
     DocumentTypeRepository,
     DrawerRepository,
+    FieldDefinitionRepository,
     ProcessingLog,
     RuleApplicationRepository,
     RuleRepository,
@@ -55,7 +55,7 @@ class UnitOfWork(Protocol):
     @property
     def tags(self) -> TagRepository: ...
     @property
-    def attributes(self) -> AttributeDefinitionRepository: ...
+    def fields(self) -> FieldDefinitionRepository: ...
     @property
     def documents(self) -> DocumentRepository: ...
     @property

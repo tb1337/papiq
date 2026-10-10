@@ -9,9 +9,9 @@ from papiq.adapters.outbound.memory import (
     FakeEmbeddings,
     MemorySearchIndex,
 )
-from papiq.core.domain.attributes import AttributeType
 from papiq.core.domain.documents import DocumentChanges
 from papiq.core.domain.errors import EmbeddingsError, PermissionDeniedError, SearchIndexError
+from papiq.core.domain.fields import FieldType
 from papiq.core.domain.jobs import JobStatus
 from papiq.core.domain.pipeline import Lane, Step
 from papiq.core.domain.search import IndexDocument
@@ -70,7 +70,7 @@ async def test_metadata_reaches_the_index_with_names_and_ids(setup: Setup) -> No
     contact = await setup.master_data.create_contact(admin.id, "Stadtwerke")
     kind = await setup.master_data.create_document_type(admin.id, "Rechnung")
     tag = await setup.master_data.create_tag(admin.id, "Energie")
-    meter = await setup.master_data.create_attribute(admin.id, "Zähler", AttributeType.TEXT)
+    meter = await setup.master_data.create_field(admin.id, "Zähler", FieldType.TEXT)
     document = await setup.document(owner)
     await setup.world.documents.update_metadata(
         owner.id,
@@ -81,7 +81,7 @@ async def test_metadata_reaches_the_index_with_names_and_ids(setup: Setup) -> No
             document_type_id=kind.id,
             tag_ids=frozenset({tag.id}),
             document_date=date(2026, 9, 30),
-            attributes={meter.id: "4711"},
+            fields={meter.id: "4711"},
         ),
     )
     await setup.settle()
@@ -93,7 +93,7 @@ async def test_metadata_reaches_the_index_with_names_and_ids(setup: Setup) -> No
     )
     assert (entry.contact_id, entry.document_type_id) == (contact.id, kind.id)
     assert (entry.tag_ids, entry.tags) == ((tag.id,), ("Energie",))
-    assert entry.attributes == ("4711",)
+    assert entry.fields == ("4711",)
     assert entry.document_date == date(2026, 9, 30)
     assert entry.version == (await setup.world.documents.get(owner.id, document.id)).version
 

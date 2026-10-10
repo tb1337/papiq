@@ -57,7 +57,7 @@
 
 	async function save() {
 		if (!rule || !model || !lookup) return;
-		const problems = validate(model, rule.scope, lookup.attributes);
+		const problems = validate(model, rule.scope, lookup.fields);
 		errors = Object.fromEntries(
 			Object.entries(problems).map(([key, entry]) => [key, problemText(entry)])
 		);

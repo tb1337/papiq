@@ -19,8 +19,8 @@ from mcp_types import CallToolResult
 from papiq.adapters.inbound.rest import PREFIX
 from papiq.adapters.outbound.memory import ManualClock
 from papiq.composition.container import build_memory_container, build_services
-from papiq.core.domain.attributes import AttributeType, Money
 from papiq.core.domain.documents import DocumentChanges
+from papiq.core.domain.fields import FieldType, Money
 from papiq.core.domain.ids import DocumentId, new_id
 from papiq.core.services.objects import markdown_key
 from tests import builders
@@ -231,7 +231,7 @@ async def test_get_document_names_what_the_document_refers_to(api: Api, scene: S
     contact = await master.create_contact(admin.id, "Stadtwerke")
     kind = await master.create_document_type(admin.id, "Rechnung")
     tag = await master.create_tag(admin.id, "Strom")
-    amount = await master.create_attribute(admin.id, "Betrag", AttributeType.AMOUNT)
+    amount = await master.create_field(admin.id, "Betrag", FieldType.AMOUNT)
 
     await api.services.documents.change_metadata(
         scene.owner.id,
@@ -240,7 +240,7 @@ async def test_get_document_names_what_the_document_refers_to(api: Api, scene: S
             contact_id=contact.id,
             document_type_id=kind.id,
             tag_ids=frozenset({tag.id}),
-            attributes={amount.id: Money(Decimal("84.20"), "EUR")},
+            fields={amount.id: Money(Decimal("84.20"), "EUR")},
         ),
     )
     document = data(await call(api, scene.headers["reader"], "get_document", id=scene.green))
@@ -248,7 +248,7 @@ async def test_get_document_names_what_the_document_refers_to(api: Api, scene: S
     assert document["contact"] == {"id": str(contact.id), "name": "Stadtwerke"}
     assert document["document_type"]["name"] == "Rechnung"
     assert document["tags"] == [{"id": str(tag.id), "name": "Strom"}]
-    assert document["attributes"] == {"Betrag": {"amount": "84.20", "currency": "EUR"}}
+    assert document["fields"] == {"Betrag": {"amount": "84.20", "currency": "EUR"}}
     assert document["lane"] == "green" and document["status"] == "completed"
     assert document["owner_id"] == str(scene.owner.id)
 
@@ -381,7 +381,7 @@ async def test_update_metadata_changes_what_is_given(api: Api, scene: Scene) -> 
     contact = await master.create_contact(admin.id, "Stadtwerke")
     await master.create_tag(admin.id, "Strom")
     await master.create_tag(admin.id, "Wohnung")
-    await master.create_attribute(admin.id, "Zählerstand", AttributeType.NUMBER)
+    await master.create_field(admin.id, "Zählerstand", FieldType.NUMBER)
     result = data(
         await call(
             api,
@@ -392,7 +392,7 @@ async def test_update_metadata_changes_what_is_given(api: Api, scene: Scene) -> 
             contact="stadtwerke",
             tags=["Strom", "wohnung"],
             document_date="2026-03-31",
-            attributes={"zählerstand": "1234.5"},
+            fields={"zählerstand": "1234.5"},
         )
     )
     document = result["document"]
@@ -400,7 +400,7 @@ async def test_update_metadata_changes_what_is_given(api: Api, scene: Scene) -> 
     assert document["contact"]["id"] == str(contact.id)
     assert [tag["name"] for tag in document["tags"]] == ["Strom", "Wohnung"]
     assert document["document_date"] == "2026-03-31"
-    assert document["attributes"] == {"Zählerstand": "1234.5"}
+    assert document["fields"] == {"Zählerstand": "1234.5"}
 
     # What is left out stays; tags are replaced as a whole; null removes.
     again = data(
@@ -412,12 +412,12 @@ async def test_update_metadata_changes_what_is_given(api: Api, scene: Scene) -> 
             tags=["Strom"],
             contact=None,
             document_date=None,
-            attributes={"Zählerstand": None},
+            fields={"Zählerstand": None},
         )
     )["document"]
     assert again["title"] == "Strom März"
     assert again["contact"] is None and again["document_date"] is None
-    assert [tag["name"] for tag in again["tags"]] == ["Strom"] and again["attributes"] == {}
+    assert [tag["name"] for tag in again["tags"]] == ["Strom"] and again["fields"] == {}
     # The same change as over REST.
     rest = (
         await api.client.get(f"{PREFIX}/documents/{scene.green}", headers=auth(scene.owner))
@@ -448,14 +448,14 @@ async def test_update_metadata_needs_a_read_write_token_and_write_access(
 
 async def test_update_metadata_refuses_unknown_names_and_bad_values(api: Api, scene: Scene) -> None:
     admin = await api.admin()
-    await api.services.master_data.create_attribute(admin.id, "Betrag", AttributeType.AMOUNT)
+    await api.services.master_data.create_field(admin.id, "Betrag", FieldType.AMOUNT)
     owner = scene.headers["owner"]
     cases: list[tuple[dict[str, Any], str]] = [
         ({"contact": "Nobody"}, "no contact named 'Nobody'"),
         ({"document_type": "Nothing"}, "no document type named 'Nothing'"),
         ({"tags": ["Missing"]}, "no tag named 'Missing'"),
-        ({"attributes": {"Unknown": 1}}, "no attribute named 'Unknown'"),
-        ({"attributes": {"Betrag": "lots"}}, "does not accept"),
+        ({"fields": {"Unknown": 1}}, "no field named 'Unknown'"),
+        ({"fields": {"Betrag": "lots"}}, "does not accept"),
         ({"title": ""}, ""),
     ]
     for arguments, message in cases:

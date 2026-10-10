@@ -9,7 +9,7 @@ unknown. A rule that matches only with such values does not file into a drawer t
 
 How the actions of all matching rules come together (`plan`):
 
-- A single field (drawer, contact, type, title, an attribute) set by one rule, or by several to
+- A single field (drawer, contact, type, title, a field) set by one rule, or by several to
   the same value, is set. Several different values are a conflict: nothing is set.
 - A value a person decided (confirming in the inbox, or changing the document) is never
   replaced: the rule is overruled and that is logged.
@@ -32,30 +32,30 @@ from enum import StrEnum
 from pathlib import PurePath
 from uuid import UUID
 
-from papiq.core.domain.attributes import (
-    AttributeDefinition,
-    AttributeType,
-    AttributeValue,
-    Money,
-    Url,
-)
 from papiq.core.domain.classification import (
     CONTACT,
     DOCUMENT_TYPE,
     TAGS,
     FieldCheck,
-    attribute_field,
-    attribute_from_json,
-    attribute_to_json,
+    field_from_json,
+    field_key,
+    field_to_json,
 )
 from papiq.core.domain.documents import Channel, Document, DocumentChanges, Unset
 from papiq.core.domain.errors import ValidationError
 from papiq.core.domain.evidence import DocumentText, contains, normalise
+from papiq.core.domain.fields import (
+    FieldDefinition,
+    FieldType,
+    FieldValue,
+    Money,
+    Url,
+)
 from papiq.core.domain.ids import (
-    AttributeId,
     ContactId,
     DocumentTypeId,
     DrawerId,
+    FieldId,
     RuleId,
     TagId,
 )
@@ -71,10 +71,10 @@ from papiq.core.domain.rules import (
     RemoveTags,
     Rule,
     RuleScope,
-    SetAttribute,
     SetContact,
     SetDocumentType,
     SetDrawer,
+    SetField,
     SetTitle,
 )
 
@@ -101,7 +101,7 @@ class Facts:
     """A document's state as conditions see it.
 
     `patterns`: results of the regular expressions, by (target, pattern, case setting), target
-    `text` or an attribute id; computed beforehand with a time limit. A missing result (no
+    `text` or a field id; computed beforehand with a time limit. A missing result (no
     text, time out) does not match. `unverified`: the fields `contact` and `document_type` if
     they hold a value the model set and no person confirmed; `unverified_tags` likewise."""
 
@@ -110,7 +110,7 @@ class Facts:
     tag_ids: frozenset[TagId]
     channel: Channel
     document_date: date | None
-    attributes: Mapping[AttributeId, AttributeValue]
+    fields: Mapping[FieldId, FieldValue]
     text: DocumentText | None = None
     patterns: Mapping[tuple[str, str, bool], bool] = field(default_factory=dict)
     unverified: frozenset[str] = frozenset()
@@ -132,7 +132,7 @@ class Facts:
             tag_ids=frozenset(document.tag_ids),
             channel=document.channel,
             document_date=document.document_date,
-            attributes=dict(document.attributes),
+            fields=dict(document.fields),
             text=text,
             patterns=patterns or {},
             unverified=unverified,
@@ -143,7 +143,7 @@ class Facts:
 def evaluate(
     group: Group,
     facts: Facts,
-    definitions: Mapping[AttributeId, AttributeDefinition],
+    definitions: Mapping[FieldId, FieldDefinition],
     *,
     distrust: bool = False,
 ) -> Truth:
@@ -181,7 +181,7 @@ def distrusted_fields(group: Group, facts: Facts) -> tuple[str, ...]:
 def _condition(
     condition: Condition,
     facts: Facts,
-    definitions: Mapping[AttributeId, AttributeDefinition],
+    definitions: Mapping[FieldId, FieldDefinition],
     distrust: bool,
 ) -> Truth:
     op, values = condition.op, condition.values
@@ -205,12 +205,12 @@ def _condition(
             return facts.text.contains(str(condition.value))
         case ConditionField.DOCUMENT_DATE:
             return _ordered(op, facts.document_date, [_date(value) for value in values])
-        case ConditionField.ATTRIBUTE:
-            assert condition.attribute_id is not None
-            definition = definitions.get(condition.attribute_id)
+        case ConditionField.FIELD:
+            assert condition.field_id is not None
+            definition = definitions.get(condition.field_id)
             if definition is None:
                 return False
-            return _attribute(condition, definition, facts)
+            return _field(condition, definition, facts)
 
 
 def _reference(op: Operator, current: str | None, values: list[JsonValue]) -> bool:
@@ -252,9 +252,9 @@ def _ordered[T: (date, Decimal)](op: Operator, current: T | None, values: list[T
     return current in values
 
 
-def _attribute(condition: Condition, definition: AttributeDefinition, facts: Facts) -> bool:
+def _field(condition: Condition, definition: FieldDefinition, facts: Facts) -> bool:
     op = condition.op
-    value = facts.attributes.get(definition.id)
+    value = facts.fields.get(definition.id)
     if op is Operator.PRESENT:
         return value is not None
     if op is Operator.MISSING:
@@ -267,7 +267,7 @@ def _attribute(condition: Condition, definition: AttributeDefinition, facts: Fac
     if op is Operator.CONTAINS:
         return contains(normalise(_text_of(value)), str(condition.value))
     try:
-        wanted = [attribute_from_json(definition, item) for item in condition.values]
+        wanted = [field_from_json(definition, item) for item in condition.values]
     except ValidationError:
         return False
     match value:
@@ -284,12 +284,12 @@ def _attribute(condition: Condition, definition: AttributeDefinition, facts: Fac
             return _ordered(op, value, [item for item in wanted if isinstance(item, Decimal)])
         case date():
             return _ordered(op, value, [item for item in wanted if isinstance(item, date)])
-        case str() if definition.data_type is AttributeType.TEXT:
+        case str() if definition.data_type is FieldType.TEXT:
             return value.casefold() in {str(item).casefold() for item in wanted}
     return value in wanted
 
 
-def _text_of(value: AttributeValue) -> str:
+def _text_of(value: FieldValue) -> str:
     return value.value if isinstance(value, Url) else str(value)
 
 
@@ -300,7 +300,7 @@ def _date(value: JsonValue) -> date:
 def pattern_subjects(
     rules: Sequence[Rule], document: Document, text: str | None
 ) -> dict[tuple[str, str, bool], str]:
-    """What each regular expression of `rules` runs against: the text or an attribute value
+    """What each regular expression of `rules` runs against: the text or a field value
     (as text). Patterns without a subject (no text, no value) are left out."""
     subjects: dict[tuple[str, str, bool], str] = {}
     for rule in rules:
@@ -309,7 +309,7 @@ def pattern_subjects(
             if target == TEXT_TARGET:
                 subject = text
             else:
-                value = document.attributes.get(AttributeId(UUID(target)))
+                value = document.fields.get(FieldId(UUID(target)))
                 subject = None if value is None else _text_of(value)
             if subject is not None:
                 subjects[(target, pattern, case_sensitive)] = subject
@@ -339,7 +339,7 @@ class Match:
 def matches(
     rules: Sequence[Rule],
     facts: Facts,
-    definitions: Mapping[AttributeId, AttributeDefinition],
+    definitions: Mapping[FieldId, FieldDefinition],
     *,
     before: Facts | None = None,
 ) -> list[Match]:
@@ -375,7 +375,7 @@ class Situation:
     """Everything `plan` needs besides the matching rules.
 
     - `drawers`: the drawers the rules file into that exist.
-    - `existing`: ids of the contacts, types, tags and attributes that exist.
+    - `existing`: ids of the contacts, types, tags and fields that exist.
     - `names`: names of contacts and types, for titles.
     - `model_values`: single fields that hold the value the model set, unconfirmed, as JSON.
     - `locked`: single fields a person decided; `person_added_tags` and `person_removed_tags`
@@ -387,7 +387,7 @@ class Situation:
     mode: Mode
     document: Document
     default_drawer: DrawerId
-    definitions: Mapping[AttributeId, AttributeDefinition]
+    definitions: Mapping[FieldId, FieldDefinition]
     drawers: Mapping[DrawerId, DrawerTarget] = field(default_factory=dict)
     existing: frozenset[object] = frozenset()
     names: Mapping[object, str] = field(default_factory=dict)
@@ -520,10 +520,10 @@ class _Planner:
         for field_name in (DOCUMENT_TYPE, CONTACT, DRAWER):
             self._single(field_name, result)
         type_after = self._type_after(result)
-        attributes: dict[AttributeId, object] = {}
-        for field_name in [name for name in self._candidates if name.startswith("attribute:")]:
-            attribute = AttributeId(UUID(field_name.removeprefix("attribute:")))
-            definition = self._s.definitions[attribute]
+        fields: dict[FieldId, object] = {}
+        for field_name in [name for name in self._candidates if name.startswith("field:")]:
+            field = FieldId(UUID(field_name.removeprefix("field:")))
+            definition = self._s.definitions[field]
             if not definition.applies_to(type_after):
                 for candidate in self._candidates[field_name]:
                     candidate.report.notes.append(
@@ -532,10 +532,10 @@ class _Planner:
                 continue
             self._single(field_name, result)
             if field_name in result:
-                attributes[attribute] = attribute_from_json(definition, result[field_name])
+                fields[field] = field_from_json(definition, result[field_name])
         tags = self._tags()
         self._title(result, type_after)
-        changes = DocumentChanges(attributes=attributes)
+        changes = DocumentChanges(fields=fields)
         if CONTACT in result:
             changes = replace(changes, contact_id=ContactId(UUID(str(result[CONTACT]))))
         if DOCUMENT_TYPE in result:
@@ -575,14 +575,14 @@ class _Planner:
                         report.notes.append(Note(TAGS, "skipped", f"tag {tag} no longer exists"))
                     else:
                         target.setdefault(tag, []).append(report)
-            case SetAttribute(attribute_id=attribute, value=value):
-                name = attribute_field(attribute)
-                definition = s.definitions.get(attribute)
+            case SetField(field_id=field, value=value):
+                name = field_key(field)
+                definition = s.definitions.get(field)
                 if definition is None:
-                    report.notes.append(Note(name, "skipped", "the attribute no longer exists"))
+                    report.notes.append(Note(name, "skipped", "the field no longer exists"))
                     return
                 try:
-                    attribute_from_json(definition, value)
+                    field_from_json(definition, value)
                 except ValidationError as error:
                     report.notes.append(Note(name, "skipped", str(error)))
                     return
@@ -785,10 +785,10 @@ class _Planner:
                 return document.title
             case "tags":
                 return [str(tag) for tag in sorted(document.tag_ids)]
-        if field_name.startswith("attribute:"):
-            attribute = AttributeId(UUID(field_name.removeprefix("attribute:")))
-            value = document.attributes.get(attribute)
-            return None if value is None else attribute_to_json(value)
+        if field_name.startswith("field:"):
+            field = FieldId(UUID(field_name.removeprefix("field:")))
+            value = document.fields.get(field)
+            return None if value is None else field_to_json(value)
         return None
 
     def _empty(self, field_name: str, current: JsonValue) -> bool:
@@ -835,8 +835,8 @@ def changed_fields(changes: DocumentChanges) -> frozenset[str]:
     }
     given = {
         field_name
-        for attribute, field_name in names.items()
-        if not isinstance(getattr(changes, attribute), Unset)
+        for field, field_name in names.items()
+        if not isinstance(getattr(changes, field), Unset)
     }
-    given.update(attribute_field(id) for id in changes.attributes)
+    given.update(field_key(id) for id in changes.fields)
     return frozenset(given)

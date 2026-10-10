@@ -18,7 +18,7 @@ class Step(StrEnum):
     OCR = "ocr"
     PARSE = "parse"
     CLASSIFY = "classify"
-    EXTRACT_ATTRIBUTES = "extract_attributes"
+    EXTRACT_FIELDS = "extract_fields"
     APPLY_RULES = "apply_rules"
     FILE = "file"
 

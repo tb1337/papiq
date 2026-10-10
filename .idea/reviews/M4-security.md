@@ -139,7 +139,7 @@ Speicher, bevor validiert wird; keine Middleware, kein Uvicorn-Limit (`compositi
 **Problem:** Ein nicht angemeldeter Client schickt an `POST /auth/login` einen beliebig großen
 JSON-Body (Belegtest: 16 MiB → `422` statt `413`, der Body wurde ganz gelesen); mehrere
 parallele Anfragen erschöpfen den Speicher des API-Prozesses. Angemeldet dasselbe über
-`PATCH /documents/{id}` (`attributes: dict[UUID, Any]`, beliebig verschachtelt). Ein
+`PATCH /documents/{id}` (`fields: dict[UUID, Any]`, beliebig verschachtelt). Ein
 Reverse-Proxy kann das begrenzen, aber die Anwendung sollte nicht darauf angewiesen sein.
 
 **Belegtest:** `test_json_bodies_are_bounded`.
