@@ -9,6 +9,7 @@ from papiq.core.domain.ids import ContactId, DocumentTypeId, FieldId, TagId, Use
 from papiq.core.domain.master_data import Contact, DocumentType, MasterData, Tag
 from papiq.core.domain.permissions import can_manage_master_data
 from papiq.core.domain.rules import References
+from papiq.core.domain.validation import name_key
 from papiq.core.ports import Clock, NamedRepository, UnitOfWork, UnitOfWorkFactory
 from papiq.core.services._access import load_actor
 from papiq.core.services.indexing import REFRESH_JOB
@@ -45,20 +46,77 @@ class MasterDataService:
         self._clock = clock
         self._index_renames = index_renames
 
-    async def create_contact(self, actor: UserId, name: str) -> Contact:
-        return await self._create(actor, _contacts, Contact.create(name=name, now=self._now()))
+    async def create_contact(
+        self, actor: UserId, name: str, aliases: Collection[str] = ()
+    ) -> Contact:
+        item = Contact.create(name=name, now=self._now(), aliases=aliases)
+        return await self._create(
+            actor, _contacts, item, lambda uow: _check_contact_names(uow, item)
+        )
 
     async def rename_contact(self, actor: UserId, id: ContactId, name: str) -> Contact:
-        return await self._rename(actor, _contacts, id, name, index_as="contact")
+        return await self.change_contact(actor, id, name=name)
 
-    async def create_document_type(self, actor: UserId, name: str) -> DocumentType:
-        item = DocumentType.create(name=name, now=self._now())
+    async def change_contact(
+        self,
+        actor: UserId,
+        id: ContactId,
+        *,
+        name: str | None = None,
+        aliases: Collection[str] | None = None,
+    ) -> Contact:
+        """`None` leaves the name or the aliases as they are; `aliases` replaces all of them."""
+
+        def change(item: Contact) -> None:
+            if name is not None:
+                item.rename(name)
+            if aliases is not None:
+                item.set_aliases(aliases)
+
+        return await self._change(
+            actor,
+            _contacts,
+            id,
+            change,
+            check=lambda uow, item: _check_contact_names(uow, item),
+            index_as="contact" if name is not None else None,
+        )
+
+    async def create_document_type(
+        self, actor: UserId, name: str, description: str | None = None
+    ) -> DocumentType:
+        item = DocumentType.create(name=name, now=self._now(), description=description)
         return await self._create(actor, _document_types, item)
 
     async def rename_document_type(
         self, actor: UserId, id: DocumentTypeId, name: str
     ) -> DocumentType:
-        return await self._rename(actor, _document_types, id, name, index_as="document_type")
+        return await self.change_document_type(actor, id, name=name)
+
+    async def change_document_type(
+        self,
+        actor: UserId,
+        id: DocumentTypeId,
+        *,
+        name: str | None = None,
+        description: str | Unset | None = UNSET,
+    ) -> DocumentType:
+        """`None` (name) or UNSET (description) leaves it as it is; a description of None
+        removes it."""
+
+        def change(item: DocumentType) -> None:
+            if name is not None:
+                item.rename(name)
+            if not isinstance(description, Unset):
+                item.describe(description)
+
+        return await self._change(
+            actor,
+            _document_types,
+            id,
+            change,
+            index_as="document_type" if name is not None else None,
+        )
 
     async def create_tag(self, actor: UserId, name: str) -> Tag:
         return await self._create(actor, _tags, Tag.create(name=name, now=self._now()))
@@ -267,11 +325,28 @@ class MasterDataService:
         *,
         index_as: str | None = None,
     ) -> E:
+        return await self._change(
+            actor, repository, id, lambda item: item.rename(name), index_as=index_as
+        )
+
+    async def _change[E: MasterData](
+        self,
+        actor: UserId,
+        repository: Repo[E],
+        id: Any,
+        change: Callable[[E], None],
+        *,
+        check: Callable[[UnitOfWork, E], Awaitable[None]] | None = None,
+        index_as: str | None = None,
+    ) -> E:
+        """`index_as`: the kind whose documents' search index is brought up to date."""
         async with self._uow() as uow:
             await _require_admin(uow, actor)
             item = await repository(uow).get(id)
-            item.rename(name)
+            change(item)
             await _check_name_free(repository(uow), item)
+            if check is not None:
+                await check(uow, item)
             await repository(uow).update(item)
             if index_as is not None and self._index_renames:
                 await uow.jobs.enqueue(
@@ -291,3 +366,36 @@ async def _check_name_free[E: MasterData](repository: NamedRepository[Any, E], i
     # Every kind of master data has an `id`; the base class leaves its type to the kinds.
     if existing is not None and getattr(existing, "id") != getattr(item, "id"):  # noqa: B009
         raise ConflictError(f"'{item.name}' already exists")
+
+
+async def _check_contact_names(uow: UnitOfWork, contact: Contact) -> None:
+    """No name or alias of the contact is a name or an alias of another contact."""
+    for other in await uow.contacts.list_all():
+        if other.id == contact.id:
+            continue
+        for name in contact.names():
+            if other.is_named(name):
+                raise ConflictError(f"'{name}' is already a name of the contact '{other.name}'")
+
+
+async def learn_alias(uow: UnitOfWork, contact_id: ContactId, alias: str) -> Contact | None:
+    """Make `alias` an alias of the contact, in `uow` without committing: a person chose the
+    contact for a document in which the language model read `alias`. Nothing is learned if it
+    is a name or an alias of the contact already, or the name of another contact. An alias of
+    another contact moves (the person's choice is the newer word). The contact with the new
+    alias, or None."""
+    alias = alias.strip()
+    contacts = await uow.contacts.list_all()
+    target = next((item for item in contacts if item.id == contact_id), None)
+    if not alias or target is None or target.is_named(alias):
+        return None
+    for other in contacts:
+        if other.id == contact_id or not other.is_named(alias):
+            continue
+        if name_key(other.name) == name_key(alias):
+            return None
+        other.set_aliases(item for item in other.aliases if name_key(item) != name_key(alias))
+        await uow.contacts.update(other)
+    target.set_aliases([*target.aliases, alias])
+    await uow.contacts.update(target)
+    return target

@@ -5,6 +5,7 @@ from papiq.core.domain.errors import ConflictError, NotFoundError, PermissionDen
 from papiq.core.domain.fields import FieldType
 from papiq.core.domain.ids import ContactId, DocumentTypeId, new_id
 from papiq.core.domain.users import Role
+from papiq.core.services.master_data import learn_alias
 from tests.builders import incoming
 from tests.unit.services.conftest import World
 
@@ -45,6 +46,53 @@ async def test_only_admins_change_master_data(world: World) -> None:
         await service.create_tag(user.id, "x")
     with pytest.raises(PermissionDeniedError):
         await service.create_field(user.id, "x", FieldType.TEXT)
+
+
+async def test_contact_aliases_and_type_descriptions(world: World) -> None:
+    admin = await world.user(role=Role.ADMIN)
+    service = world.master_data
+    inter = await service.create_contact(admin.id, "INTER Versicherungsgruppe", ["INTER AG"])
+    other = await service.create_contact(admin.id, "Allianz")
+    changed = await service.change_contact(
+        admin.id, inter.id, aliases=["INTER Krankenversicherung AG", "inter krankenversicherung ag"]
+    )
+    assert changed.aliases == ["INTER Krankenversicherung AG"]
+    assert (await service.rename_contact(admin.id, inter.id, "INTER")).aliases == changed.aliases
+    # A name or an alias of one contact is never a name or an alias of another.
+    for change in (
+        service.change_contact(admin.id, other.id, aliases=["Inter"]),
+        service.change_contact(admin.id, other.id, name="inter krankenversicherung ag"),
+        service.create_contact(admin.id, "Other", ["INTER Krankenversicherung AG"]),
+    ):
+        with pytest.raises(ConflictError):
+            await change
+    pay = await service.create_document_type(admin.id, "Pay slip", " Entgeltbescheinigung ")
+    assert pay.description == "Entgeltbescheinigung"
+    kept = await service.change_document_type(admin.id, pay.id, name="Payslip")
+    assert kept.description == "Entgeltbescheinigung"
+    assert (
+        await service.change_document_type(admin.id, pay.id, description="")
+    ).description is None
+
+
+async def test_learn_alias(world: World) -> None:
+    admin = await world.user(role=Role.ADMIN)
+    service = world.master_data
+    inter = await service.create_contact(admin.id, "INTER Versicherungsgruppe")
+    allianz = await service.create_contact(admin.id, "Allianz", ["INTER Kranken"])
+    async with world.uow() as uow:
+        learned = await learn_alias(uow, inter.id, "INTER Krankenversicherung AG")
+        assert learned is not None and learned.aliases == ["INTER Krankenversicherung AG"]
+        assert await learn_alias(uow, inter.id, "inter versicherungsgruppe") is None  # its name
+        assert await learn_alias(uow, inter.id, "ALLIANZ") is None  # another contact's name
+        assert await learn_alias(uow, inter.id, "INTER Kranken") is not None  # moves
+        await uow.commit()
+    async with world.uow() as uow:
+        assert (await uow.contacts.get(inter.id)).aliases == [
+            "INTER Krankenversicherung AG",
+            "INTER Kranken",
+        ]
+        assert (await uow.contacts.get(allianz.id)).aliases == []
 
 
 async def test_names_are_unique_per_kind(world: World) -> None:

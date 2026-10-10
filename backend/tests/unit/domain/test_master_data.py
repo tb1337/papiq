@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 import pytest
 
 from papiq.core.domain.errors import ValidationError
-from papiq.core.domain.master_data import Contact, DocumentType, Tag
+from papiq.core.domain.master_data import MAX_DESCRIPTION, Contact, DocumentType, Tag
 
 NOW = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 
@@ -18,3 +18,24 @@ def test_master_data_has_a_name(kind: type[Contact | DocumentType | Tag]) -> Non
         item.rename(" ")
     with pytest.raises(ValidationError):
         kind.create(name="", now=NOW)
+
+
+def test_contact_aliases() -> None:
+    contact = Contact.create(name="INTER", now=NOW, aliases=[" INTER AG ", "inter ag", "INTER KV"])
+    assert contact.aliases == ["INTER AG", "INTER KV"]
+    assert contact.is_named("inter kv") and not contact.is_named("INTER Leben")
+    with pytest.raises(ValidationError):
+        contact.set_aliases(["Inter"])
+    with pytest.raises(ValidationError):
+        contact.set_aliases([" "])
+    contact.rename("Inter AG")  # an alias that becomes the name is no longer an alias
+    assert contact.aliases == ["INTER KV"]
+
+
+def test_document_type_description() -> None:
+    kind = DocumentType.create(name="Pay slip", now=NOW, description="  ")
+    assert kind.description is None
+    kind.describe(" Entgeltbescheinigung ")
+    assert kind.description == "Entgeltbescheinigung"
+    with pytest.raises(ValidationError):
+        kind.describe("x" * (MAX_DESCRIPTION + 1))
