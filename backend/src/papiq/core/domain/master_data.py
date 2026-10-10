@@ -1,5 +1,6 @@
 """Master data: contacts, document types and tags. Global, no owner; only admins change them."""
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -9,6 +10,8 @@ from papiq.core.domain.errors import ValidationError
 from papiq.core.domain.ids import ContactId, DocumentTypeId, TagId, new_id
 from papiq.core.domain.validation import name_key, require_name, require_utc
 
+MAX_ALIASES = 100
+"""Aliases of one contact."""
 MAX_DESCRIPTION = 300
 """Characters of a document type's description; it goes into every classification prompt."""
 
@@ -99,18 +102,29 @@ class Tag(MasterData):
         return cls(id=TagId(new_id()), name=name, created_at=now)
 
 
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def one_line(text: str) -> str:
+    """Control characters and runs of white space as one space: names go into prompts, where a
+    line break could start an instruction."""
+    return " ".join(_CONTROL.sub(" ", text).split())
+
+
 def _aliases(name: str, aliases: Iterable[str]) -> list[str]:
-    """Stripped, without duplicates (regardless of case); none may be the name."""
+    """On one line, without duplicates (regardless of case); none may be the name."""
     result: list[str] = []
     keys = {name_key(name)}
     for alias in aliases:
-        alias = require_name(alias, "alias")
+        alias = require_name(one_line(alias), "alias")
         key = name_key(alias)
         if key == name_key(name):
             raise ValidationError(f"the alias '{alias}' is the contact's name")
         if key not in keys:
             keys.add(key)
             result.append(alias)
+    if len(result) > MAX_ALIASES:
+        raise ValidationError(f"a contact has at most {MAX_ALIASES} aliases")
     return result
 
 

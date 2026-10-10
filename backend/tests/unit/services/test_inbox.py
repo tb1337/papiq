@@ -217,7 +217,7 @@ async def test_accepting_the_suggested_contact_learns_the_name_read(world: World
 async def test_choosing_another_contact_learns_there_by_any_user(world: World) -> None:
     """The owner is no admin; the alias moves from the suggested contact."""
     s = await scene(world)
-    chosen = Contact.create(name="Gemeindewerke", now=NOW)
+    chosen = Contact.create(name="Stadtwerk Netz", now=NOW)
     async with world.uow() as uow:
         await uow.contacts.add(chosen)
         suggested = await uow.contacts.get(s.contact.id)
@@ -230,7 +230,23 @@ async def test_choosing_another_contact_learns_there_by_any_user(world: World) -
         DocumentChanges(contact_id=chosen.id, document_date=date(2026, 3, 31)),
         accept_suggestions=True,
     )
-    assert await contacts(world) == {"Gemeindewerke": ["Stadtwerk"], "Stadtwerke": []}
+    assert await contacts(world) == {"Stadtwerk Netz": ["Stadtwerk"], "Stadtwerke": []}
+
+
+async def test_an_unrelated_name_is_not_learned(world: World) -> None:
+    """The model read something else (often the recipient): no alias for the chosen one."""
+    s = await scene(world)
+    chosen = Contact.create(name="Gemeindewerke", now=NOW)
+    async with world.uow() as uow:
+        await uow.contacts.add(chosen)
+        await uow.commit()
+    await s.pipeline.confirm(
+        s.owner.id,
+        s.document.id,
+        DocumentChanges(contact_id=chosen.id, document_date=date(2026, 3, 31)),
+        accept_suggestions=True,
+    )
+    assert await contacts(world) == {"Gemeindewerke": [], "Stadtwerke": []}
 
 
 async def test_nothing_is_learned_without_a_chosen_contact(world: World) -> None:

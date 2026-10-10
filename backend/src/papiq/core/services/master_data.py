@@ -1,4 +1,4 @@
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import Awaitable, Callable, Collection, Iterator
 from datetime import datetime
 from typing import Any
 
@@ -6,10 +6,18 @@ from papiq.core.domain.documents import UNSET, Unset
 from papiq.core.domain.errors import ConflictError, PermissionDeniedError
 from papiq.core.domain.fields import FieldDefinition, FieldType
 from papiq.core.domain.ids import ContactId, DocumentTypeId, FieldId, TagId, UserId
-from papiq.core.domain.master_data import Contact, DocumentType, MasterData, Tag
+from papiq.core.domain.master_data import (
+    MAX_ALIASES,
+    Contact,
+    DocumentType,
+    MasterData,
+    Tag,
+    one_line,
+)
+from papiq.core.domain.names import name_key as match_key
+from papiq.core.domain.names import similarity
 from papiq.core.domain.permissions import can_manage_master_data
 from papiq.core.domain.rules import References
-from papiq.core.domain.validation import name_key
 from papiq.core.ports import Clock, NamedRepository, UnitOfWork, UnitOfWorkFactory
 from papiq.core.services._access import load_actor
 from papiq.core.services.indexing import REFRESH_JOB
@@ -369,33 +377,72 @@ async def _check_name_free[E: MasterData](repository: NamedRepository[Any, E], i
 
 
 async def _check_contact_names(uow: UnitOfWork, contact: Contact) -> None:
-    """No name or alias of the contact is a name or an alias of another contact."""
+    """No name or alias of the contact is a name or an alias of another contact. An alias
+    must not even match another contact's name or alias the way classification compares
+    names (legal forms and punctuation aside): both would always be equally close."""
     for other in await uow.contacts.list_all():
         if other.id == contact.id:
             continue
         for name in contact.names():
             if other.is_named(name):
                 raise ConflictError(f"'{name}' is already a name of the contact '{other.name}'")
+        for mine, theirs in _alias_pairs(contact, other):
+            if match_key(mine) and match_key(mine) == match_key(theirs):
+                raise ConflictError(
+                    f"'{mine}' is too close to '{theirs}' of the contact '{other.name}'"
+                )
+
+
+def _alias_pairs(contact: Contact, other: Contact) -> Iterator[tuple[str, str]]:
+    """Pairs of their names in which at least one is an alias."""
+    for mine in contact.names():
+        for theirs in other.names():
+            if mine in contact.aliases or theirs in other.aliases:
+                yield mine, theirs
+
+
+_SHORTEST_SHARED = 3  # letters of a word a learned alias shares with the contact
+_SIMILAR = 0.75  # or as similar as a contact classification suggests (`suggest_contact`)
 
 
 async def learn_alias(uow: UnitOfWork, contact_id: ContactId, alias: str) -> Contact | None:
     """Make `alias` an alias of the contact, in `uow` without committing: a person chose the
-    contact for a document in which the language model read `alias`. Nothing is learned if it
-    is a name or an alias of the contact already, or the name of another contact. An alias of
-    another contact moves (the person's choice is the newer word). The contact with the new
-    alias, or None."""
-    alias = alias.strip()
+    contact for a document in which the language model read `alias`. The contact with the new
+    alias, or None if nothing is learned:
+
+    - it is a name or an alias of the contact already, or the contact has all aliases it may;
+    - it is not related to the contact's names: shares no word of at least three letters and
+      is less similar than a suggestion of classification (`names.similarity` below
+      `_SIMILAR`). The model read something else, often the recipient, and the person
+      corrected it;
+    - it matches another contact's name (see `names.name_key`).
+
+    An alias of another contact that it matches moves (the person's choice is the newer word).
+    """
+    alias = one_line(alias)
+    key = match_key(alias)
     contacts = await uow.contacts.list_all()
     target = next((item for item in contacts if item.id == contact_id), None)
-    if not alias or target is None or target.is_named(alias):
+    if not key or target is None or target.is_named(alias):
         return None
-    for other in contacts:
-        if other.id == contact_id or not other.is_named(alias):
-            continue
-        if name_key(other.name) == name_key(alias):
-            return None
-        other.set_aliases(item for item in other.aliases if name_key(item) != name_key(alias))
-        await uow.contacts.update(other)
+    if len(target.aliases) >= MAX_ALIASES or not _related(key, target):
+        return None
+    others = [item for item in contacts if item.id != contact_id]
+    if any(match_key(other.name) == key for other in others):
+        return None
+    for other in others:
+        kept = [item for item in other.aliases if match_key(item) != key]
+        if len(kept) < len(other.aliases):
+            other.set_aliases(kept)
+            await uow.contacts.update(other)
     target.set_aliases([*target.aliases, alias])
     await uow.contacts.update(target)
     return target
+
+
+def _related(key: str, contact: Contact) -> bool:
+    words = {word for word in key.split() if len(word) >= _SHORTEST_SHARED}
+    return any(
+        words & set(match_key(own).split()) or similarity(key, match_key(own)) >= _SIMILAR
+        for own in contact.names()
+    )

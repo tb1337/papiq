@@ -20,7 +20,13 @@ from papiq.core.domain.fields import (
 )
 from papiq.core.domain.identity import ApiToken, ExternalIdentity, LoginMethod, TokenScope
 from papiq.core.domain.json_value import JsonValue
-from papiq.core.domain.master_data import MAX_DESCRIPTION, Contact, DocumentType, MasterData
+from papiq.core.domain.master_data import (
+    MAX_ALIASES,
+    MAX_DESCRIPTION,
+    Contact,
+    DocumentType,
+    MasterData,
+)
 from papiq.core.domain.permissions import can_manage_drawer, drawer_access
 from papiq.core.domain.pipeline import (
     PIPELINE,
@@ -876,7 +882,7 @@ class MasterDataOut(BaseModel):
 Aliases = Annotated[
     list[Name],
     Field(
-        max_length=100,
+        max_length=MAX_ALIASES,
         description=(
             "Other names the contact is written as in documents. Unique across contacts, "
             "together with the names; papiq also learns them when a contact is chosen in the "
