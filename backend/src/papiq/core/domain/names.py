@@ -7,7 +7,7 @@ their words sorted (word order does not matter).
 """
 
 import re
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
@@ -62,16 +62,34 @@ class NameMatch[T]:
 
 
 def best_match[T](name: str, candidates: Iterable[tuple[T, str]]) -> NameMatch[T]:
-    """The candidate whose name (second item) is most similar to `name`."""
+    """The candidate whose name (second item) is most similar to `name`. A candidate may come
+    with several names (its aliases): its best one counts, and the runner-up is always another
+    candidate (the same object)."""
     key = name_key(name)
-    scored = sorted(
-        (
-            (similarity(key, name_key(other)), index, item)
-            for index, (item, other) in enumerate(candidates)
-        ),
-        key=lambda entry: (-entry[0], entry[1]),
-    )
+    best: dict[int, tuple[float, int, T]] = {}
+    for index, (item, other) in enumerate(candidates):
+        score = similarity(key, name_key(other))
+        known = best.get(id(item))
+        if known is None or score > known[0]:
+            best[id(item)] = (score, known[1] if known else index, item)
+    scored = sorted(best.values(), key=lambda entry: (-entry[0], entry[1]))
     if not scored or scored[0][0] == 0:
         return NameMatch(best=None, score=0.0, runner_up=0.0)
     runner_up = scored[1][0] if len(scored) > 1 else 0.0
     return NameMatch(best=scored[0][2], score=scored[0][0], runner_up=runner_up)
+
+
+_SHORTEST_WORD = 3  # letters of a word that counts for `named_share`
+
+
+def named_share(text_key: str, text_words: Collection[str], key: str) -> float:
+    """How much of a name key the text shows: 1 if it appears as a whole, otherwise the share
+    of its words (of at least three letters) among `text_words` (the words of `text_key`).
+    Cheap enough to rank all contacts for a prompt."""
+    if mentions(text_key, key):
+        return 1.0
+    words = [word for word in key.split() if len(word) >= _SHORTEST_WORD]
+    if not words:
+        return 0.0
+    found = sum(1 for word in words if word in text_words)
+    return min(found / len(words), 0.99)

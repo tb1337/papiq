@@ -188,6 +188,80 @@ async def test_a_confirmed_document_is_filed(world: World) -> None:
     assert field_checks(log)["contact"].proposed == "Stadtwerk"
 
 
+async def contacts(world: World) -> dict[str, list[str]]:
+    async with world.uow() as uow:
+        return {item.name: item.aliases for item in await uow.contacts.list_all()}
+
+
+async def test_accepting_the_suggested_contact_learns_the_name_read(world: World) -> None:
+    s = await scene(world)
+    await s.pipeline.confirm(
+        s.owner.id,
+        s.document.id,
+        DocumentChanges(document_date=date(2026, 3, 31)),
+        accept_suggestions=True,
+    )
+    assert await contacts(world) == {"Stadtwerke": ["Stadtwerk"]}
+    log = await world.documents.processing_log(s.owner.id, s.document.id)
+    rules = next(
+        entry
+        for entry in log
+        if entry.step is Step.APPLY_RULES and entry.result.model_version == PERSON
+    )
+    assert rules.result.output["learned_alias"] == {
+        "contact_id": str(s.contact.id),
+        "alias": "Stadtwerk",
+    }
+
+
+async def test_choosing_another_contact_learns_there_by_any_user(world: World) -> None:
+    """The owner is no admin; the alias moves from the suggested contact."""
+    s = await scene(world)
+    chosen = Contact.create(name="Stadtwerk Netz", now=NOW)
+    async with world.uow() as uow:
+        await uow.contacts.add(chosen)
+        suggested = await uow.contacts.get(s.contact.id)
+        suggested.set_aliases(["Stadtwerk"])
+        await uow.contacts.update(suggested)
+        await uow.commit()
+    await s.pipeline.confirm(
+        s.owner.id,
+        s.document.id,
+        DocumentChanges(contact_id=chosen.id, document_date=date(2026, 3, 31)),
+        accept_suggestions=True,
+    )
+    assert await contacts(world) == {"Stadtwerk Netz": ["Stadtwerk"], "Stadtwerke": []}
+
+
+async def test_an_unrelated_name_is_not_learned(world: World) -> None:
+    """The model read something else (often the recipient): no alias for the chosen one."""
+    s = await scene(world)
+    chosen = Contact.create(name="Gemeindewerke", now=NOW)
+    async with world.uow() as uow:
+        await uow.contacts.add(chosen)
+        await uow.commit()
+    await s.pipeline.confirm(
+        s.owner.id,
+        s.document.id,
+        DocumentChanges(contact_id=chosen.id, document_date=date(2026, 3, 31)),
+        accept_suggestions=True,
+    )
+    assert await contacts(world) == {"Gemeindewerke": [], "Stadtwerke": []}
+
+
+async def test_nothing_is_learned_without_a_chosen_contact(world: World) -> None:
+    s = await scene(world)
+    await s.pipeline.confirm(
+        s.owner.id,
+        s.document.id,
+        DocumentChanges(contact_id=None, document_date=date(2026, 3, 31)),
+        accept_suggestions=True,
+    )
+    assert await contacts(world) == {"Stadtwerke": []}
+    log = await world.documents.processing_log(s.owner.id, s.document.id)
+    assert all("learned_alias" not in entry.result.output for entry in log)
+
+
 async def test_values_set_meanwhile_are_kept(world: World) -> None:
     """A value the owner set after the run (PATCH) decides its field; suggestions fill only
     the empty ones."""
@@ -213,6 +287,8 @@ async def test_values_set_meanwhile_are_kept(world: World) -> None:
     confirmed = next(entry for entry in log if entry.result.model_version == PERSON)
     assert confirmed.result.output["kept"] == ["contact"]
     assert confirmed.result.output["accepted"] == []
+    # Set outside the review: nothing is learned.
+    assert await contacts(world) == {"Gemeindewerke": [], "Stadtwerke": []}
 
 
 async def test_after_a_type_correction_fields_are_extracted_again(world: World) -> None:

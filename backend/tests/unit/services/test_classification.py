@@ -192,7 +192,8 @@ async def test_a_verified_classification_is_applied(world: World) -> None:
     (request,) = fake.requests
     assert "- Rechnung\n- Vertrag" in request.user
     assert "- Strom\n- Versicherung" in request.user
-    assert "Stadtwerke Beispielstadt" not in request.user  # contacts are matched in code
+    # Contacts the text names (half of "Stadtwerke Beispielstadt"), not "AOK Bayern".
+    assert "Contacts:\n- Stadtwerke Musterstadt GmbH\n- Stadtwerke Beispielstadt\n" in request.user
     assert "Postfach 12 34" in request.user
     assert request.schema_name == "classification"
 
@@ -436,6 +437,89 @@ async def test_many_tags_list_those_named_in_the_text_first(world: World) -> Non
     request = fake.requests[0]
     assert "- Strom" in request.user
     assert request.user.count("- Aaa") == 2
+
+
+async def add_contact(world: World, name: str, *aliases: str) -> Contact:
+    contact = Contact.create(name=name, now=NOW, aliases=aliases)
+    async with world.uow() as uow:
+        await uow.contacts.add(contact)
+        await uow.commit()
+    return contact
+
+
+EXAMPLE_LETTER = INVOICE.replace("Stadtwerke Musterstadt GmbH", "Nord Krankenversicherung AG")
+
+
+@pytest.mark.parametrize("name", ["Nord Versicherungsgruppe", "Nord Krankenversicherung AG"])
+async def test_a_contact_named_by_an_alias_is_applied(world: World, name: str) -> None:
+    """The model gives the listed name or the one in the text; the text shows an alias."""
+    await seed(world)
+    example = await add_contact(world, "Nord Versicherungsgruppe", "Nord Krankenversicherung AG")
+    result = await classify(
+        world, classification(contact={"value": name, "evidence": None}), EXAMPLE_LETTER
+    )
+    contact = checks(result.result)["contact"]
+    assert contact.ok
+    assert result.changes.contact_id == example.id
+
+
+async def test_without_the_alias_the_contact_is_new(world: World) -> None:
+    await seed(world)
+    await add_contact(world, "Nord Versicherungsgruppe")
+    result = await classify(
+        world,
+        classification(contact={"value": "Nord Krankenversicherung AG", "evidence": None}),
+        EXAMPLE_LETTER,
+    )
+    contact = checks(result.result)["contact"]
+    assert contact.new_name == "Nord Krankenversicherung AG"
+
+
+async def test_an_alias_of_another_contact_does_not_count_as_named(world: World) -> None:
+    """The other insurer's alias in the text does not name the example."""
+    await seed(world)
+    example = await add_contact(world, "Nord Versicherungsgruppe")
+    await add_contact(world, "Muster", "Nord Krankenversicherung AG Muster")
+    result = await classify(
+        world,
+        classification(contact={"value": "Nord Versicherungsgruppe", "evidence": None}),
+        EXAMPLE_LETTER,
+    )
+    contact = checks(result.result)["contact"]
+    assert not contact.ok
+    assert contact.suggestion == str(example.id)
+
+
+async def test_contacts_the_text_names_most_are_listed(world: World) -> None:
+    await seed(world)
+    await add_contact(world, "Nord Versicherungsgruppe", "Nord Krankenversicherung AG")
+    await add_contact(world, "Südstädter Versicherung")
+    await add_contact(world, "Nord Sport")
+    fake = model(classification())
+    text = EXAMPLE_LETTER + "\nINTER, Südstadt\n"
+    step = classify_step(world, fake, max_contacts=3)
+    result = await step.run(await document_with(world, text))
+    contacts = fake.requests[0].user.split("\n\nDocument types:")[0]
+    assert contacts == (
+        "Contacts:\n"
+        "- Nord Versicherungsgruppe (also written as: Nord Krankenversicherung AG)\n"
+        "- Nord Sport\n"  # half of the words, like the next; then by name
+        "- Stadtwerke Musterstadt GmbH"
+    )  # not the contacts whose words the text does not show
+    assert isinstance(result, MetadataResult)
+    assert result.result.input["contacts_listed"] == 3
+
+
+async def test_type_descriptions_are_listed(world: World) -> None:
+    await seed(world)
+    async with world.uow() as uow:
+        await uow.document_types.add(
+            DocumentType.create(name="Lohnabrechnung", now=NOW, description="Entgeltbescheinigung")
+        )
+        await uow.commit()
+    fake = model(classification())
+    await classify_step(world, fake).run(await document_with(world))
+    assert "- Lohnabrechnung: Entgeltbescheinigung\n- Rechnung\n" in fake.requests[0].user
 
 
 # --- fields -------------------------------------------------------------------------------

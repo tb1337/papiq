@@ -283,9 +283,38 @@ class SqlContactRepository(SqlNamedRepository[ContactId, Contact]):
     kind = "contact"
     table = t.contacts
 
-    def _entity(self, row: Row[Any]) -> Contact:
-        return Contact(
-            id=ContactId(row.id), name=row.name, created_at=row.created_at, version=row.version
+    async def _entities(self, rows: Sequence[Row[Any]]) -> list[Contact]:
+        aliases = await self._children(t.contact_aliases, "contact_id", (row.id for row in rows))
+        return [
+            Contact(
+                id=ContactId(row.id),
+                name=row.name,
+                aliases=[
+                    alias.name for alias in sorted(aliases[row.id], key=lambda item: item.position)
+                ],
+                created_at=row.created_at,
+                version=row.version,
+            )
+            for row in rows
+        ]
+
+    async def _write_children(self, entity: Contact) -> None:
+        await self._insert_many(
+            t.contact_aliases,
+            [
+                {
+                    "contact_id": entity.id,
+                    "name": alias,
+                    "name_key": name_key(alias),
+                    "position": position,
+                }
+                for position, alias in enumerate(entity.aliases)
+            ],
+        )
+
+    async def _delete_children(self, ids: list[ContactId]) -> None:
+        await self._tx.write(
+            delete(t.contact_aliases).where(t.contact_aliases.c.contact_id.in_(ids))
         )
 
 
@@ -293,10 +322,14 @@ class SqlDocumentTypeRepository(SqlNamedRepository[DocumentTypeId, DocumentType]
     kind = "document type"
     table = t.document_types
 
+    def _values(self, entity: DocumentType) -> Values:
+        return super()._values(entity) | {"description": entity.description}
+
     def _entity(self, row: Row[Any]) -> DocumentType:
         return DocumentType(
             id=DocumentTypeId(row.id),
             name=row.name,
+            description=row.description,
             created_at=row.created_at,
             version=row.version,
         )

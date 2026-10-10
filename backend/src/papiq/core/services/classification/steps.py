@@ -40,7 +40,7 @@ from papiq.core.domain.fields import (
 from papiq.core.domain.ids import ContactId, FieldId
 from papiq.core.domain.json_value import JsonObject, JsonValue
 from papiq.core.domain.master_data import Contact, DocumentType, Tag
-from papiq.core.domain.names import best_match, mentions, name_key
+from papiq.core.domain.names import best_match, mentions, name_key, named_share
 from papiq.core.domain.pipeline import Outcome, StepResult
 from papiq.core.ports import Clock, LanguageModel, ObjectStore, UnitOfWorkFactory
 from papiq.core.ports.llm import StructuredAnswer, StructuredRequest
@@ -59,6 +59,7 @@ from papiq.core.services.classification.prompts import (
     CLASSIFY_SYSTEM,
     EXTRACT_PROMPT,
     EXTRACT_SYSTEM,
+    Listed,
     Shortened,
     classify_message,
     extract_message,
@@ -81,12 +82,14 @@ NO_MODEL = "no language model is configured (PAPIQ_LLM_BASE_URL)"
 class ClassificationPolicy:
     """`accept`: a field with at least this confidence is applied; `suggest_contact`: an
     existing contact at least this similar is suggested. Texts longer than `input_budget`
-    characters are shortened; at most `max_tags` tags are listed in a prompt."""
+    characters are shortened; at most `max_tags` tags and `max_contacts` contacts (those the
+    text names most) are listed in a prompt."""
 
     accept: float = 0.9
     suggest_contact: float = 0.75
     input_budget: int = 12_000
     max_tags: int = 200
+    max_contacts: int = 20
 
 
 DEFAULT_POLICY = ClassificationPolicy()
@@ -178,9 +181,11 @@ class ClassifyStep(_ModelStep):
             tags = sorted(await uow.tags.list_all(), key=lambda item: item.name)
         facts = DocumentText(text)
         listed = _listed_tags(tags, facts, self._policy.max_tags)
+        candidates = _listed_contacts(contacts, facts, self._policy.max_contacts)
         sent = shorten(text, self._policy.input_budget)
         input = self._input(document, text, sent, CLASSIFY_PROMPT) | {
             "contacts": len(contacts),
+            "contacts_listed": len(candidates),
             "document_types": len(types),
             "tags": len(tags),
             "tags_listed": len(listed),
@@ -190,7 +195,12 @@ class ClassifyStep(_ModelStep):
         try:
             answer, answers = await self._ask(
                 CLASSIFY_SYSTEM,
-                classify_message(type_names, tag_names, sent),
+                classify_message(
+                    [Listed(item.name, aliases=tuple(item.aliases)) for item in candidates],
+                    [Listed(item.name, description=item.description) for item in types],
+                    tag_names,
+                    sent,
+                ),
                 classify_schema(type_names, tag_names),
                 "classification",
                 parse_classify,
@@ -242,10 +252,14 @@ class ClassifyStep(_ModelStep):
             return FieldCheck(
                 outcome=Outcome.UNCERTAIN, confidence=0, reason="no contact recognised", **common
             )
-        match = best_match(name, [(contact, contact.name) for contact in contacts])
+        match = best_match(
+            name, [(contact, own) for contact in contacts for own in contact.names()]
+        )
         best = match.best
-        # The contact itself must be named in the text, not just something similar.
-        named = best is not None and mentions(name_key(facts.raw), name_key(best.name))
+        # The contact itself must be named in the text (by its name or an alias), not just
+        # something similar.
+        text_key = name_key(facts.raw)
+        named = best is not None and any(mentions(text_key, name_key(own)) for own in best.names())
         ambiguous = best is not None and match.runner_up >= match.score - _AMBIGUITY
         if best is not None and match.score >= self._policy.suggest_contact:
             if match.score >= self._policy.accept and named and not ambiguous:
@@ -583,6 +597,22 @@ def _listed_tags(tags: Sequence[Tag], facts: DocumentText, limit: int) -> list[T
     named = [tag for tag in tags if mentions(text_key, name_key(tag.name))]
     rest = [tag for tag in tags if tag not in named]
     return sorted((named + rest)[:limit], key=lambda tag: tag.name)
+
+
+def _listed_contacts(contacts: Sequence[Contact], facts: DocumentText, limit: int) -> list[Contact]:
+    """The contacts whose names or aliases the text shows most (see `named_share`), at most
+    `limit`; none the text does not show at all."""
+    text_key = name_key(facts.raw)
+    words = frozenset(text_key.split())
+    scored = [
+        (max(named_share(text_key, words, name_key(own)) for own in contact.names()), contact)
+        for contact in contacts
+    ]
+    ranked = sorted(
+        ((score, contact) for score, contact in scored if score > 0),
+        key=lambda entry: (-entry[0], entry[1].name.casefold()),
+    )
+    return [contact for _, contact in ranked[:limit]]
 
 
 def _by_name[T: Contact | DocumentType | Tag](items: Sequence[T], name: str) -> T | None:

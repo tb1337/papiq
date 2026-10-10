@@ -8,6 +8,8 @@ collations.
 The migrations in `migrations/versions` must create exactly these tables; a test compares them.
 """
 
+from typing import Any
+
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -85,21 +87,40 @@ drawer_shares = Table(
 )
 
 
-def _master_data(name: str) -> Table:
+def _master_data(name: str, *columns: Column[Any]) -> Table:
     return Table(
         name,
         metadata,
         Column("id", Uuid, primary_key=True),
         Column("name", Text, nullable=False),
         Column("name_key", Text, nullable=False, unique=True),
+        *columns,
         Column("created_at", UtcDateTime, nullable=False),
         Column("version", Integer, nullable=False),
     )
 
 
 contacts = _master_data("contacts")
-document_types = _master_data("document_types")
+document_types = _master_data("document_types", Column("description", Text, nullable=True))
 tags = _master_data("tags")
+
+# Other names of a contact; unique across contacts. That no alias is another contact's name is
+# checked by the service.
+contact_aliases = Table(
+    "contact_aliases",
+    metadata,
+    Column(
+        "contact_id",
+        Uuid,
+        ForeignKey("contacts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("name", Text, nullable=False),
+    Column("name_key", Text, primary_key=True),
+    # The order in which the aliases were given.
+    Column("position", Integer, nullable=False),
+)
 
 field_definitions = Table(
     "field_definitions",

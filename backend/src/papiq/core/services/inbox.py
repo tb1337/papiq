@@ -218,6 +218,35 @@ def decide(
     )
 
 
+LEARNED_ALIAS = "learned_alias"
+"""Key of the alias a confirmation taught a contact, in the output of its `apply_rules` entry."""
+_LONGEST_ALIAS = 100  # characters; longer proposals are not learned
+
+
+def alias_to_learn(
+    open: Sequence[OpenStep], decision: Decision, document: Document
+) -> tuple[ContactId, str] | None:
+    """The contact the owner chose for an open contact field, and the name the model read for
+    it: the owner entered the contact or accepted the suggestion. None if the field was not
+    open, the model read no name, or the document has no contact."""
+    for item in open:
+        if item.step is not Step.CLASSIFY:
+            continue
+        decided = (*decision.entered.get(item.step, ()), *decision.accepted.get(item.step, ()))
+        for check in item.fields:
+            if check.field != CONTACT or CONTACT not in decided:
+                continue
+            proposed = check.proposed
+            if (
+                isinstance(proposed, str)
+                and proposed.strip()
+                and len(proposed) <= _LONGEST_ALIAS
+                and document.contact_id is not None
+            ):
+                return document.contact_id, proposed.strip()
+    return None
+
+
 def drawer_chooser(log: Sequence[StepRun], drawer: UUID) -> UUID | None:
     """Who last put the document into `drawer` by hand (confirming, uploading into a given
     drawer, moving), if anyone. Entries written before the drawer was recorded name none."""
