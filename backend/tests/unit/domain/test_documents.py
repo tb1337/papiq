@@ -3,7 +3,6 @@ from decimal import Decimal
 
 import pytest
 
-from papiq.core.domain.attributes import AttributeDefinition, AttributeType
 from papiq.core.domain.documents import UNSET, Document, DocumentChanges, Sha256
 from papiq.core.domain.errors import NotFoundError, ValidationError
 from papiq.core.domain.events import (
@@ -13,6 +12,7 @@ from papiq.core.domain.events import (
     DocumentUpdated,
     StepCompleted,
 )
+from papiq.core.domain.fields import FieldDefinition, FieldType
 from papiq.core.domain.ids import ContactId, DocumentTypeId, TagId, new_id
 from papiq.core.domain.pipeline import Step
 from tests import builders
@@ -93,58 +93,54 @@ def test_unchanged_metadata_records_nothing() -> None:
     assert DocumentChanges().title is UNSET
 
 
-def test_attribute_values_are_validated_and_scoped() -> None:
+def test_field_values_are_validated_and_scoped() -> None:
     invoice, letter = DocumentTypeId(new_id()), DocumentTypeId(new_id())
-    total = AttributeDefinition.create(
-        name="Total", data_type=AttributeType.NUMBER, now=NOW, document_type_ids=[invoice]
+    total = FieldDefinition.create(
+        name="Total", data_type=FieldType.NUMBER, now=NOW, document_type_ids=[invoice]
     )
-    note = AttributeDefinition.create(name="Note", data_type=AttributeType.TEXT, now=NOW)
+    note = FieldDefinition.create(name="Note", data_type=FieldType.TEXT, now=NOW)
     definitions = {total.id: total, note.id: note}
     document = builders.document(builders.user(), builders.drawer(builders.user()))
 
     with pytest.raises(ValidationError, match="does not apply"):
-        document.apply_changes(DocumentChanges(attributes={total.id: 10}), definitions, LATER)
+        document.apply_changes(DocumentChanges(fields={total.id: 10}), definitions, LATER)
     with pytest.raises(NotFoundError):
         document.apply_changes(
             DocumentChanges(
-                attributes={
-                    AttributeDefinition.create(
-                        name="x", data_type=AttributeType.TEXT, now=NOW
-                    ).id: "x"
-                }
+                fields={FieldDefinition.create(name="x", data_type=FieldType.TEXT, now=NOW).id: "x"}
             ),
             definitions,
             LATER,
         )
 
     document.apply_changes(
-        DocumentChanges(document_type_id=invoice, attributes={total.id: 10, note.id: "paid"}),
+        DocumentChanges(document_type_id=invoice, fields={total.id: 10, note.id: "paid"}),
         definitions,
         LATER,
     )
-    assert document.attributes == {total.id: Decimal(10), note.id: "paid"}
+    assert document.fields == {total.id: Decimal(10), note.id: "paid"}
 
     with pytest.raises(ValidationError, match="does not accept"):
-        document.apply_changes(DocumentChanges(attributes={note.id: ""}), definitions, LATER)
-    assert document.attributes[note.id] == "paid"
+        document.apply_changes(DocumentChanges(fields={note.id: ""}), definitions, LATER)
+    assert document.fields[note.id] == "paid"
 
     changed = document.apply_changes(DocumentChanges(document_type_id=letter), definitions, LATER)
-    assert changed == ("document_type_id", "attributes")
-    assert document.attributes == {note.id: "paid"}
+    assert changed == ("document_type_id", "fields")
+    assert document.fields == {note.id: "paid"}
 
-    document.apply_changes(DocumentChanges(attributes={note.id: None}), definitions, LATER)
-    assert document.attributes == {}
+    document.apply_changes(DocumentChanges(fields={note.id: None}), definitions, LATER)
+    assert document.fields == {}
 
 
 def test_failed_validation_changes_nothing() -> None:
-    note = AttributeDefinition.create(name="Note", data_type=AttributeType.TEXT, now=NOW)
+    note = FieldDefinition.create(name="Note", data_type=FieldType.TEXT, now=NOW)
     document = builders.document(builders.user(), builders.drawer(builders.user()))
     with pytest.raises(ValidationError):
         document.apply_changes(
-            DocumentChanges(title="New", attributes={note.id: 5}), {note.id: note}, LATER
+            DocumentChanges(title="New", fields={note.id: 5}), {note.id: note}, LATER
         )
     assert document.title == "scan"
-    assert document.attributes == {}
+    assert document.fields == {}
     assert document.pull_events() == []
 
 

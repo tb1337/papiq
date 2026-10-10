@@ -13,9 +13,9 @@
 	import { CHANNEL_LABELS, fieldLabel, operatorLabel } from '#lib/rules/describe.ts';
 	import {
 		CHANNELS,
-		FIELDS,
-		changeAttribute,
+		CONDITION_FIELDS,
 		changeField,
+		changeConditionField,
 		changeOperator,
 		operatorsFor,
 		takesNoValue,
@@ -24,7 +24,7 @@
 		type Operator
 	} from '#lib/rules/model.ts';
 
-	// One condition: field (and attribute), comparison and the value it needs.
+	// One condition: condition field (and the field), comparison and the value it needs.
 	let {
 		condition,
 		lookup,
@@ -41,23 +41,22 @@
 		ondown?: () => void;
 	} = $props();
 
-	const attribute = $derived(
-		lookup.attributes.find((entry) => entry.id === condition.attributeId) ?? null
-	);
-	const operators = $derived(operatorsFor(condition, lookup.attributes));
-	const fieldOptions = FIELDS.map((field) => ({ value: field, label: fieldLabel(field) }));
+	const field = $derived(lookup.fields.find((entry) => entry.id === condition.fieldId) ?? null);
+	const operators = $derived(operatorsFor(condition, lookup.fields));
+	const conditionFieldOptions = CONDITION_FIELDS.map((field) => ({
+		value: field,
+		label: fieldLabel(field)
+	}));
 	const operatorOptions = $derived(
 		operators.map((op) => ({
 			value: op,
-			label: operatorLabel(condition.field, op, attribute?.data_type ?? null)
+			label: operatorLabel(condition.field, op, field?.data_type ?? null)
 		}))
 	);
-	const attributeOptions = $derived([
+	const fieldOptions = $derived([
 		{ value: '', label: m.rule_choose() },
-		...lookup.attributes.map((entry) => ({ value: entry.id, label: entry.name })),
-		...(condition.attributeId && !attribute
-			? [{ value: condition.attributeId, label: m.rule_unknown() }]
-			: [])
+		...lookup.fields.map((entry) => ({ value: entry.id, label: entry.name })),
+		...(condition.fieldId && !field ? [{ value: condition.fieldId, label: m.rule_unknown() }] : [])
 	]);
 	/** The choices of an id field or the channel. */
 	const choices = $derived.by(() => {
@@ -70,9 +69,9 @@
 				return lookup.tags.map((entry) => ({ value: entry.id, label: entry.name }));
 			case 'channel':
 				return CHANNELS.map((channel) => ({ value: channel, label: CHANNEL_LABELS[channel]() }));
-			case 'attribute':
-				return attribute?.data_type === 'choice'
-					? attribute.choices.map((choice) => ({ value: choice, label: choice }))
+			case 'field':
+				return field?.data_type === 'choice'
+					? field.choices.map((choice) => ({ value: choice, label: choice }))
 					: null;
 			default:
 				return null;
@@ -99,19 +98,19 @@
 <div class="flex flex-col gap-2 rounded-xl border bg-background p-3" data-key={condition.key}>
 	<div class="flex flex-wrap items-start gap-2">
 		<NativeSelect
-			aria-label={m.rule_condition_field()}
+			aria-label={m.rule_condition_subject()}
 			value={condition.field}
-			options={fieldOptions}
-			onchange={(field) => changeField(condition, field as ConditionField, lookup.attributes)}
+			options={conditionFieldOptions}
+			onchange={(field) => changeConditionField(condition, field as ConditionField, lookup.fields)}
 			class="h-10 w-full sm:w-44"
 		/>
-		{#if condition.field === 'attribute'}
+		{#if condition.field === 'field'}
 			<NativeSelect
-				aria-label={m.rule_condition_attribute()}
-				aria-invalid={invalid && !condition.attributeId}
-				value={condition.attributeId ?? ''}
-				options={attributeOptions}
-				onchange={(id) => id && changeAttribute(condition, id, lookup.attributes)}
+				aria-label={m.rule_condition_field()}
+				aria-invalid={invalid && !condition.fieldId}
+				value={condition.fieldId ?? ''}
+				options={fieldOptions}
+				onchange={(id) => id && changeField(condition, id, lookup.fields)}
 				class="h-10 w-full sm:w-44"
 			/>
 		{/if}
@@ -119,7 +118,7 @@
 			aria-label={m.rule_condition_operator()}
 			value={condition.op}
 			options={operatorOptions}
-			onchange={(op) => changeOperator(condition, op as Operator, lookup.attributes)}
+			onchange={(op) => changeOperator(condition, op as Operator, lookup.fields)}
 			class="h-10 w-full sm:w-48"
 		/>
 		<div class="min-w-0 flex-1 basis-56">
@@ -165,7 +164,7 @@
 						{m.rule_add_value()}
 					</Button>
 				</div>
-			{:else if choices && condition.field !== 'attribute'}
+			{:else if choices && condition.field !== 'field'}
 				<NativeSelect
 					aria-label={valueLabel}
 					aria-invalid={invalid || undefined}
@@ -182,9 +181,9 @@
 					value={single}
 					oninput={(event) => (condition.value = event.currentTarget.value)}
 				/>
-			{:else if condition.field === 'attribute'}
+			{:else if condition.field === 'field'}
 				<ValueInput
-					{attribute}
+					{field}
 					{textual}
 					{invalid}
 					label={valueLabel}

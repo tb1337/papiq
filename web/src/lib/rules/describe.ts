@@ -6,7 +6,7 @@ import type {
 	ActionNode,
 	ActionType,
 	ApiAction,
-	AttributeType,
+	FieldType,
 	Channel,
 	ConditionField,
 	ConditionNode,
@@ -15,7 +15,7 @@ import type {
 	Trigger
 } from '#lib/rules/model.ts';
 
-const FIELDS: Record<Exclude<ConditionField, 'attribute'>, () => string> = {
+const CONDITION_FIELDS: Record<Exclude<ConditionField, 'field'>, () => string> = {
 	contact: m.field_contact,
 	document_type: m.field_document_type,
 	tags: m.field_tags,
@@ -25,7 +25,7 @@ const FIELDS: Record<Exclude<ConditionField, 'attribute'>, () => string> = {
 };
 
 export function fieldLabel(field: ConditionField): string {
-	return field === 'attribute' ? m.rule_field_attribute() : FIELDS[field]();
+	return field === 'field' ? m.rule_field_field() : CONDITION_FIELDS[field]();
 }
 
 export const TRIGGER_LABELS: Record<Trigger, () => string> = {
@@ -46,7 +46,7 @@ export const ACTION_LABELS: Record<ActionType, () => string> = {
 	set_title: m.rule_action_set_title,
 	add_tags: m.rule_action_add_tags,
 	remove_tags: m.rule_action_remove_tags,
-	set_attribute: m.rule_action_set_attribute,
+	set_field: m.rule_action_set_field,
 	force_review: m.rule_action_force_review
 };
 
@@ -86,7 +86,7 @@ const NUMBER_OPERATORS: Partial<Record<Operator, () => string>> = {
 export function operatorLabel(
 	field: ConditionField,
 	op: Operator,
-	type: AttributeType | null = null
+	type: FieldType | null = null
 ): string {
 	let special: Partial<Record<Operator, () => string>> = {};
 	if (field === 'tags') special = TAG_OPERATORS;
@@ -108,7 +108,7 @@ const PROBLEMS: Record<Problem['code'], (params: Record<string, string | number>
 	date: () => m.rule_error_date(),
 	number: () => m.rule_error_number(),
 	amount: () => m.rule_error_amount(),
-	attribute: () => m.rule_error_attribute(),
+	field: () => m.rule_error_field(),
 	operator: () => m.rule_error_operator(),
 	group_empty: () => m.rule_error_group_empty(),
 	conditions_many: (params) => m.rule_error_conditions_many({ max: params.max }),
@@ -129,18 +129,16 @@ export function nameOf(id: string, list: readonly { id: string; name: string }[]
 	return list.find((entry) => entry.id === id)?.name ?? m.rule_unknown();
 }
 
-function attributeOf(id: string | null, lookup: Lookup | null) {
-	return lookup?.attributes.find((attribute) => attribute.id === id) ?? null;
+function fieldOf(id: string | null, lookup: Lookup | null) {
+	return lookup?.fields.find((field) => field.id === id) ?? null;
 }
 
 /** A condition as the user reads it: "Contact is Telekom". */
 export function describeCondition(condition: ConditionNode, lookup: Lookup | null): string {
-	const attribute = attributeOf(condition.attributeId, lookup);
+	const field = fieldOf(condition.fieldId, lookup);
 	const subject =
-		condition.field === 'attribute'
-			? (attribute?.name ?? m.rule_unknown())
-			: fieldLabel(condition.field);
-	const op = operatorLabel(condition.field, condition.op, attribute?.data_type ?? null);
+		condition.field === 'field' ? (field?.name ?? m.rule_unknown()) : fieldLabel(condition.field);
+	const op = operatorLabel(condition.field, condition.op, field?.data_type ?? null);
 	if (condition.value === null) return `${subject} ${op}`;
 	const values = Array.isArray(condition.value) ? condition.value : [condition.value];
 	const text = values.map((value) => describeConditionValue(condition, value, lookup)).join(', ');
@@ -182,9 +180,9 @@ export function describeAction(action: ActionNode | ApiAction, lookup: Lookup | 
 		case 'add_tags':
 		case 'remove_tags':
 			return `${label}: ${action.tag_ids.map((id) => nameOf(id, lookup?.tags ?? [])).join(', ')}`;
-		case 'set_attribute': {
-			const attribute = attributeOf(action.attribute_id, lookup);
-			return `${label}: ${attribute?.name ?? m.rule_unknown()} = ${describeValue(action.value, null)}`;
+		case 'set_field': {
+			const field = fieldOf(action.field_id, lookup);
+			return `${label}: ${field?.name ?? m.rule_unknown()} = ${describeValue(action.value, null)}`;
 		}
 		case 'force_review':
 			return `${label}: ${m.rule_quoted({ text: action.reason })}`;

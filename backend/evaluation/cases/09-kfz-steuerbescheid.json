@@ -9,7 +9,7 @@
       "Steuer"
     ],
     "document_date": "2026-03-02",
-    "attributes": {
+    "fields": {
       "Aktenzeichen": "KFZ-2026-778899",
       "Betrag": {
         "amount": "186.00",
@@ -36,7 +36,7 @@
         "evidence": "Datum: 02.03.2026"
       }
     },
-    "attributes": {
+    "fields": {
       "Aktenzeichen": {
         "value": "KFZ-2026-778899",
         "evidence": "Aktenzeichen: KFZ-2026-778899"

@@ -1,10 +1,10 @@
 # Evaluation set
 
 Synthetic German documents (no real personal data) with the metadata expected of them. They run
-through the same classification and attribute extraction steps as the pipeline, to compare
+through the same classification and field extraction steps as the pipeline, to compare
 language models and to check that the checks catch wrong answers.
 
-- `master_data.json`: contacts, document types, tags and attributes the documents are matched
+- `master_data.json`: contacts, document types, tags and fields the documents are matched
   against.
 - `cases/<name>.md`: the document text, as the parse step would produce it (OCR and parsing are
   not part of the evaluation).

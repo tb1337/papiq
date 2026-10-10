@@ -8,7 +8,7 @@
       "Gesundheit"
     ],
     "document_date": "2026-03-03",
-    "attributes": {
+    "fields": {
       "Betrag": {
         "amount": "321.40",
         "currency": "EUR"
@@ -33,7 +33,7 @@
         "evidence": "Musterstadt, den 03.03.2026"
       }
     },
-    "attributes": {
+    "fields": {
       "Betrag": {
         "value": {
           "amount": "312.40",

@@ -15,7 +15,7 @@ KINDS = (
     ("contact", "Contacts (Paperless: correspondents)"),
     ("document_type", "Document types"),
     ("tag", "Tags"),
-    ("attribute", "Attributes (Paperless: custom fields, ASN, notes)"),
+    ("field", "Fields (Paperless: custom fields, ASN, notes)"),
     ("storage_path", "Storage paths"),
     ("drawer", "Drawers"),
     ("other", "Other Paperless objects"),

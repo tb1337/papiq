@@ -139,7 +139,7 @@ class SearchIndexContract:
             contact="Stadtwerke Musterstadt",
             document_type="Rechnung",
             tags=("Energie",),
-            attributes=("Rechnungsnummer: R-2026-77",),
+            fields=("Rechnungsnummer: R-2026-77",),
         )
         other = index_document(owner_id=owner, title="Unrelated")
         await search_index.upsert([document, other])

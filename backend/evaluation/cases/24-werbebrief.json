@@ -8,7 +8,7 @@
       "Auto"
     ],
     "document_date": "2026-03-01",
-    "attributes": {}
+    "fields": {}
   },
   "fake": {
     "classification": {
@@ -27,6 +27,6 @@
         "evidence": "Musterstadt, 01.03.2026"
       }
     },
-    "attributes": {}
+    "fields": {}
   }
 }

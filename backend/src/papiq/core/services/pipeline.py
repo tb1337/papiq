@@ -76,7 +76,7 @@ class MetadataResult:
             changes = replace(changes, tag_ids=frozenset(document.tag_ids | self.add_tags))
         try:
             await check_references(uow, changes)
-            definitions = {item.id: item for item in await uow.attributes.list_all()}
+            definitions = {item.id: item for item in await uow.fields.list_all()}
             document.apply_changes(changes, definitions, now)
         except (NotFoundError, ValidationError) as error:
             reason = f"the master data changed during the step; nothing was applied ({error})"
@@ -389,7 +389,7 @@ class PipelineService:
             now = self._clock.now()
             tags_before = frozenset(document.tag_ids)
             overruled = document.confirm(resume_at, now)
-            definitions = {item.id: item for item in await uow.attributes.list_all()}
+            definitions = {item.id: item for item in await uow.fields.list_all()}
             decision = decide(
                 open,
                 document,
@@ -634,12 +634,12 @@ async def _check_imported(
     uow: UnitOfWork, owner: UserId, imported: ImportedMetadata, now: datetime
 ) -> None:
     """ValidationError if the metadata does not fit the master data: unknown contact, type or
-    tag, or attribute values that do not fit their definition or the document type."""
+    tag, or field values that do not fit their definition or the document type."""
     changes = replace(imported.classification(), tag_ids=imported.tag_ids)
-    changes = replace(changes, attributes=dict(imported.attributes))
+    changes = replace(changes, fields=dict(imported.fields))
     try:
         await check_references(uow, changes)
-        definitions = {item.id: item for item in await uow.attributes.list_all()}
+        definitions = {item.id: item for item in await uow.fields.list_all()}
         scratch = Document.receive(
             owner_id=owner,
             drawer_id=DrawerId(owner),

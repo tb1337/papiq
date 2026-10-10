@@ -8,7 +8,7 @@
       "Einkauf"
     ],
     "document_date": "2026-06-25",
-    "attributes": {
+    "fields": {
       "Betrag": {
         "amount": "49.99",
         "currency": "EUR"
@@ -33,7 +33,7 @@
         "evidence": "Datum: 25.06.2026"
       }
     },
-    "attributes": {
+    "fields": {
       "Betrag": {
         "value": {
           "amount": "49.99",

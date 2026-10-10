@@ -72,7 +72,7 @@ async def migrating(api: Api, directory: Path) -> AsyncIterator[Migrating]:
     uow = api.container.unit_of_work
     executors = api.services.pipeline._executors
     executors[Step.CLASSIFY] = ImportedClassifyStep(uow, PlaceholderStep())
-    executors[Step.EXTRACT_ATTRIBUTES] = ImportedExtractStep(uow, PlaceholderStep())
+    executors[Step.EXTRACT_FIELDS] = ImportedExtractStep(uow, PlaceholderStep())
     admin = await api.admin()
 
     async def work() -> None:
@@ -110,7 +110,7 @@ async def test_the_whole_migration_runs_against_the_api(api: Api, tmp_path: Path
         assert by_title["Document 14"]["owner_id"] == str(m.admin.id)  # no owner in Paperless
         assert by_title["Document 15"]["owner_id"] == str(m.admin.id)  # an owner who is gone
         assert by_title["Document 10"]["document_date"] == "2024-05-01"
-        assert len(by_title["Document 10"]["attributes"]) == 12
+        assert len(by_title["Document 10"]["fields"]) == 12
 
         drawers = (await api.client.get(f"{PREFIX}/drawers", headers=helpers.auth(m.admin))).json()
         shared = next(d for d in drawers if d["name"].startswith("Geteilt"))
@@ -135,7 +135,7 @@ async def test_the_whole_migration_runs_against_the_api(api: Api, tmp_path: Path
             )
         ).json()
         imported = {e["step"]: e for e in log if e["model_version"] == "imported"}
-        assert set(imported) == {"classify", "extract_attributes"}
+        assert set(imported) == {"classify", "extract_fields"}
 
         assert await m.run("verify") == 0, m.messages
         assert await m.run("verify", rehash=True) == 0

@@ -9,7 +9,7 @@
       "Internet"
     ],
     "document_date": "2026-05-22",
-    "attributes": {
+    "fields": {
       "Kundennummer": "KD-55 12 34"
     }
   },
@@ -31,7 +31,7 @@
         "evidence": "Hamburg, 22.05.2026"
       }
     },
-    "attributes": {
+    "fields": {
       "Kundennummer": {
         "value": "KD-55 12 34",
         "evidence": "Kundennummer: KD-55 12 34"

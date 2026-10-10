@@ -2,7 +2,7 @@
 where its values came from (model, person), and the facts about drawers and master data.
 
 Loading the text and running the regular expressions on it happens before the unit of work that
-stores the result (`prepare`), so no transaction waits for a slow pattern. Patterns on attribute
+stores the result (`prepare`), so no transaction waits for a slow pattern. Patterns on field
 values (short) run inside it, on the state that is stored.
 """
 
@@ -13,22 +13,22 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
-from papiq.core.domain.attributes import AttributeDefinition
 from papiq.core.domain.classification import (
     CONTACT,
     DOCUMENT_TYPE,
     TAGS,
-    attribute_field,
-    attribute_to_json,
+    field_key,
+    field_to_json,
 )
 from papiq.core.domain.documents import Document
 from papiq.core.domain.errors import NotFoundError, PatternTimeoutError, ValidationError
 from papiq.core.domain.evidence import DocumentText
+from papiq.core.domain.fields import FieldDefinition
 from papiq.core.domain.ids import (
-    AttributeId,
     ContactId,
     DocumentTypeId,
     DrawerId,
+    FieldId,
     RuleId,
     TagId,
     UserId,
@@ -138,10 +138,10 @@ async def prepare(
     return Prepared(DocumentText(text), results, problems)
 
 
-async def attribute_patterns(
+async def field_patterns(
     matcher: PatternMatcher, rules: Sequence[Rule], document: Document
 ) -> tuple[dict[PatternKey, bool], tuple[str, ...]]:
-    """The rules' patterns on the document's attribute values."""
+    """The rules' patterns on the document's field values."""
     return await _search(matcher, pattern_subjects(rules, document, None), None)
 
 
@@ -175,7 +175,7 @@ _PERSON_ENTRIES = (PERSON, RULES_CHANGE, PERSON_DRAWER)
 class Provenance:
     """Where the document's values came from, read from the processing log.
 
-    - `model_values`: single fields (contact, type, date, attributes) whose value the model set
+    - `model_values`: single fields (contact, type, date, fields) whose value the model set
       in its latest run and no person has decided since, as JSON.
     - `model_tags`: tags the model set that no person has decided on since.
     - `person`: fields a person decided (confirming in the inbox, or changing the document)
@@ -317,8 +317,8 @@ def _current_values(document: Document) -> dict[str, JsonValue]:
         if document.document_date is None
         else document.document_date.isoformat(),
     }
-    for id, value in document.attributes.items():
-        values[attribute_field(id)] = attribute_to_json(value)
+    for id, value in document.fields.items():
+        values[field_key(id)] = field_to_json(value)
     return values
 
 
@@ -347,7 +347,7 @@ async def situation(
     document: Document,
     owner: User,
     rules: Iterable[Rule],
-    definitions: Mapping[AttributeId, AttributeDefinition],
+    definitions: Mapping[FieldId, FieldDefinition],
     origin: Provenance,
     locked: Collection[str] = (),
     person_added_tags: frozenset[TagId] = frozenset(),
@@ -439,15 +439,15 @@ async def run_rules(
     rules: Sequence[Rule],
     prepared: Prepared,
     origin: Provenance,
-    definitions: Mapping[AttributeId, AttributeDefinition],
+    definitions: Mapping[FieldId, FieldDefinition],
     before: tuple[Document, Mapping[PatternKey, bool]] | None = None,
     locked: Collection[str] = (),
     accept_conflicts: bool = False,
 ) -> RuleRun:
     """Evaluate `rules` on the document and plan their change (nothing is applied). `before`:
-    for a change, the state before it and its attribute pattern results; only rules that become
+    for a change, the state before it and its field pattern results; only rules that become
     true with the change act."""
-    patterns, problems = await attribute_patterns(matcher, rules, document)
+    patterns, problems = await field_patterns(matcher, rules, document)
     now_facts = facts(document, prepared, patterns, origin)
     before_facts = None
     if before is not None:
@@ -472,7 +472,7 @@ async def run_rules(
 def apply_plan(
     document: Document,
     rule_plan: RulePlan,
-    definitions: Mapping[AttributeId, AttributeDefinition],
+    definitions: Mapping[FieldId, FieldDefinition],
     now: datetime,
 ) -> str | None:
     """Apply the planned change and drawer; the reason if the change no longer fits (nothing

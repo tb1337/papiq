@@ -1,7 +1,7 @@
 """The MCP tools: search, read and (with a `read_write` token) change documents.
 
 Every tool calls the same services as the REST API with the caller's id, so rights and rules
-are the same. Contacts, document types, tags and attributes are named, not numbered (a client
+are the same. Contacts, document types, tags and fields are named, not numbered (a client
 has no other way to learn IDs); outputs give name and ID. A name matches regardless of case.
 
 Errors: what the core says (`DomainError`) reaches the client as the tool's error text. For a
@@ -25,13 +25,13 @@ from starlette.requests import Request
 
 from papiq import __version__
 from papiq.adapters.inbound.rest.context import ApiContext
-from papiq.adapters.inbound.rest.schemas import AttributeJson, RuleReportOut, attribute_json
-from papiq.adapters.inbound.values import attribute_value
-from papiq.core.domain.attributes import AttributeDefinition
+from papiq.adapters.inbound.rest.schemas import FieldJson, RuleReportOut, field_json
+from papiq.adapters.inbound.values import field_value
 from papiq.core.domain.documents import UNSET, Document, DocumentChanges
 from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import DomainError, SearchUnavailableError, ValidationError
-from papiq.core.domain.ids import AttributeId, ContactId, DocumentId, DocumentTypeId, TagId, UserId
+from papiq.core.domain.fields import FieldDefinition
+from papiq.core.domain.ids import ContactId, DocumentId, DocumentTypeId, FieldId, TagId, UserId
 from papiq.core.ports import DocumentFilter
 from papiq.core.ports.search_index import MAX_HITS
 from papiq.core.services.auth import Principal
@@ -90,8 +90,8 @@ class DocumentOut(BaseModel):
     document_type: NameRef | None
     tags: list[NameRef]
     document_date: date | None
-    attributes: dict[str, AttributeJson] = Field(
-        description="Values by attribute name; amounts as {amount, currency}, numbers as text."
+    fields: dict[str, FieldJson] = Field(
+        description="Values by field name; amounts as {amount, currency}, numbers as text."
     )
     created_at: datetime
     updated_at: datetime
@@ -142,12 +142,12 @@ class TagsOut(BaseModel):
 
 @dataclass(frozen=True)
 class Names:
-    """The names of contacts, document types, tags and attributes (visible to every user)."""
+    """The names of contacts, document types, tags and fields (visible to every user)."""
 
     contacts: dict[UUID, str]
     document_types: dict[UUID, str]
     tags: dict[UUID, str]
-    attributes: dict[AttributeId, AttributeDefinition]
+    fields: dict[FieldId, FieldDefinition]
 
     @classmethod
     async def load(cls, context: ApiContext, user: UserId) -> "Names":
@@ -156,7 +156,7 @@ class Names:
             contacts={c.id: c.name for c in await master.list_contacts(user)},
             document_types={t.id: t.name for t in await master.list_document_types(user)},
             tags={t.id: t.name for t in await master.list_tags(user)},
-            attributes={a.id: a for a in await master.list_attributes(user)},
+            fields={a.id: a for a in await master.list_fields(user)},
         )
 
     def contact(self, id: UUID | None) -> NameRef | None:
@@ -169,8 +169,8 @@ class Names:
         refs = [NameRef(id=i, name=self.tags.get(i, str(i))) for i in ids]
         return sorted(refs, key=lambda ref: ref.name.casefold())
 
-    def attribute_name(self, id: AttributeId) -> str:
-        definition = self.attributes.get(id)
+    def field_name(self, id: FieldId) -> str:
+        definition = self.fields.get(id)
         return str(id) if definition is None else definition.name
 
     # --- name to id, for input
@@ -184,12 +184,12 @@ class Names:
     def find_tag(self, name: str) -> TagId:
         return TagId(_find("tag", name, self.tags))
 
-    def find_attribute(self, name: str) -> AttributeDefinition:
+    def find_field(self, name: str) -> FieldDefinition:
         wanted = name.strip().casefold()
-        for definition in self.attributes.values():
+        for definition in self.fields.values():
             if definition.name.casefold() == wanted:
                 return definition
-        raise ValidationError(f"no attribute named {name!r}")
+        raise ValidationError(f"no field named {name!r}")
 
 
 def _find(kind: str, name: str, names: dict[UUID, str]) -> UUID:
@@ -216,10 +216,10 @@ def document_out(document: Document, access: ShareLevel, names: Names) -> Docume
         document_type=names.document_type(document.document_type_id),
         tags=names.tag_refs(document.tag_ids),
         document_date=document.document_date,
-        attributes={
-            names.attribute_name(key): attribute_json(value)
+        fields={
+            names.field_name(key): field_json(value)
             for key, value in sorted(
-                document.attributes.items(), key=lambda item: names.attribute_name(item[0])
+                document.fields.items(), key=lambda item: names.field_name(item[0])
             )
         },
         created_at=document.created_at,
@@ -316,7 +316,7 @@ def build_server(context: ApiContext, *, text_max: int) -> MCPServer:
     @server.tool(
         name="get_document",
         description="The metadata of a document you may read: title, contact, type, tags, "
-        "date, attributes and processing state.",
+        "date, fields and processing state.",
         annotations=READ_ONLY,
     )
     @guarded
@@ -359,10 +359,10 @@ def build_server(context: ApiContext, *, text_max: int) -> MCPServer:
         description=(
             "Change a document's metadata; needs write access and a read_write token. Leave a "
             "field out to keep it; give null to remove contact, document type or date. `tags` "
-            "is the complete list and replaces the tags. `attributes` maps attribute names to "
+            "is the complete list and replaces the tags. `fields` maps field names to "
             "values (text, choice, link and date as text, number as text or number, boolean, "
             "amount as {amount, currency}); null removes a value. Contact, type, tags and "
-            "attributes must exist (see list_tags). The owner's rules that the change "
+            "fields must exist (see list_tags). The owner's rules that the change "
             "triggers run, as after a change in the web UI."
         ),
         annotations=CHANGES,
@@ -376,7 +376,7 @@ def build_server(context: ApiContext, *, text_max: int) -> MCPServer:
         document_type: Annotated[str | None, Field(default_factory=not_given)],
         tags: Annotated[list[str], Field(default_factory=not_given, max_length=50)],
         document_date: Annotated[date | None, Field(default_factory=not_given)],
-        attributes: Annotated[dict[str, Any], Field(default_factory=not_given)],
+        fields: Annotated[dict[str, Any], Field(default_factory=not_given)],
     ) -> UpdateOut:
         principal = principal_of(ctx)
         if not principal.can_write:
@@ -391,7 +391,7 @@ def build_server(context: ApiContext, *, text_max: int) -> MCPServer:
                 UNSET if tags is NOT_GIVEN else frozenset(names.find_tag(tag) for tag in tags)
             ),
             document_date=UNSET if document_date is NOT_GIVEN else document_date,
-            attributes=_attributes(attributes, names),
+            fields=_fields(fields, names),
         )
         change = await context.documents.change_metadata(user, DocumentId(id), changes)
         if change.access is None:
@@ -432,11 +432,11 @@ def _reference[T](name: str | None, find: Callable[[str], T]) -> Any:
     return None if name is None else find(name)
 
 
-def _attributes(given: dict[str, Any], names: Names) -> dict[AttributeId, object]:
+def _fields(given: dict[str, Any], names: Names) -> dict[FieldId, object]:
     if given is NOT_GIVEN:
         return {}
-    changes: dict[AttributeId, object] = {}
+    changes: dict[FieldId, object] = {}
     for name, value in given.items():
-        definition = names.find_attribute(name)
-        changes[definition.id] = attribute_value(definition, value)
+        definition = names.find_field(name)
+        changes[definition.id] = field_value(definition, value)
     return changes

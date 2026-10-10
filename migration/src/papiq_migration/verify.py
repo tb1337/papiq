@@ -32,7 +32,7 @@ _PATHS = {
     "contact": "/contacts",
     "document_type": "/document-types",
     "tag": "/tags",
-    "attribute": "/attributes",
+    "field": "/fields",
     "drawer": "/drawers",
 }
 # What every Paperless object kind is counted as in the state.
@@ -42,7 +42,7 @@ _ACCOUNTED = (
     ("contact", "correspondents"),
     ("document_type", "document_types"),
     ("tag", "tags"),
-    ("attribute", "custom_fields"),
+    ("field", "custom_fields"),
     ("storage_path", "storage_paths"),
 )
 
@@ -79,7 +79,7 @@ async def verify(
         "contact": snapshot.correspondents,
         "document_type": snapshot.document_types,
         "tag": snapshot.tags,
-        "attribute": snapshot.custom_fields,
+        "field": snapshot.custom_fields,
         "storage_path": snapshot.storage_paths,
     }
     for kind, _ in _ACCOUNTED:
@@ -136,30 +136,30 @@ async def verify(
                     found.get("active"),
                 )
     ids.usernames[norm(me["username"])] = me["id"]
-    fields = {int(item["id"]): item for item in snapshot.custom_fields}
-    for entry in state.objects("attribute"):
+    custom_fields = {int(item["id"]): item for item in snapshot.custom_fields}
+    for entry in state.objects("field"):
         if entry["papiq_id"] is None:
             continue
         objects_checked += 1
-        found = by_id["attribute"].get(entry["papiq_id"])
+        found = by_id["field"].get(entry["papiq_id"])
         if found is None:
-            deviation("attribute", entry["source_id"], "missing in Papiq", entry["name"])
+            deviation("field", entry["source_id"], "missing in Papiq", entry["name"])
             continue
         key = (
             entry["source_id"]
             if entry["source_id"] in ("asn", "notes")
             else field_key(int(entry["source_id"]))
         )
-        ids.attributes[key] = entry["papiq_id"]
+        ids.fields[key] = entry["papiq_id"]
         if entry["source_id"] in ("asn", "notes"):
             ids.specs[key] = ASN_SPEC if key == "asn" else NOTES_SPEC
         else:
-            spec, _ = field_spec(fields[int(entry["source_id"])])
+            spec, _ = field_spec(custom_fields[int(entry["source_id"])])
             if spec is not None:
                 ids.specs[key] = spec
                 if found["data_type"] != spec.data_type:
                     deviation(
-                        "attribute",
+                        "field",
                         entry["source_id"],
                         "type differs",
                         spec.data_type,
@@ -167,13 +167,13 @@ async def verify(
                     )
                 missing = [c for c in spec.choices if c not in found.get("choices", [])]
                 if missing:
-                    deviation("attribute", entry["source_id"], "options missing", missing)
+                    deviation("field", entry["source_id"], "options missing", missing)
 
-    types = {attribute_id: found["data_type"] for attribute_id, found in by_id["attribute"].items()}
+    types = {field_id: found["data_type"] for field_id, found in by_id["field"].items()}
     users = {int(user["id"]): user for user in snapshot.users}
     expected: dict[int, Prepared] = {
         int(document["id"]): prepare(
-            document, ids=ids, users=users, custom_fields=fields, currency=config.currency
+            document, ids=ids, users=users, custom_fields=custom_fields, currency=config.currency
         )
         for document in snapshot.documents
     }
@@ -295,7 +295,7 @@ def _compare(
     metadata was applied (then there is nothing to compare: the document is a finding)."""
     id, meta = item.id, item.metadata
     outcomes = (actual.get("processing") or {}).get("outcomes") or {}
-    classified, extracted = "classify" in outcomes, "extract_attributes" in outcomes
+    classified, extracted = "classify" in outcomes, "extract_fields" in outcomes
     if classified:
         if actual["title"] != meta["title"]:
             deviation("document", id, "title differs", meta["title"], actual["title"])
@@ -313,13 +313,13 @@ def _compare(
                 actual.get("document_date"),
             )
     if extracted:
-        for attribute_id in sorted(set(meta["attributes"]) | set(actual.get("attributes") or {})):
+        for field_id in sorted(set(meta["fields"]) | set(actual.get("fields") or {})):
             want, have = (
-                meta["attributes"].get(attribute_id),
-                (actual.get("attributes") or {}).get(attribute_id),
+                meta["fields"].get(field_id),
+                (actual.get("fields") or {}).get(field_id),
             )
-            if not _same(want, have, types.get(attribute_id, "text")):
-                deviation("document", id, f"attribute {attribute_id} differs", want, have)
+            if not _same(want, have, types.get(field_id, "text")):
+                deviation("document", id, f"field {field_id} differs", want, have)
     if actual["owner_id"] != item.owner:
         deviation(
             "document",
@@ -354,7 +354,7 @@ def _paperless_checksum(document: dict[str, Any]) -> str | None:
 
 
 def _same(want: Any, have: Any, data_type: str) -> bool:
-    """Attribute values are equal; numbers and amounts by value (`12` and `1.2E+1`)."""
+    """Field values are equal; numbers and amounts by value (`12` and `1.2E+1`)."""
     if want is None or have is None:
         return want is None and have is None
     try:

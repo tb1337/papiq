@@ -12,6 +12,8 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+import sqlalchemy as sa
+from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from sqlalchemy import Connection, insert, inspect, select
@@ -19,10 +21,12 @@ from sqlalchemy import Connection, insert, inspect, select
 from papiq.adapters.outbound.memory import ManualClock, MemoryObjectStore
 from papiq.adapters.outbound.sql import Database, migrate, schema_state
 from papiq.adapters.outbound.sql import tables as t
-from papiq.core.domain.attributes import AttributeDefinition, AttributeType, Money
+from papiq.adapters.outbound.sql.migrations import alembic_config
+from papiq.adapters.outbound.sql.types import UtcDateTime, json_type
 from papiq.core.domain.documents import Document, DocumentChanges
 from papiq.core.domain.errors import ConflictError, DuplicateDocumentError
 from papiq.core.domain.events import DomainEvent
+from papiq.core.domain.fields import FieldDefinition, FieldType, Money
 from papiq.core.domain.ids import new_id
 from papiq.core.domain.jobs import Job
 from papiq.core.domain.pipeline import PIPELINE
@@ -44,23 +48,23 @@ class SqlAdapterSuite:
         self, uow_factory: UnitOfWorkFactory
     ) -> None:
         owner, drawer = await owner_with_drawer(uow_factory)
-        number = AttributeDefinition.create(name="n", data_type=AttributeType.NUMBER, now=NOW)
-        amount = AttributeDefinition.create(name="a", data_type=AttributeType.AMOUNT, now=NOW)
+        number = FieldDefinition.create(name="n", data_type=FieldType.NUMBER, now=NOW)
+        amount = FieldDefinition.create(name="a", data_type=FieldType.AMOUNT, now=NOW)
         precise = Decimal("12345678901234567890.123456789012345678")
         money = Money(Decimal("0.10"), "EUR")
         document = builders.document(owner, drawer)
         document.apply_changes(
-            DocumentChanges(attributes={number.id: precise, amount.id: money}),
+            DocumentChanges(fields={number.id: precise, amount.id: money}),
             {number.id: number, amount.id: amount},
             NOW,
         )
         async with uow_factory() as uow:
-            await uow.attributes.add(number)
-            await uow.attributes.add(amount)
+            await uow.fields.add(number)
+            await uow.fields.add(amount)
             await uow.documents.add(document)
             await uow.commit()
         async with uow_factory() as uow:
-            stored = (await uow.documents.get(document.id)).attributes
+            stored = (await uow.documents.get(document.id)).fields
         assert str(stored[number.id]) == str(precise)
         stored_money = stored[amount.id]
         assert isinstance(stored_money, Money)
@@ -269,7 +273,7 @@ class SqlAdapterSuite:
         event_bus_factory: EventBusFactory,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Log records must not use reserved attribute names (`name` raised KeyError)."""
+        """Log records must not use reserved field names (`name` raised KeyError)."""
         caplog.set_level(logging.INFO)
         bus = event_bus_factory()
         recorder = Recorder()
@@ -304,6 +308,114 @@ class MigrationSuite:
             await connection.exec_driver_sql("UPDATE alembic_version SET version_num = '0000'")
         assert await schema_state(empty_database) == "newer"  # not a revision of this version
 
+    async def test_attributes_become_fields_and_back(self, empty_database: Database) -> None:
+        """Revision 0007 moves definitions, their types and values and renames stored names by
+        their place; text a person wrote stays. The downgrade restores them."""
+        await migrate(empty_database, "0006")
+        ids = {name: new_id() for name in ("user", "drawer", "document", "field", "type", "rule")}
+        field, document = str(ids["field"]), str(ids["document"])
+        check = {"field": f"attribute:{field}", "outcome": "ok", "reason": "attribute"}
+        condition = {"field": "attribute", "op": "is", "value": "x", "attribute_id": field}
+        text = {"field": "text", "op": "contains", "value": "attribute"}
+        rows: list[tuple[sa.TableClause | sa.Table, dict[str, Any]]] = [
+            (t.users, {"id": ids["user"], "username": "a", "username_key": "a", "role": "admin"}),
+            (t.drawers, {"id": ids["drawer"], "owner_id": ids["user"], "name_key": "d"}),
+            (t.document_types, {"id": ids["type"], "name": "Invoice", "name_key": "invoice"}),
+            (_OLD["definitions"], {"id": ids["field"], "name": "Due", "name_key": "due"}),
+            (_OLD["types"], {"attribute_id": ids["field"], "document_type_id": ids["type"]}),
+            (
+                t.documents,
+                {
+                    "id": ids["document"],
+                    "owner_id": ids["user"],
+                    "drawer_id": ids["drawer"],
+                    "processing_step": "extract_attributes",
+                    "processing_outcomes": {"classify": "ok", "extract_attributes": "ok"},
+                },
+            ),
+            (_OLD["values"], {"document_id": ids["document"], "attribute_id": ids["field"]}),
+            (
+                t.processing_log,
+                {
+                    "document_id": ids["document"],
+                    "step": "extract_attributes",
+                    "input": {"prompt": "extract-1"},
+                    "output": {"answer": {"attributes": {"a1": "attributes"}}, "fields": [check]},
+                },
+            ),
+            (t.rules, {"id": ids["rule"], "scope": "global", "current_version": 1}),
+            (
+                t.rule_versions,
+                {
+                    "rule_id": ids["rule"],
+                    "number": 1,
+                    "conditions": {"all": [condition, text], "negate": False},
+                    "actions": [
+                        {"type": "set_attribute", "attribute_id": field, "value": "x"},
+                        {"type": "set_title", "title": "set_attribute"},
+                    ],
+                },
+            ),
+            (
+                t.jobs,
+                {
+                    "id": new_id(),
+                    "kind": "pipeline.step",
+                    "payload": {"document_id": document, "step": "extract_attributes", "run": 1},
+                    "dedup_key": f"{document}:1:extract_attributes",
+                },
+            ),
+            (
+                t.outbox,
+                {
+                    "event_id": new_id(),
+                    "type": "document.updated",
+                    "payload": {"document_id": document, "fields": ["title", "attributes"]},
+                },
+            ),
+        ]
+        async with empty_database.writing() as connection:
+            for table, values in rows:
+                columns = table.c
+                defaults = {k: v for k, v in _DEFAULTS.items() if k in columns}
+                await connection.execute(insert(table).values({**defaults, **values}))
+        before = await _stored(empty_database, old=True)
+
+        await migrate(empty_database)
+        after = await _stored(empty_database, old=False)
+        assert after["definition"] == (ids["field"], "Due", "date")
+        assert after["scope"] == (ids["field"], ids["type"])
+        assert after["value"] == (ids["document"], ids["field"], "text", "Monday")
+        assert after["document"] == ("extract_fields", {"classify": "ok", "extract_fields": "ok"})
+        assert after["log"] == (
+            "extract_fields",
+            {
+                "answer": {"fields": {"a1": "attributes"}},
+                "fields": [{**check, "field": f"field:{field}"}],
+            },
+        )
+        assert after["rule"] == (
+            {
+                "all": [{"field": "field", "op": "is", "value": "x", "field_id": field}, text],
+                "negate": False,
+            },
+            [
+                {"type": "set_field", "field_id": field, "value": "x"},
+                {"type": "set_title", "title": "set_attribute"},
+            ],
+        )
+        assert after["job"] == (
+            {"document_id": document, "step": "extract_fields", "run": 1},
+            f"{document}:1:extract_fields",
+        )
+        assert after["event"] == {"document_id": document, "fields": ["title", "fields"]}
+
+        await _downgrade(empty_database, "0006")
+        restored = await _stored(empty_database, old=True)
+        # The answer's key stays `fields`: checks were stored under `fields` before as well.
+        before["log"][1]["answer"] = {"fields": {"a1": "attributes"}}
+        assert restored == before
+
     async def test_migrations_match_the_table_definitions(
         self, empty_database: Database, model_database: Database
     ) -> None:
@@ -319,6 +431,111 @@ class MigrationSuite:
         async with model_database.reading() as connection:
             modelled = await connection.run_sync(_schema)
         assert migrated == modelled
+
+
+_OLD = {
+    "definitions": sa.table(
+        "attribute_definitions",
+        sa.column("id", sa.Uuid()),
+        sa.column("name", sa.Text()),
+        sa.column("name_key", sa.Text()),
+        sa.column("data_type", sa.Text()),
+        sa.column("is_global", sa.Boolean()),
+        sa.column("choices", json_type()),
+        sa.column("created_at", UtcDateTime()),
+        sa.column("version", sa.Integer()),
+    ),
+    "types": sa.table(
+        "attribute_document_types",
+        sa.column("attribute_id", sa.Uuid()),
+        sa.column("document_type_id", sa.Uuid()),
+    ),
+    "values": sa.table(
+        "document_attributes",
+        sa.column("document_id", sa.Uuid()),
+        sa.column("attribute_id", sa.Uuid()),
+        sa.column("kind", sa.Text()),
+        sa.column("value_text", sa.Text()),
+    ),
+}
+_DEFAULTS: dict[str, Any] = {
+    "created_at": NOW,
+    "updated_at": NOW,
+    "occurred_at": NOW,
+    "recorded_at": NOW,
+    "started_at": NOW,
+    "run_at": NOW,
+    "version": 1,
+    "is_default": True,
+    "data_type": "date",
+    "is_global": False,
+    "choices": [],
+    "kind": "text",
+    "value_text": "Monday",
+    "sha256": "0" * 64,
+    "title": "T",
+    "original_filename": "t.pdf",
+    "media_type": "application/pdf",
+    "channel": "api",
+    "processing_status": "running",
+    "processing_run": 1,
+    "processing_outcomes": {},
+    "run": 1,
+    "outcome": "ok",
+    "pipeline_version": "1",
+    "duration_us": 1,
+    "enabled": True,
+    "name": "N",
+    "priority": 1,
+    "triggers": ["ingest"],
+    "status": "queued",
+    "attempts": 0,
+    "releases": 0,
+}
+
+
+async def _stored(database: Database, *, old: bool) -> dict[str, Any]:
+    """The rows of `test_attributes_become_fields_and_back`, under the old or new names."""
+    prefix = "attribute" if old else "field"
+    id = sa.column(f"{prefix}_id", sa.Uuid())
+    definitions = sa.table(
+        f"{prefix}_definitions",
+        sa.column("id", sa.Uuid()),
+        sa.column("name", sa.Text()),
+        sa.column("data_type", sa.Text()),
+    )
+    types = sa.table(f"{prefix}_document_types", id, sa.column("document_type_id", sa.Uuid()))
+    values = sa.table(
+        "document_attributes" if old else "document_fields",
+        sa.column("document_id", sa.Uuid()),
+        sa.column(id.name, sa.Uuid()),
+        sa.column("kind", sa.Text()),
+        sa.column("value_text", sa.Text()),
+    )
+    async with database.reading() as connection:
+
+        async def one(table: Any) -> Any:
+            return (await connection.execute(select(table))).one()
+
+        definition, scope, value = await one(definitions), await one(types), await one(values)
+        document, log = await one(t.documents), await one(t.processing_log)
+        rule, job, event = await one(t.rule_versions), await one(t.jobs), await one(t.outbox)
+    return {
+        "definition": tuple(definition),
+        "scope": tuple(scope),
+        "value": tuple(value),
+        "document": (document.processing_step, document.processing_outcomes),
+        "log": (log.step, log.output),
+        "rule": (rule.conditions, rule.actions),
+        "job": (job.payload, job.dedup_key),
+        "event": event.payload,
+    }
+
+
+async def _downgrade(database: Database, revision: str) -> None:
+    async with database.engine.connect() as connection:
+        await connection.run_sync(lambda sync: command.downgrade(alembic_config(sync), revision))
+        await connection.commit()
 
 
 def _compare(connection: Connection) -> list[Any]:

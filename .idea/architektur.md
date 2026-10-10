@@ -141,13 +141,13 @@ Angelehnt an Paperless-ngx, ohne Speicherpfade, mit Schubladen als Ablage- und R
 | --- | --- | --- |
 | Dokument | Datei mit Metadaten | Besitzer, genau eine Schublade, höchstens ein Kontakt, höchstens ein Typ, Hash, Dokumentdatum |
 | Kontakt | Gegenseite des Dokuments (Paperless: Korrespondent) | höchstens einer pro Dokument (leer, bis die Klassifizierung oder eine Person einen setzt); global, ohne Besitzer |
-| Dokumenttyp | Art des Dokuments | global; bringt zugeordnete Attribute mit |
+| Dokumenttyp | Art des Dokuments | global; bringt zugeordnete Felder mit |
 | Tag | Klassifizierung | beliebig viele pro Dokument; global; trägt keine Rechte |
-| Attribut | frei definierbares Feld (Paperless: Custom Field) | Geltungsbereich global oder je Dokumenttyp; fester Datentyp |
+| Feld | frei definierbares Feld (Paperless: Custom Field) | Geltungsbereich global oder je Dokumenttyp; fester Datentyp |
 | Schublade | Ablage- und Rechte-Einheit | hat einen Besitzer; teilbar; jeder Nutzer hat eine private Standardschublade (nicht teilbar, nicht löschbar) |
 
-- Stammdaten (Kontakte, Typen, Tags, Attribute) pflegen nur Admins.
-- Attribut-Datentypen: Text, Zahl, Betrag (Dezimalzahl mit ISO-4217-Währung je Wert), Datum, Ja/Nein, Auswahl (eine Option aus fester Liste), Link (absolute http(s)-URL).
+- Stammdaten (Kontakte, Typen, Tags, Felder) pflegen nur Admins.
+- Felddatentypen: Text, Zahl, Betrag (Dezimalzahl mit ISO-4217-Währung je Wert), Datum, Ja/Nein, Auswahl (eine Option aus fester Liste), Link (absolute http(s)-URL).
 
 ## Berechtigungen
 
@@ -180,7 +180,7 @@ Jedes Dokument durchläuft feste Schritte, jeder Schritt ist einzeln wiederholba
 **Drei Ebenen**
 
 1. Technische Pipeline, fest im Code: Empfangen (Hash, Dublette, S3) → OCR → Parsen.
-2. Fachliche Verarbeitung, konfigurierbar: Klassifizieren → Attribute je Dokumenttyp extrahieren → Regeln anwenden.
+2. Fachliche Verarbeitung, konfigurierbar: Klassifizieren → Felder je Dokumenttyp extrahieren → Regeln anwenden.
 3. Mensch im Ablauf: Posteingang für alles, was nicht grün ist.
 
 **Zustandsautomat**
@@ -204,7 +204,7 @@ Die Lane eines Dokuments ist das schlechteste Ergebnis aller Schritte. Solange d
 
 - Kontakt: Abgleich gegen bestehende Kontakte; kein Treffer → neuer Kontakt → Gelb.
 - Dokumenttyp: LLM wählt nur aus der bestehenden Liste; Vorschlag eines neuen Typs → Gelb.
-- Attribute, Datum, Betrag: Wert muss im Dokumenttext vorkommen und gültig sein; sonst Gelb. Ein Datumsattribut gleich dem Dokumentdatum ist nur ein Vorschlag (Gelb), weil Modelle das Dokumentdatum für fehlende Daten wie die Fälligkeit einsetzen.
+- Felder, Datum, Betrag: Wert muss im Dokumenttext vorkommen und gültig sein; sonst Gelb. Ein Datumsfeld gleich dem Dokumentdatum ist nur ein Vorschlag (Gelb), weil Modelle das Dokumentdatum für fehlende Daten wie die Fälligkeit einsetzen.
 - Regelkonflikt (zwei Regeln, verschiedene Schubladen) → Gelb.
 
 **Bewertung des lokalen Modells (07.10.2026):** `qwen3:8b` mit 8192 Kontext auf dem NUC, 5 Dokumente des Bewertungssatzes: kein falsches Grün, keine Änderung ohne bestandene Prüfung, Kontakt, Typ, Datum und Beträge richtig, Anweisungen im Text ohne Wirkung. Zweimal grün mit falscher Fälligkeit (Dokumentdatum eingesetzt), daraufhin die Regel oben. Laufzeit 3 bis 10 Minuten pro Dokument (Median 190 s); empfohlen ist daher `PAPIQ_LLM_TIMEOUT=600`.
@@ -231,7 +231,7 @@ Regeln sind Daten in der Datenbank, keine Code-Änderung; sie werden in der Web-
 
 | Art | Angelegt von | Wirkt auf | Erlaubte Aktionen |
 | --- | --- | --- | --- |
-| Globale Regel | Admin | alle Dokumente | Tags, Attribute, Prüfung erzwingen – nichts, was Sichtbarkeit ändert |
+| Globale Regel | Admin | alle Dokumente | Tags, Felder, Prüfung erzwingen – nichts, was Sichtbarkeit ändert |
 | Nutzer-Regel | jeder Nutzer | nur eigene Dokumente | alle Aktionen; Schublade nur, wenn der Besitzer der Regel dort schreiben darf (auch wenn ein Admin sie ändert) |
 
 **Aufbau einer Regel**
@@ -240,9 +240,9 @@ Regeln sind Daten in der Datenbank, keine Code-Änderung; sie werden in der Web-
 | --- | --- |
 | Auslöser | Eingang eines Dokuments, jede Dokumentänderung |
 | Bedingungen | Baum aus UND/ODER-Gruppen, jede Gruppe negierbar; jede Bedingung = Feld + Operator + Wert |
-| Felder | Kontakt, Dokumenttyp, Tags, Eingangskanal (Web, API, Migration; später weitere wie E-Mail), Text, Attribute, Dokumentdatum |
+| Felder | Kontakt, Dokumenttyp, Tags, Eingangskanal (Web, API, Migration; später weitere wie E-Mail), Text, Felder, Dokumentdatum |
 | Operatoren (je nach Datentyp) | ist, ist eines von, enthält, Muster (Regex), größer/kleiner, vorhanden/fehlt |
-| Aktionen | Schublade setzen, Kontakt setzen, Typ setzen, Titel setzen (mit Platzhaltern), Tags hinzufügen/entfernen, Attribut setzen, Prüfung erzwingen (→ Posteingang) |
+| Aktionen | Schublade setzen, Kontakt setzen, Typ setzen, Titel setzen (mit Platzhaltern), Tags hinzufügen/entfernen, Feld setzen, Prüfung erzwingen (→ Posteingang) |
 
 Gespeichert als JSON, geprüft mit Pydantic; die UI bietet einen Baukasten.
 
@@ -250,7 +250,7 @@ Gespeichert als JSON, geprüft mit Pydantic; die UI bietet einen Baukasten.
 
 - **Position:** Regeln laufen nach der LLM-Klassifizierung und sehen deren Ergebnis.
 - **Reihenfolge:** Alle zutreffenden Regeln laufen, sortiert nach Priorität; Tags werden vereinigt.
-- **Konflikte → Gelb:** Setzen zwei Regeln unterschiedliche Werte für ein Einzelfeld (Schublade, Kontakt, Typ, Attribut), oder widerspricht eine Regel dem LLM-Ergebnis, geht das Dokument auf Gelb. Regeln überschreiben das LLM nicht stillschweigend.
+- **Konflikte → Gelb:** Setzen zwei Regeln unterschiedliche Werte für ein Einzelfeld (Schublade, Kontakt, Typ, Feld), oder widerspricht eine Regel dem LLM-Ergebnis, geht das Dokument auf Gelb. Regeln überschreiben das LLM nicht stillschweigend.
 - **Schleifenschutz:** Regeln laufen pro Änderung einmal; eine Regel-Aktion löst keine weiteren Regeln aus.
 - **Misstrauen (M7):** Kontakt, Typ und Tags, die das Modell gesetzt und niemand bestätigt hat, gelten als unsicher. Trifft eine Regel nur deshalb zu, legt sie nicht in eine geteilte oder fremde Schublade ab.
 - **Gelb nur in der Pipeline (M7):** Konflikte und „Prüfung erzwingen" machen ein Dokument nur beim Eingang gelb. Bei einer Änderung durch eine Person bleibt es grün; nicht Anwendbares wird nur gemeldet (ein abgelegtes Dokument verschwände sonst für andere).
@@ -345,8 +345,8 @@ Ein eigener CLI-Client (`migration/`) liest die Paperless-REST-API und schreibt 
 | Korrespondent | Kontakt | per Name zugeordnet |
 | Dokumenttyp | Dokumenttyp | per Name zugeordnet |
 | Tag | Tag | per Name zugeordnet; Hierarchie entfällt |
-| Custom Field | Attribut, global | string/longtext → Text, url → Link, date → Datum, boolean → Ja/Nein, integer/float → Zahl, monetary → Betrag (Währung aus dem Wert, sonst Option, Standard EUR), select → Auswahl; documentlink entfällt |
-| ASN, Notizen | Attribute „ASN“ (Zahl), „Notizen“ (Text) | |
+| Custom Field | Feld, global | string/longtext → Text, url → Link, date → Datum, boolean → Ja/Nein, integer/float → Zahl, monetary → Betrag (Währung aus dem Wert, sonst Option, Standard EUR), select → Auswahl; documentlink entfällt |
+| ASN, Notizen | Felder „ASN“ (Zahl), „Notizen“ (Text) | |
 | Besitzer | Besitzer | ohne Besitzer: der ausführende Admin |
 | Speicherpfad | – | entfällt, nur gezählt |
 | Berechtigungen pro Dokument | Schublade des Besitzers | ohne zusätzliche Rechte: Standardschublade; sonst eine Schublade je Kombination aus Lesern und Schreibern (Gruppen zu Nutzern aufgelöst), geteilt mit „lesen“ bzw. „lesen/schreiben“ |
@@ -355,8 +355,8 @@ Ein eigener CLI-Client (`migration/`) liest die Paperless-REST-API und schreibt 
 
 **API-Erweiterungen für die Migration (M12)**
 
-- `POST /documents` nimmt `owner` (nur Admins; der Besitzer muss aktiv sein) und `metadata` (JSON: Titel, Kontakt, Typ, Tags, Dokumentdatum, Attribute; nur Admins und nur mit `channel=migration`). Referenzen und Attributwerte werden beim Upload geprüft (422, nichts gespeichert).
-- Die Metadaten stehen im Protokolleintrag `receive` (`imported`); das Schema bleibt unverändert. Klassifizieren und Attribute extrahieren übernehmen sie bei Kanal `migration` ohne LLM (Ergebnis ok, Grund „taken over from the source system“, `model_version` `imported`). Empfangen, OCR, Parsen und Regeln laufen normal, die Lane ergibt sich wie sonst. Die übernommenen Werte haben keine Feldprüfungen im Protokoll und gelten für Regeln damit als von Menschen gesetzt, nicht als Modellvorschlag. Ein „ab Schritt neu verarbeiten“ wendet dieselben Werte erneut an.
+- `POST /documents` nimmt `owner` (nur Admins; der Besitzer muss aktiv sein) und `metadata` (JSON: Titel, Kontakt, Typ, Tags, Dokumentdatum, Felder; nur Admins und nur mit `channel=migration`). Referenzen und Feldwerte werden beim Upload geprüft (422, nichts gespeichert).
+- Die Metadaten stehen im Protokolleintrag `receive` (`imported`); das Schema bleibt unverändert. Klassifizieren und Felder extrahieren übernehmen sie bei Kanal `migration` ohne LLM (Ergebnis ok, Grund „taken over from the source system“, `model_version` `imported`). Empfangen, OCR, Parsen und Regeln laufen normal, die Lane ergibt sich wie sonst. Die übernommenen Werte haben keine Feldprüfungen im Protokoll und gelten für Regeln damit als von Menschen gesetzt, nicht als Modellvorschlag. Ein „ab Schritt neu verarbeiten“ wendet dieselben Werte erneut an.
 - `POST /drawers` nimmt `owner_id` (nur Admins), `POST /users` genügt mit Admin-Token (`read_write`) für die Rolle „Nutzer“ ohne Passwort (Passwort oder Rolle Admin weiter nur mit Sitzung). Die Dokumentdetails nennen `sha256`.
 - Keine Erweiterung gibt Nicht-Admins Rechte.
 
@@ -364,7 +364,7 @@ Ein eigener CLI-Client (`migration/`) liest die Paperless-REST-API und schreibt 
 
 - [x] Backup-Strategie für SQLite und Postgres (nur Dokumentation in `deploy/README.md`: SQLite-Backup-API bzw. `pg_dump`, Datenbank vor Objekten, `reindex` nach der Wiederherstellung; Tobi 08.10.2026; ein `backup`-Befehl ggf. in M13)
 - [x] Konfidenz-Schwellen und Anzahl automatischer Retries festlegen (0,9 und 0,75; eine Nachfrage bei unpassender Antwort, dann Rot; Schritt-Retries `PAPIQ_STEP_MAX_ATTEMPTS`)
-- [x] Attribut-Datentypen bestätigen
+- [x] Felddatentypen bestätigen
 - [x] Embedding-Modell für die semantische Suche bestätigen (`snowflake-arctic-embed2`, Tobi 07.10.2026; Bewertung unter „Suche“)
 - [x] Migration: Paperless-Speicherpfade und -Berechtigungen auf Schubladen abbilden (Speicherpfade entfallen, Berechtigungen: eine Schublade des Besitzers je Kombination aus Lesern und Schreibern; Tobi 08.10.2026)
 - [x] Verfügbarkeit des Namens „Papiq“ prüfen (GitHub, PyPI, Docker Hub, Marken) – geprüft 09.10.2026 (M13): PyPI, npm, Docker Hub, GHCR und papiq.de/.io/.app/.dev frei; GitHub-Nutzer `PapiQ` belegt (keine Organisation `papiq`, Repo bleibt `tb1337/papiq`); keine Marke „PAPIQ“ für Software in DE/EU (TMview), nahe Zeichen „papique“ (Papierwaren) und „Paper IQ“/„PaperIQ“ (Papiermaschinen, KI-Dokumentensuche). Der Name bleibt; die Entscheidung vor dem Tag `v0.1.0` liegt bei Tobi.

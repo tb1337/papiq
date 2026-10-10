@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import AttributesPanel from '#lib/components/AttributesPanel.svelte';
+	import FieldsPanel from '#lib/components/FieldsPanel.svelte';
 	import MasterDataList from '#lib/components/MasterDataList.svelte';
 	import * as Tabs from '#lib/components/ui/tabs/index.ts';
 	import { m } from '#lib/paraglide/messages.js';
 	import { session } from '#lib/session.svelte.ts';
 
-	const TABS = ['contacts', 'document-types', 'tags', 'attributes'] as const;
+	const TABS = ['contacts', 'document-types', 'tags', 'fields'] as const;
 	type Tab = (typeof TABS)[number];
 
 	// The tab stands in the URL; the API refuses everyone but admins.
@@ -31,12 +31,12 @@
 				<Tabs.Trigger value="contacts">{m.master_contacts()}</Tabs.Trigger>
 				<Tabs.Trigger value="document-types">{m.master_types()}</Tabs.Trigger>
 				<Tabs.Trigger value="tags">{m.master_tags()}</Tabs.Trigger>
-				<Tabs.Trigger value="attributes">{m.master_attributes()}</Tabs.Trigger>
+				<Tabs.Trigger value="fields">{m.master_fields()}</Tabs.Trigger>
 			</Tabs.List>
 			<div class="mt-4">
 				{#key tab}
-					{#if tab === 'attributes'}
-						<AttributesPanel />
+					{#if tab === 'fields'}
+						<FieldsPanel />
 					{:else}
 						<MasterDataList kind={tab} />
 					{/if}

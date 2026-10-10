@@ -52,7 +52,7 @@ CROP_WORDS = 30
 FETCH_PAGE = 1000
 _EXCERPT = 300  # characters of an error message from Meilisearch
 
-SEARCHABLE = ["title", "contact", "document_type", "tags", "attributes", "filename", "text"]
+SEARCHABLE = ["title", "contact", "document_type", "tags", "fields", "filename", "text"]
 FILTERABLE = ["owner_id", "drawer_id", "lane", "contact_id", "document_type_id", "tag_ids"]
 SORTABLE = ["document_date", "created_at"]
 STATE_FIELDS = ["id", "version", "embedding_model", "embedding_digest"]
@@ -312,7 +312,7 @@ class MeilisearchIndex:
             "document_type": document.document_type,
             "tag_ids": [str(tag) for tag in document.tag_ids],
             "tags": list(document.tags),
-            "attributes": list(document.attributes),
+            "fields": list(document.fields),
             "document_date": None
             if document.document_date is None
             else int(datetime.combine(document.document_date, time(), UTC).timestamp()),

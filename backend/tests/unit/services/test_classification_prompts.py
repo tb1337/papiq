@@ -6,12 +6,12 @@ from typing import Any
 import pytest
 
 from papiq.adapters.outbound.memory.language_model import minimal_instance
-from papiq.core.domain.attributes import AttributeDefinition, AttributeType
+from papiq.core.domain.fields import FieldDefinition, FieldType
 from papiq.core.services.classification.answers import (
     AnswerError,
-    attribute_keys,
     classify_schema,
     extract_schema,
+    field_keys,
     parse_classify,
     parse_extract,
 )
@@ -88,30 +88,30 @@ def test_unfit_answers(content: str, error: str) -> None:
         parse_classify(content)
 
 
-def definitions() -> list[AttributeDefinition]:
+def definitions() -> list[FieldDefinition]:
     return [
-        AttributeDefinition.create(name="Betrag", data_type=AttributeType.AMOUNT, now=NOW),
-        AttributeDefinition.create(name="Bezahlt", data_type=AttributeType.BOOLEAN, now=NOW),
-        AttributeDefinition.create(
-            name="Art", data_type=AttributeType.CHOICE, choices=["Strom", "Gas"], now=NOW
+        FieldDefinition.create(name="Betrag", data_type=FieldType.AMOUNT, now=NOW),
+        FieldDefinition.create(name="Bezahlt", data_type=FieldType.BOOLEAN, now=NOW),
+        FieldDefinition.create(
+            name="Art", data_type=FieldType.CHOICE, choices=["Strom", "Gas"], now=NOW
         ),
-        AttributeDefinition.create(name="Nummer", data_type=AttributeType.TEXT, now=NOW),
+        FieldDefinition.create(name="Nummer", data_type=FieldType.TEXT, now=NOW),
     ]
 
 
 def test_extract_schema_and_answer() -> None:
-    keys = attribute_keys(definitions())
+    keys = field_keys(definitions())
     assert list(keys) == ["a1", "a2", "a3", "a4"]
     schema: Any = extract_schema(keys)
-    attributes = schema["properties"]["attributes"]
-    values = {key: item["properties"]["value"] for key, item in attributes["properties"].items()}
+    fields = schema["properties"]["fields"]
+    values = {key: item["properties"]["value"] for key, item in fields["properties"].items()}
     assert values["a2"] == {"type": ["boolean", "null"]}
     assert values["a3"] == {"type": ["string", "null"], "enum": ["Strom", "Gas", None]}
     assert values["a1"]["anyOf"][1] == {"type": "null"}
     assert parse_extract(json.dumps(minimal_instance(schema)), list(keys))["a1"].value is None
 
     answer = {
-        "attributes": {
+        "fields": {
             "a1": {"value": {"amount": "84.20", "currency": "EUR"}, "evidence": "84,20 €"},
             "a2": {"value": True, "evidence": "bezahlt"},
             "a3": {"value": "Strom", "evidence": None},
@@ -121,10 +121,10 @@ def test_extract_schema_and_answer() -> None:
     parsed = parse_extract(json.dumps(answer), list(keys))
     assert parsed["a1"].value == {"amount": "84.20", "currency": "EUR"}
     assert parsed["a2"].evidence == "bezahlt"
-    with pytest.raises(AnswerError, match="attributes: missing a4"):
-        parse_extract(json.dumps({"attributes": {"a1": answer["attributes"]["a1"]}}), ["a1", "a4"])
+    with pytest.raises(AnswerError, match="fields: missing a4"):
+        parse_extract(json.dumps({"fields": {"a1": answer["fields"]["a1"]}}), ["a1", "a4"])
     with pytest.raises(AnswerError, match="unexpected a9"):
-        parse_extract(json.dumps({"attributes": answer["attributes"] | {"a9": None}}), list(keys))
+        parse_extract(json.dumps({"fields": answer["fields"] | {"a9": None}}), list(keys))
 
 
 def test_shorten_keeps_beginning_and_end() -> None:
@@ -150,7 +150,7 @@ def test_messages_frame_the_document() -> None:
     other = classify_message(["Rechnung"], [], shorten("Other text.", 100))
     assert opening not in other  # the marker depends on the text
 
-    keys = attribute_keys(definitions())
+    keys = field_keys(definitions())
     message = extract_message("Rechnung", keys, shorten("x" * 300, 100))
     assert 'The document is of type "Rechnung".' in message
     assert '- a3: "Art" (one of the options): "Strom", "Gas"' in message

@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 
-from papiq.core.domain.attributes import AttributeType
 from papiq.core.domain.documents import Document, DocumentChanges
 from papiq.core.domain.drawers import Drawer, ShareLevel
 from papiq.core.domain.errors import (
@@ -13,6 +12,7 @@ from papiq.core.domain.errors import (
     ValidationError,
 )
 from papiq.core.domain.events import DocumentDeleted, DocumentFiled, DocumentUpdated
+from papiq.core.domain.fields import FieldType
 from papiq.core.domain.ids import ContactId, DocumentId, DrawerId, TagId, UserId, new_id
 from papiq.core.domain.pipeline import Lane, Step
 from papiq.core.domain.users import Role, User
@@ -85,7 +85,7 @@ async def test_writer_updates_metadata(world: World, scene: Scene) -> None:
     admin = await world.user(role=Role.ADMIN)
     contact = await world.master_data.create_contact(admin.id, "Stadtwerke")
     tag = await world.master_data.create_tag(admin.id, "Energy")
-    note = await world.master_data.create_attribute(admin.id, "Meter", AttributeType.TEXT)
+    note = await world.master_data.create_field(admin.id, "Meter", FieldType.TEXT)
     updated = await world.documents.update_metadata(
         scene.writer.id,
         scene.document.id,
@@ -93,16 +93,16 @@ async def test_writer_updates_metadata(world: World, scene: Scene) -> None:
             contact_id=contact.id,
             tag_ids=frozenset({tag.id}),
             document_date=date(2026, 9, 30),
-            attributes={note.id: "4711"},
+            fields={note.id: "4711"},
         ),
     )
     assert updated.contact_id == contact.id
-    assert updated.attributes == {note.id: "4711"}
+    assert updated.fields == {note.id: "4711"}
     stored = await world.documents.get(scene.owner.id, scene.document.id)
     assert stored == updated
     (event,) = world.events()
     assert isinstance(event, DocumentUpdated)
-    assert event.fields == ("contact_id", "tag_ids", "document_date", "attributes")
+    assert event.fields == ("contact_id", "tag_ids", "document_date", "fields")
 
 
 async def test_reader_cannot_update(world: World, scene: Scene) -> None:
@@ -126,12 +126,12 @@ async def test_references_must_exist(world: World, scene: Scene) -> None:
             await world.documents.update_metadata(scene.owner.id, scene.document.id, changes)
 
 
-async def test_attribute_values_are_checked(world: World, scene: Scene) -> None:
+async def test_field_values_are_checked(world: World, scene: Scene) -> None:
     admin = await world.user(role=Role.ADMIN)
-    total = await world.master_data.create_attribute(admin.id, "Total", AttributeType.NUMBER)
+    total = await world.master_data.create_field(admin.id, "Total", FieldType.NUMBER)
     with pytest.raises(ValidationError):
         await world.documents.update_metadata(
-            scene.owner.id, scene.document.id, DocumentChanges(attributes={total.id: "12"})
+            scene.owner.id, scene.document.id, DocumentChanges(fields={total.id: "12"})
         )
     assert world.events() == []
 

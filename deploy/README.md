@@ -306,3 +306,6 @@ Build or pull the new image and `docker compose up -d`: the API container migrat
 before it starts. A schema upgrade cannot be undone; back up first. With separate containers,
 update the API container first: a worker that starts waits for the schema, and a database that a
 newer image migrated is refused by an older one.
+
+An update that changes what the search index holds says so in its release notes; run
+`papiq reindex` after it (the update that renamed attributes to fields is one).

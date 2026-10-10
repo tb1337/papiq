@@ -14,7 +14,7 @@ import builtins
 from papiq.core.domain.errors import NotFoundError, PermissionDeniedError
 from papiq.core.domain.ids import RuleId, UserId
 from papiq.core.domain.permissions import drawer_access
-from papiq.core.domain.rules import Rule, RuleDefinition, RuleScope, RuleVersion, check_attributes
+from papiq.core.domain.rules import Rule, RuleDefinition, RuleScope, RuleVersion, check_fields
 from papiq.core.domain.users import User
 from papiq.core.ports import Clock, UnitOfWork, UnitOfWorkFactory
 from papiq.core.services._access import load_actor
@@ -126,8 +126,8 @@ class RuleService:
 async def check_references(
     uow: UnitOfWork, definition: RuleDefinition, *, owner: User | None
 ) -> None:
-    """Everything the definition refers to exists (NotFoundError otherwise), attribute
-    conditions and values fit their attribute (ValidationError), and the `owner` of a user
+    """Everything the definition refers to exists (NotFoundError otherwise), field
+    conditions and values fit their field (ValidationError), and the `owner` of a user
     rule may file into its drawer (PermissionDeniedError; checked again whenever it runs)."""
     references = definition.references()
     for contact in references.contacts:
@@ -136,12 +136,12 @@ async def check_references(
         await uow.document_types.get(document_type)
     for tag in references.tags:
         await uow.tags.get(tag)
-    if references.attributes:
-        attributes = {attribute.id: attribute for attribute in await uow.attributes.list_all()}
-        for attribute_id in references.attributes:
-            if attribute_id not in attributes:
-                raise NotFoundError("attribute", attribute_id)
-        check_attributes(definition, attributes)
+    if references.fields:
+        fields = {field.id: field for field in await uow.fields.list_all()}
+        for field_id in references.fields:
+            if field_id not in fields:
+                raise NotFoundError("field", field_id)
+        check_fields(definition, fields)
     for drawer_id in references.drawers:
         drawer = await uow.drawers.find(drawer_id)
         access = None if drawer is None or owner is None else drawer_access(owner, drawer)

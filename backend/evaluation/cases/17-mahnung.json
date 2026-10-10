@@ -8,7 +8,7 @@
       "Einkauf"
     ],
     "document_date": "2026-06-10",
-    "attributes": {
+    "fields": {
       "Betrag": {
         "amount": "64.90",
         "currency": "EUR"
@@ -35,7 +35,7 @@
         "evidence": "Musterstadt, 10.06.2026"
       }
     },
-    "attributes": {
+    "fields": {
       "Betrag": {
         "value": {
           "amount": "64.90",

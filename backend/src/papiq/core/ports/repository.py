@@ -8,7 +8,7 @@ Common rules for every adapter:
   entity's version, then increments both. Otherwise it raises ConcurrencyError (at the latest on
   commit).
 - Uniqueness (raises ConflictError at the latest on commit): usernames; drawer names per owner;
-  one default drawer per owner; names of contacts, document types, tags and attribute
+  one default drawer per owner; names of contacts, document types, tags and field
   definitions; the original (SHA-256) per document owner. Names compare regardless of case.
 - `get` raises NotFoundError, `find` returns None.
 """
@@ -18,16 +18,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from papiq.core.domain.attributes import AttributeDefinition
 from papiq.core.domain.documents import Document, Sha256
 from papiq.core.domain.drawers import Drawer
+from papiq.core.domain.fields import FieldDefinition
 from papiq.core.domain.ids import (
-    AttributeId,
     ContactId,
     DeliveryId,
     DocumentId,
     DocumentTypeId,
     DrawerId,
+    FieldId,
     RuleApplicationId,
     RuleId,
     TagId,
@@ -100,9 +100,7 @@ class DocumentTypeRepository(NamedRepository[DocumentTypeId, DocumentType], Prot
 class TagRepository(NamedRepository[TagId, Tag], Protocol): ...
 
 
-class AttributeDefinitionRepository(
-    NamedRepository[AttributeId, AttributeDefinition], Protocol
-): ...
+class FieldDefinitionRepository(NamedRepository[FieldId, FieldDefinition], Protocol): ...
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -126,14 +124,14 @@ class DocumentRepository(Repository[DocumentId, Document], Protocol):
         """
         ...
 
-    async def attribute_in_use(
+    async def field_in_use(
         self,
-        attribute: AttributeId,
+        field: FieldId,
         *,
         values: Collection[str] | None = None,
         outside_types: Collection[DocumentTypeId] | None = None,
     ) -> bool:
-        """Whether any document has a value for `attribute`; with `values`, a text value that
+        """Whether any document has a value for `field`; with `values`, a text value that
         is one of them; with `outside_types`, on a document whose type is none of them (a
         document without type counts as outside)."""
         ...
@@ -168,7 +166,7 @@ class DocumentRepository(Repository[DocumentId, Document], Protocol):
         contact: ContactId | None = None,
         document_type: DocumentTypeId | None = None,
         tag: TagId | None = None,
-        attribute: AttributeId | None = None,
+        field: FieldId | None = None,
         sha256: Sha256 | None = None,
     ) -> bool:
         """Whether any document matches all given criteria, regardless of who may read it

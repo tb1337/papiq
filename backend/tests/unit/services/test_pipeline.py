@@ -171,7 +171,7 @@ async def test_reprocess_from_a_step(world: World) -> None:
     owner, document = await receive(world)
     await world.drain()
     world.database.outbox.clear()
-    pipeline = world.pipeline({Step.EXTRACT_ATTRIBUTES: Returns(UNCERTAIN)})
+    pipeline = world.pipeline({Step.EXTRACT_FIELDS: Returns(UNCERTAIN)})
     await pipeline.reprocess_from(owner.id, document.id, Step.CLASSIFY)
     assert await world.drain(pipeline) == 3  # waits before filing
     stored = await world.documents.get(owner.id, document.id)

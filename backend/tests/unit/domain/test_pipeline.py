@@ -29,7 +29,7 @@ def test_steps_have_a_fixed_order() -> None:
         Step.OCR,
         Step.PARSE,
         Step.CLASSIFY,
-        Step.EXTRACT_ATTRIBUTES,
+        Step.EXTRACT_FIELDS,
         Step.APPLY_RULES,
         Step.FILE,
     )
@@ -134,7 +134,7 @@ def test_an_uncertain_filing_step_completes_yellow() -> None:
     assert document.lane is Lane.YELLOW
 
 
-@pytest.mark.parametrize("resume_at", [Step.EXTRACT_ATTRIBUTES, Step.APPLY_RULES])
+@pytest.mark.parametrize("resume_at", [Step.EXTRACT_FIELDS, Step.APPLY_RULES])
 def test_confirming_a_yellow_document_resumes_and_files_it_green(resume_at: Step) -> None:
     document = builders.run_pipeline(
         builders.document(builders.user(), builders.drawer(builders.user())),
@@ -172,19 +172,19 @@ def test_confirming_a_red_document_takes_over_the_failed_steps() -> None:
         Step.OCR,
         Step.PARSE,
         Step.CLASSIFY,
-        Step.EXTRACT_ATTRIBUTES,
+        Step.EXTRACT_FIELDS,
     )
     builders.run_pipeline(document)
     assert document.lane is Lane.GREEN
 
 
-def test_attributes_are_only_extracted_again_from_a_parsed_text() -> None:
+def test_fields_are_only_extracted_again_from_a_parsed_text() -> None:
     document = builders.run_pipeline(
         builders.document(builders.user(), builders.drawer(builders.user())),
         {Step.PARSE: FAILED},
     )
     with pytest.raises(InvalidTransitionError, match="no text"):
-        document.confirm(Step.EXTRACT_ATTRIBUTES, NOW)
+        document.confirm(Step.EXTRACT_FIELDS, NOW)
 
 
 @pytest.mark.parametrize("resume_at", [Step.OCR, Step.CLASSIFY, Step.FILE])
@@ -278,7 +278,7 @@ def test_retry_needs_failed_processing() -> None:
 def test_reprocess_from_a_step_discards_later_results() -> None:
     document = builders.run_pipeline(
         builders.document(builders.user(), builders.drawer(builders.user())),
-        {Step.EXTRACT_ATTRIBUTES: UNCERTAIN},
+        {Step.EXTRACT_FIELDS: UNCERTAIN},
     )
     assert document.lane is Lane.YELLOW
     assert document.reprocess_from(Step.CLASSIFY, NOW) is Step.CLASSIFY

@@ -8,7 +8,7 @@
       "Bank"
     ],
     "document_date": "2026-05-05",
-    "attributes": {
+    "fields": {
       "Kontostand": {
         "amount": "456.78",
         "currency": "EUR"
@@ -33,7 +33,7 @@
         "evidence": "Abrechnungsdatum: 05.05.2026"
       }
     },
-    "attributes": {
+    "fields": {
       "Kontostand": {
         "value": {
           "amount": "456.78",
