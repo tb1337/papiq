@@ -39,7 +39,15 @@ from papiq.core.services._access import (
     readable_document,
     visible_drawer,
 )
-from papiq.core.services.inbox import CHOSEN_DRAWER, confirmation, decide, open_steps
+from papiq.core.services.inbox import (
+    CHOSEN_DRAWER,
+    LEARNED_ALIAS,
+    alias_to_learn,
+    confirmation,
+    decide,
+    open_steps,
+)
+from papiq.core.services.master_data import learn_alias
 from papiq.core.services.objects import original_key
 from papiq.core.services.rules.running import drawer_choice, person_record
 
@@ -366,7 +374,10 @@ class PipelineService:
         Each uncertain field of the steps before `resume_at`, and of the rules when processing
         resumes with them, needs a decision (see `inbox.decide`). The steps whose results the
         owner overruled get a log entry; so do the rules, with what the owner decided and
-        changed: the rules that run next leave it as it is."""
+        changed: the rules that run next leave it as it is.
+
+        Choosing a contact for an open contact field teaches it the name the model read as an
+        alias (`master_data.learn_alias`), so the next document with that name finds it."""
         async with self._uow() as uow:
             user = await load_actor(uow, actor)
             document = await _owned_document(uow, user, id)
@@ -414,7 +425,10 @@ class PipelineService:
                 tags_before=tags_before,
                 tags_after=document.tag_ids,
             )
-            chosen = {} if target is None else {CHOSEN_DRAWER: str(target.id)}
+            chosen: JsonObject = {} if target is None else {CHOSEN_DRAWER: str(target.id)}
+            learned = alias_to_learn(open, decision, document)
+            if learned is not None and await learn_alias(uow, *learned) is not None:
+                chosen[LEARNED_ALIAS] = {"contact_id": str(learned[0]), "alias": learned[1]}
             result = replace(result, output={**result.output, **person, **chosen})
             await self._log(uow, id, Step.APPLY_RULES, run, result, now, now)
             await self._restart(uow, document)
