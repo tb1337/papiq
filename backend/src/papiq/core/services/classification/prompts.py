@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 from papiq.core.domain.fields import FieldDefinition, FieldType
 
-CLASSIFY_PROMPT = "classify-1"
+CLASSIFY_PROMPT = "classify-2"
 EXTRACT_PROMPT = "extract-2"
 
 _COMMON_RULES = """\
@@ -29,10 +29,12 @@ You read one document for a document management system and propose its metadata.
 Rules:
 {_COMMON_RULES}
 - contact: the other party of the document: the sender, issuer or counterparty (a company, \
-an authority or a person), not the recipient. Give the name as written in the document.
-- document_type: exactly one name from the list of document types, or null if none fits. \
-Only if none fits, put a short name for a fitting type in new_document_type; otherwise \
-new_document_type is null.
+an authority or a person), not the recipient. If it is one of the listed contacts (by its name \
+or a name it is also written as), give that contact's name exactly as listed; otherwise give \
+the name as written in the document.
+- document_type: exactly one name from the list of document types, or null if none fits; a \
+description after a type's name says what belongs to it. Only if none fits, put a short \
+name for a fitting type in new_document_type; otherwise new_document_type is null.
 - tags: the names from the list of tags that fit the document; may be empty. new_tags: tags \
 missing from the list that would fit; usually empty.
 - document_date: the date the document was issued (date of the letter, invoice or notice) \
@@ -89,10 +91,28 @@ def _cut_forward(part: str) -> str:
     return part[position + 1 :] if 0 <= position <= len(part) // 5 else part
 
 
-def classify_message(document_types: Sequence[str], tags: Sequence[str], text: Shortened) -> str:
+@dataclass(frozen=True)
+class Listed:
+    """A name in a list of the prompt, with what explains it: a document type's description,
+    the other names a contact is written as."""
+
+    name: str
+    description: str | None = None
+    aliases: tuple[str, ...] = ()
+
+
+def classify_message(
+    contacts: Sequence[Listed],
+    document_types: Sequence[Listed],
+    tags: Sequence[str],
+    text: Shortened,
+) -> str:
+    """The lists come before the document. Contacts are a preselection: those whose names the
+    text shows most."""
     return "\n\n".join(
         [
-            "Document types:\n" + _items(document_types),
+            "Contacts:\n" + _listed(contacts),
+            "Document types:\n" + _listed(document_types),
             "Tags:\n" + _items(tags),
             _document(text),
         ]
@@ -120,6 +140,18 @@ def retry_message(message: str, error: str) -> str:
         f"{message}\n\nYour previous answer was not valid: {error}. Answer again with one "
         "JSON object that follows the schema."
     )
+
+
+def _listed(items: Sequence[Listed]) -> str:
+    lines = []
+    for item in items:
+        line = f"- {item.name}"
+        if item.aliases:
+            line += " (also written as: " + "; ".join(item.aliases) + ")"
+        if item.description:
+            line += ": " + " ".join(item.description.split())
+        lines.append(line)
+    return "\n".join(lines) if lines else "(none)"
 
 
 def _items(names: Sequence[str]) -> str:

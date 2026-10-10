@@ -1,6 +1,6 @@
 import pytest
 
-from papiq.core.domain.names import best_match, mentions, name_key, similarity
+from papiq.core.domain.names import best_match, mentions, name_key, named_share, similarity
 
 
 @pytest.mark.parametrize(
@@ -38,6 +38,30 @@ def test_best_match() -> None:
 
     assert best_match("Anything", []).best is None
     assert best_match("GmbH", candidates).best is None
+
+
+def test_best_match_counts_a_candidate_once() -> None:
+    """A candidate with aliases is matched by its best name; the runner-up is another one."""
+    inter, allianz = object(), object()
+    candidates = [
+        (inter, "INTER Versicherungsgruppe"),
+        (inter, "INTER Krankenversicherung AG"),
+        (allianz, "Allianz Krankenversicherung"),
+    ]
+    match = best_match("INTER Krankenversicherung", candidates)
+    assert (match.best, match.score) == (inter, 1.0)
+    assert match.runner_up < 0.9
+    alone = best_match("INTER Krankenversicherung", candidates[:2])
+    assert alone.runner_up == 0
+
+
+def test_named_share() -> None:
+    text = name_key("INTER Krankenversicherung AG, Erzbergerstraße 9-15, Mannheim")
+    words = frozenset(text.split())
+    assert named_share(text, words, name_key("INTER Krankenversicherung AG")) == 1
+    assert named_share(text, words, name_key("INTER Versicherungsgruppe")) == 0.5
+    assert named_share(text, words, name_key("Allianz")) == 0
+    assert named_share(text, words, name_key("AB")) == 0  # too short to count
 
 
 def test_mentions_whole_words() -> None:

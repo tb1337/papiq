@@ -69,6 +69,23 @@ def test_the_set_is_checked(tmp_path: Path) -> None:
         load_set(tmp_path / "set")
 
 
+def test_the_set_takes_aliases_and_descriptions(tmp_path: Path) -> None:
+    shutil.copytree(SET, tmp_path / "set", ignore=shutil.ignore_patterns("reports"))
+    master = tmp_path / "set" / "master_data.json"
+    data = json.loads(master.read_text(encoding="utf-8"))
+    contact, kind = data["contacts"][0], data["document_types"][0]
+    data["contact_aliases"] = {contact: ["Other name"]}
+    data["type_descriptions"] = {kind: "What belongs to it"}
+    master.write_text(json.dumps(data), encoding="utf-8")
+    loaded = load_set(tmp_path / "set").master_data
+    assert loaded.contact_aliases == {contact: ("Other name",)}
+    assert loaded.type_descriptions == {kind: "What belongs to it"}
+    data["contact_aliases"] = {"Nobody": ["x"]}
+    master.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(EvaluationSetError, match="contact_aliases names unknown"):
+        load_set(tmp_path / "set")
+
+
 async def test_green_with_a_wrong_value_counts(tmp_path: Path) -> None:
     shutil.copytree(SET, tmp_path / "set", ignore=shutil.ignore_patterns("reports"))
     case = tmp_path / "set" / "cases" / "01-stromrechnung.json"

@@ -5,7 +5,8 @@ through the same classification and field extraction steps as the pipeline, to c
 language models and to check that the checks catch wrong answers.
 
 - `master_data.json`: contacts, document types, tags and fields the documents are matched
-  against.
+  against; optionally `contact_aliases` (other names by contact) and `type_descriptions`
+  (by document type).
 - `cases/<name>.md`: the document text, as the parse step would produce it (OCR and parsing are
   not part of the evaluation).
 - `cases/<name>.json`: `expected` (lane and fields) and `fake`, a fixed answer for runs without a
