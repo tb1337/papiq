@@ -2,15 +2,22 @@
 admins change them. Deleting works only for what no document (or field) uses."""
 
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter
+from pydantic import BaseModel
 
 from papiq.adapters.inbound.rest.auth import PROTECTED, CurrentUser
 from papiq.adapters.inbound.rest.context import ApiContext, Context
 from papiq.adapters.inbound.rest.problems import problem_responses
 from papiq.adapters.inbound.rest.schemas import (
+    ContactCreate,
+    ContactOut,
+    ContactPatch,
+    DocumentTypeCreate,
+    DocumentTypeOut,
+    DocumentTypePatch,
     FieldCreate,
     FieldOut,
     FieldPatch,
@@ -26,8 +33,20 @@ ADMINS_ONLY = "Admins only."
 type Operation = Callable[..., Awaitable[Any]]
 
 
-def _simple(path: str, kind: str, plural: str, name: str) -> APIRouter:
-    """List, create, read, rename and delete one kind of named master data."""
+def _simple(
+    path: str,
+    kind: str,
+    plural: str,
+    name: str,
+    out: type[MasterDataOut],
+    create_in: type[BaseModel],
+    patch_in: type[BaseModel],
+    *,
+    change: str = "rename",
+) -> APIRouter:
+    """List, create, read, change (`change`: the service's verb) and delete one kind of named
+    master data. The bodies' fields are the service's keyword arguments; a patch passes only
+    the fields given."""
     router = APIRouter(prefix=f"/{path}", tags=["master data"], dependencies=PROTECTED)
 
     def service(context: ApiContext, action: str) -> Operation:
@@ -38,13 +57,13 @@ def _simple(path: str, kind: str, plural: str, name: str) -> APIRouter:
         "",
         name=f"list_{plural}",
         summary=f"List {kind}s",
-        response_model=list[MasterDataOut],
+        response_model=list[out],  # type: ignore[valid-type]
         responses=problem_responses(401),
     )
     async def list_items(user: CurrentUser, context: Context) -> list[MasterDataOut]:
         operation: Operation = getattr(context.master_data, f"list_{plural}")
         items: list[MasterData] = await operation(user)
-        return [MasterDataOut.of(item) for item in items]
+        return [out.of(item) for item in items]
 
     @router.post(
         "",
@@ -52,32 +71,42 @@ def _simple(path: str, kind: str, plural: str, name: str) -> APIRouter:
         status_code=201,
         summary=f"Create a {kind}",
         description=ADMINS_ONLY + " Names are unique regardless of case.",
-        response_model=MasterDataOut,
+        response_model=out,
         responses=problem_responses(401, 403, 409, 422),
     )
-    async def create(body: NameIn, user: CurrentUser, context: Context) -> MasterDataOut:
-        return MasterDataOut.of(await service(context, "create")(user, body.name))
+    async def create(
+        body: create_in,  # type: ignore[valid-type]
+        user: CurrentUser,
+        context: Context,
+    ) -> MasterDataOut:
+        return out.of(await service(context, "create")(user, **cast(BaseModel, body).model_dump()))
 
     @router.get(
         "/{id}",
         name=f"get_{name}",
         summary=f"A {kind}",
-        response_model=MasterDataOut,
+        response_model=out,
         responses=problem_responses(401, 404, 422),
     )
     async def get(id: UUID, user: CurrentUser, context: Context) -> MasterDataOut:
-        return MasterDataOut.of(await service(context, "get")(user, id))
+        return out.of(await service(context, "get")(user, id))
 
     @router.patch(
         "/{id}",
-        name=f"rename_{name}",
-        summary=f"Rename a {kind}",
+        name=f"{change}_{name}",
+        summary=f"{change.capitalize()} a {kind}",
         description=ADMINS_ONLY,
-        response_model=MasterDataOut,
+        response_model=out,
         responses=problem_responses(401, 403, 404, 409, 422),
     )
-    async def rename(id: UUID, body: NameIn, user: CurrentUser, context: Context) -> MasterDataOut:
-        return MasterDataOut.of(await service(context, "rename")(user, id, body.name))
+    async def patch(
+        id: UUID,
+        body: patch_in,  # type: ignore[valid-type]
+        user: CurrentUser,
+        context: Context,
+    ) -> MasterDataOut:
+        given = {field: getattr(body, field) for field in cast(BaseModel, body).model_fields_set}
+        return out.of(await service(context, change)(user, id, **given))
 
     @router.delete(
         "/{id}",
@@ -93,9 +122,21 @@ def _simple(path: str, kind: str, plural: str, name: str) -> APIRouter:
     return router
 
 
-contacts = _simple("contacts", "contact", "contacts", "contact")
-document_types = _simple("document-types", "document type", "document_types", "document_type")
-tags = _simple("tags", "tag", "tags", "tag")
+contacts = _simple(
+    "contacts", "contact", "contacts", "contact", ContactOut, ContactCreate, ContactPatch,
+    change="change",
+)  # fmt: skip
+document_types = _simple(
+    "document-types",
+    "document type",
+    "document_types",
+    "document_type",
+    DocumentTypeOut,
+    DocumentTypeCreate,
+    DocumentTypePatch,
+    change="change",
+)
+tags = _simple("tags", "tag", "tags", "tag", MasterDataOut, NameIn, NameIn)
 fields = APIRouter(prefix="/fields", tags=["master data"], dependencies=PROTECTED)
 
 
