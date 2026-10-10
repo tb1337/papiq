@@ -63,6 +63,9 @@ async def test_contact_aliases_and_type_descriptions(world: World) -> None:
         service.change_contact(admin.id, other.id, aliases=["Nord"]),
         service.change_contact(admin.id, other.id, name="nord krankenversicherung ag"),
         service.create_contact(admin.id, "Other", ["Nord Krankenversicherung AG"]),
+        # As classification compares names: legal forms and punctuation do not count.
+        service.create_contact(admin.id, "Other", ["Nord Krankenversicherung"]),
+        service.create_contact(admin.id, "Nord Krankenversicherung GmbH"),
     ):
         with pytest.raises(ConflictError):
             await change
@@ -85,7 +88,10 @@ async def test_learn_alias(world: World) -> None:
         assert learned is not None and learned.aliases == ["Nord Krankenversicherung AG"]
         assert await learn_alias(uow, example.id, "nord versicherungsgruppe") is None  # its name
         assert await learn_alias(uow, example.id, "MUSTER") is None  # another contact's name
-        assert await learn_alias(uow, example.id, "Nord Kranken") is not None  # moves
+        assert await learn_alias(uow, example.id, "Muster SE") is None  # the same, compared
+        assert await learn_alias(uow, example.id, "Max Mustermann") is None  # unrelated
+        assert await learn_alias(uow, example.id, "GmbH") is None  # nothing to compare
+        assert await learn_alias(uow, example.id, "Nord\nKranken") is not None  # moves
         await uow.commit()
     async with world.uow() as uow:
         assert (await uow.contacts.get(example.id)).aliases == [

@@ -142,7 +142,11 @@ def test_shorten_keeps_beginning_and_end() -> None:
 
 def test_classify_message_lists_contacts_and_type_descriptions() -> None:
     message = classify_message(
-        [Listed("Nord Versicherungsgruppe", aliases=("Nord Krankenversicherung AG", "Nord KV"))],
+        [
+            Listed(
+                "Nord Versicherungsgruppe", aliases=("Nord Krankenversicherung AG", "Nord\nKV")
+            )
+        ],
         [
             Listed("Lohnabrechnung", description="Gehaltsabrechnung,\nEntgeltbescheinigung"),
             Listed("Brief"),

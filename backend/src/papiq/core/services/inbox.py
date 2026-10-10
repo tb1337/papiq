@@ -220,7 +220,7 @@ def decide(
 
 LEARNED_ALIAS = "learned_alias"
 """Key of the alias a confirmation taught a contact, in the output of its `apply_rules` entry."""
-_LONGEST_ALIAS = 200  # characters; longer proposals are not learned
+_LONGEST_ALIAS = 100  # characters; longer proposals are not learned
 
 
 def alias_to_learn(

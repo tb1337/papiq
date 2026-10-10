@@ -366,8 +366,22 @@ class UnitOfWorkContract:
                     Contact.create(name="Other", now=NOW, aliases=["nord allgemeine"])
                 )
                 await uow.commit()
+        other = Contact.create(name="Other", now=NOW)
         async with uow_factory() as uow:
+            await uow.contacts.add(other)
+            await uow.commit()
+        async with uow_factory() as uow:
+            # An alias moves to another contact in one transaction.
+            source, target = await uow.contacts.get(example.id), await uow.contacts.get(other.id)
+            source.set_aliases(["Nord Lebensversicherung AG"])
+            target.set_aliases(["Nord Allgemeine"])
+            await uow.contacts.update(source)
+            await uow.contacts.update(target)
+            await uow.commit()
+        async with uow_factory() as uow:
+            assert (await uow.contacts.get(other.id)).aliases == ["Nord Allgemeine"]
             await uow.contacts.remove(example.id)
+            await uow.contacts.remove(other.id)
             await uow.commit()
         async with uow_factory() as uow:
             # The aliases went with the contact: they are free again.
