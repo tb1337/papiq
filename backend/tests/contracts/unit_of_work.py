@@ -334,6 +334,48 @@ class UnitOfWorkContract:
                 await uow.contacts.add(Contact.create(name="stadtwerke", now=NOW))
                 await uow.commit()
 
+    async def test_contact_aliases_and_type_description(
+        self, uow_factory: UnitOfWorkFactory
+    ) -> None:
+        """Aliases keep their order, change with the contact and go with it; an alias is unique
+        across contacts. A document type keeps its description."""
+        example = Contact.create(
+            name="Nord Versicherungsgruppe",
+            now=NOW,
+            aliases=["Nord Krankenversicherung AG", "Nord Lebensversicherung AG"],
+        )
+        pay = DocumentType.create(name="Pay slip", now=NOW, description="Entgeltbescheinigung")
+        async with uow_factory() as uow:
+            await uow.contacts.add(example)
+            await uow.document_types.add(pay)
+            await uow.commit()
+        async with uow_factory() as uow:
+            assert await uow.contacts.get(example.id) == example
+            assert (await uow.document_types.get(pay.id)).description == "Entgeltbescheinigung"
+            stored = await uow.contacts.get(example.id)
+            stored.set_aliases(["Nord Lebensversicherung AG", "Nord Allgemeine"])
+            await uow.contacts.update(stored)
+            await uow.commit()
+        async with uow_factory() as uow:
+            assert (await uow.contacts.get(example.id)).aliases == [
+                "Nord Lebensversicherung AG",
+                "Nord Allgemeine",
+            ]
+            with pytest.raises(ConflictError):
+                await uow.contacts.add(
+                    Contact.create(name="Other", now=NOW, aliases=["nord allgemeine"])
+                )
+                await uow.commit()
+        async with uow_factory() as uow:
+            await uow.contacts.remove(example.id)
+            await uow.commit()
+        async with uow_factory() as uow:
+            # The aliases went with the contact: they are free again.
+            await uow.contacts.add(
+                Contact.create(name="New", now=NOW, aliases=["Nord Allgemeine"])
+            )
+            await uow.commit()
+
     async def test_field_definition_round_trip(self, uow_factory: UnitOfWorkFactory) -> None:
         invoice = DocumentType.create(name="Invoice", now=NOW)
         bound = FieldDefinition.create(
