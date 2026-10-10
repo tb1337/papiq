@@ -20,7 +20,7 @@ from papiq.core.domain.fields import (
 )
 from papiq.core.domain.identity import ApiToken, ExternalIdentity, LoginMethod, TokenScope
 from papiq.core.domain.json_value import JsonValue
-from papiq.core.domain.master_data import MasterData
+from papiq.core.domain.master_data import MAX_DESCRIPTION, Contact, DocumentType, MasterData
 from papiq.core.domain.permissions import can_manage_drawer, drawer_access
 from papiq.core.domain.pipeline import (
     PIPELINE,
@@ -871,6 +871,90 @@ class MasterDataOut(BaseModel):
     @classmethod
     def of(cls, item: MasterData) -> "MasterDataOut":
         return cls(id=getattr(item, "id"), name=item.name, created_at=item.created_at)  # noqa: B009
+
+
+Aliases = Annotated[
+    list[Name],
+    Field(
+        max_length=100,
+        description=(
+            "Other names the contact is written as in documents. Unique across contacts, "
+            "together with the names; papiq also learns them when a contact is chosen in the "
+            "review."
+        ),
+        examples=[["ACME Energy Services GmbH"]],
+    ),
+]
+Description = Annotated[
+    str,
+    Field(
+        max_length=MAX_DESCRIPTION,
+        description="What belongs to the type, for the language model; empty removes it.",
+        examples=["Gehaltsabrechnung, Entgeltbescheinigung, Verdienstnachweis"],
+    ),
+]
+
+
+class ContactCreate(NameIn):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"name": "ACME Energy", "aliases": ["ACME Strom"]}]},
+    )
+
+    aliases: Aliases = Field(default_factory=list)
+
+
+class ContactPatch(BaseModel):
+    """Fields left out stay; `aliases` replaces all aliases."""
+
+    model_config = ConfigDict(
+        extra="forbid", json_schema_extra={"examples": [{"aliases": ["ACME Strom"]}]}
+    )
+
+    name: Name | None = None
+    aliases: Aliases | None = None
+
+
+class ContactOut(MasterDataOut):
+    aliases: list[str] = Field(examples=[["ACME Strom"]])
+
+    @classmethod
+    def of(cls, item: MasterData) -> "ContactOut":
+        assert isinstance(item, Contact)
+        return cls(id=item.id, name=item.name, aliases=item.aliases, created_at=item.created_at)
+
+
+class DocumentTypeCreate(NameIn):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [{"name": "Pay slip", "description": "Entgeltbescheinigung"}]
+        },
+    )
+
+    description: Description | None = None
+
+
+class DocumentTypePatch(BaseModel):
+    """Fields left out stay; a `description` of null or empty removes it."""
+
+    model_config = ConfigDict(
+        extra="forbid", json_schema_extra={"examples": [{"description": "Entgeltbescheinigung"}]}
+    )
+
+    name: Name | None = None
+    description: Description | None = None
+
+
+class DocumentTypeOut(MasterDataOut):
+    description: str | None = Field(examples=["Entgeltbescheinigung"])
+
+    @classmethod
+    def of(cls, item: MasterData) -> "DocumentTypeOut":
+        assert isinstance(item, DocumentType)
+        return cls(
+            id=item.id, name=item.name, description=item.description, created_at=item.created_at
+        )
 
 
 class FieldCreate(BaseModel):

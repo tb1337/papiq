@@ -306,6 +306,43 @@ async def test_field_definitions_change(api: Api) -> None:
 # --- M4-04: request sizes ----------------------------------------------------------
 
 
+async def test_contact_aliases_and_type_descriptions(api: Api) -> None:
+    a = auth(await api.admin())
+    contact = await post(api, "/contacts", {"name": "INTER", "aliases": ["INTER KV"]}, a)
+    assert contact["aliases"] == ["INTER KV"]
+    tag = await post(api, "/tags", {"name": "tax"}, a)
+    assert "aliases" not in tag and "description" not in tag
+    path = f"{PREFIX}/contacts/{contact['id']}"
+    response = await api.client.patch(path, json={"name": "INTER Gruppe"}, headers=a)
+    assert response.json()["aliases"] == ["INTER KV"]  # left out: kept
+    response = await api.client.patch(path, json={"aliases": ["INTER AG", "inter ag"]}, headers=a)
+    assert (response.json()["name"], response.json()["aliases"]) == ("INTER Gruppe", ["INTER AG"])
+    other = await post(api, "/contacts", {"name": "Allianz"}, a)
+    response = await api.client.post(
+        f"{PREFIX}/contacts", json={"name": "Other", "aliases": ["INTER Gruppe"]}, headers=a
+    )
+    assert response.status_code == 409
+    response = await api.client.patch(
+        f"{PREFIX}/contacts/{other['id']}", json={"aliases": ["Allianz"]}, headers=a
+    )
+    assert response.status_code == 422  # its own name
+
+    kind = await post(api, "/document-types", {"name": "Pay slip", "description": "Payroll"}, a)
+    assert kind["description"] == "Payroll"
+    path = f"{PREFIX}/document-types/{kind['id']}"
+    response = await api.client.patch(path, json={"name": "Payslip"}, headers=a)
+    assert response.json()["description"] == "Payroll"
+    response = await api.client.patch(path, json={"description": None}, headers=a)
+    assert response.json()["description"] is None
+    response = await api.client.patch(path, json={"description": "x" * 301}, headers=a)
+    assert response.status_code == 422
+    listed = (await api.client.get(f"{PREFIX}/contacts", headers=a)).json()
+    assert {item["name"]: item["aliases"] for item in listed} == {
+        "Allianz": [],
+        "INTER Gruppe": ["INTER AG"],
+    }
+
+
 async def test_json_bodies_are_bounded(api: Api) -> None:
     """M4-04: only multipart uploads have a size limit (`PAPIQ_UPLOAD_MAX_SIZE`). A JSON body of
     any size is read into memory before validation, also at the public sign-in."""

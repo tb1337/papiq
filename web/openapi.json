@@ -2793,7 +2793,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/MasterDataOut"
+                    "$ref": "#/components/schemas/ContactOut"
                   },
                   "type": "array",
                   "title": "Response List Contacts Api V1 Contacts Get"
@@ -2854,7 +2854,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/NameIn"
+                "$ref": "#/components/schemas/ContactCreate"
               }
             }
           },
@@ -2866,7 +2866,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MasterDataOut"
+                  "$ref": "#/components/schemas/ContactOut"
                 }
               }
             }
@@ -3003,7 +3003,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MasterDataOut"
+                  "$ref": "#/components/schemas/ContactOut"
                 }
               }
             }
@@ -3086,9 +3086,9 @@
         "tags": [
           "master data"
         ],
-        "summary": "Rename a contact",
+        "summary": "Change a contact",
         "description": "Admins only.",
-        "operationId": "rename_contact_api_v1_contacts__id__patch",
+        "operationId": "change_contact_api_v1_contacts__id__patch",
         "parameters": [
           {
             "name": "id",
@@ -3106,7 +3106,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/NameIn"
+                "$ref": "#/components/schemas/ContactPatch"
               }
             }
           }
@@ -3117,7 +3117,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MasterDataOut"
+                  "$ref": "#/components/schemas/ContactOut"
                 }
               }
             }
@@ -3388,7 +3388,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/MasterDataOut"
+                    "$ref": "#/components/schemas/DocumentTypeOut"
                   },
                   "type": "array",
                   "title": "Response List Document Types Api V1 Document Types Get"
@@ -3449,7 +3449,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/NameIn"
+                "$ref": "#/components/schemas/DocumentTypeCreate"
               }
             }
           },
@@ -3461,7 +3461,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MasterDataOut"
+                  "$ref": "#/components/schemas/DocumentTypeOut"
                 }
               }
             }
@@ -3598,7 +3598,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MasterDataOut"
+                  "$ref": "#/components/schemas/DocumentTypeOut"
                 }
               }
             }
@@ -3681,9 +3681,9 @@
         "tags": [
           "master data"
         ],
-        "summary": "Rename a document type",
+        "summary": "Change a document type",
         "description": "Admins only.",
-        "operationId": "rename_document_type_api_v1_document_types__id__patch",
+        "operationId": "change_document_type_api_v1_document_types__id__patch",
         "parameters": [
           {
             "name": "id",
@@ -3701,7 +3701,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/NameIn"
+                "$ref": "#/components/schemas/DocumentTypePatch"
               }
             }
           }
@@ -3712,7 +3712,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MasterDataOut"
+                  "$ref": "#/components/schemas/DocumentTypeOut"
                 }
               }
             }
@@ -12003,6 +12003,150 @@
           }
         ]
       },
+      "ContactCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "examples": [
+              "ACME Energy"
+            ]
+          },
+          "aliases": {
+            "items": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1,
+              "examples": [
+                "ACME Energy"
+              ]
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Aliases",
+            "description": "Other names the contact is written as in documents. Unique across contacts, together with the names; papiq also learns them when a contact is chosen in the review.",
+            "examples": [
+              [
+                "ACME Energy Services GmbH"
+              ]
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "ContactCreate",
+        "examples": [
+          {
+            "aliases": [
+              "ACME Strom"
+            ],
+            "name": "ACME Energy"
+          }
+        ]
+      },
+      "ContactOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "examples": [
+              "ACME Energy"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Aliases",
+            "examples": [
+              [
+                "ACME Strom"
+              ]
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "created_at",
+          "aliases"
+        ],
+        "title": "ContactOut"
+      },
+      "ContactPatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1,
+                "examples": [
+                  "ACME Energy"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "aliases": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "examples": [
+                    "ACME Energy"
+                  ]
+                },
+                "type": "array",
+                "maxItems": 100,
+                "description": "Other names the contact is written as in documents. Unique across contacts, together with the names; papiq also learns them when a contact is chosen in the review.",
+                "examples": [
+                  [
+                    "ACME Energy Services GmbH"
+                  ]
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aliases"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ContactPatch",
+        "description": "Fields left out stay; `aliases` replaces all aliases.",
+        "examples": [
+          {
+            "aliases": [
+              "ACME Strom"
+            ]
+          }
+        ]
+      },
       "DeliveryOut": {
         "properties": {
           "id": {
@@ -12756,6 +12900,135 @@
         ],
         "title": "DocumentPreviewOut",
         "description": "What a change would do; nothing is stored."
+      },
+      "DocumentTypeCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "examples": [
+              "ACME Energy"
+            ]
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "description": "What belongs to the type, for the language model; empty removes it.",
+                "examples": [
+                  "Gehaltsabrechnung, Entgeltbescheinigung, Verdienstnachweis"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "DocumentTypeCreate",
+        "examples": [
+          {
+            "description": "Entgeltbescheinigung",
+            "name": "Pay slip"
+          }
+        ]
+      },
+      "DocumentTypeOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "examples": [
+              "ACME Energy"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "examples": [
+              "Entgeltbescheinigung"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "created_at",
+          "description"
+        ],
+        "title": "DocumentTypeOut"
+      },
+      "DocumentTypePatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1,
+                "examples": [
+                  "ACME Energy"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "description": "What belongs to the type, for the language model; empty removes it.",
+                "examples": [
+                  "Gehaltsabrechnung, Entgeltbescheinigung, Verdienstnachweis"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "DocumentTypePatch",
+        "description": "Fields left out stay; a `description` of null or empty removes it.",
+        "examples": [
+          {
+            "description": "Entgeltbescheinigung"
+          }
+        ]
       },
       "DrawerCreate": {
         "properties": {

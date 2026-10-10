@@ -464,10 +464,10 @@ export interface paths {
 		options?: never;
 		head?: never;
 		/**
-		 * Rename a contact
+		 * Change a contact
 		 * @description Admins only.
 		 */
-		patch: operations['rename_contact_api_v1_contacts__id__patch'];
+		patch: operations['change_contact_api_v1_contacts__id__patch'];
 		trace?: never;
 	};
 	'/api/v1/document-types': {
@@ -510,10 +510,10 @@ export interface paths {
 		options?: never;
 		head?: never;
 		/**
-		 * Rename a document type
+		 * Change a document type
 		 * @description Admins only.
 		 */
-		patch: operations['rename_document_type_api_v1_document_types__id__patch'];
+		patch: operations['change_document_type_api_v1_document_types__id__patch'];
 		trace?: never;
 	};
 	'/api/v1/tags': {
@@ -1599,6 +1599,70 @@ export interface components {
 			 */
 			drawer_id?: string | null;
 		};
+		/**
+		 * ContactCreate
+		 * @example {
+		 *       "aliases": [
+		 *         "ACME Strom"
+		 *       ],
+		 *       "name": "ACME Energy"
+		 *     }
+		 */
+		ContactCreate: {
+			/**
+			 * Name
+			 * @example ACME Energy
+			 */
+			name: string;
+			/**
+			 * Aliases
+			 * @description Other names the contact is written as in documents. Unique across contacts, together with the names; papiq also learns them when a contact is chosen in the review.
+			 * @example [
+			 *       "ACME Energy Services GmbH"
+			 *     ]
+			 */
+			aliases?: string[];
+		};
+		/** ContactOut */
+		ContactOut: {
+			/**
+			 * Id
+			 * Format: uuid
+			 */
+			id: string;
+			/**
+			 * Name
+			 * @example ACME Energy
+			 */
+			name: string;
+			/**
+			 * Created At
+			 * Format: date-time
+			 */
+			created_at: string;
+			/**
+			 * Aliases
+			 * @example [
+			 *       "ACME Strom"
+			 *     ]
+			 */
+			aliases: string[];
+		};
+		/**
+		 * ContactPatch
+		 * @description Fields left out stay; `aliases` replaces all aliases.
+		 * @example {
+		 *       "aliases": [
+		 *         "ACME Strom"
+		 *       ]
+		 *     }
+		 */
+		ContactPatch: {
+			/** Name */
+			name?: string | null;
+			/** Aliases */
+			aliases?: string[] | null;
+		};
 		/** DeliveryOut */
 		DeliveryOut: {
 			/**
@@ -1951,6 +2015,58 @@ export interface components {
 			rules: components['schemas']['RuleReportOut'][] | null;
 			/** @description Who would see the document; null if the caller could not read it then. */
 			visibility: components['schemas']['VisibilityOut'] | null;
+		};
+		/**
+		 * DocumentTypeCreate
+		 * @example {
+		 *       "description": "Entgeltbescheinigung",
+		 *       "name": "Pay slip"
+		 *     }
+		 */
+		DocumentTypeCreate: {
+			/**
+			 * Name
+			 * @example ACME Energy
+			 */
+			name: string;
+			/** Description */
+			description?: string | null;
+		};
+		/** DocumentTypeOut */
+		DocumentTypeOut: {
+			/**
+			 * Id
+			 * Format: uuid
+			 */
+			id: string;
+			/**
+			 * Name
+			 * @example ACME Energy
+			 */
+			name: string;
+			/**
+			 * Created At
+			 * Format: date-time
+			 */
+			created_at: string;
+			/**
+			 * Description
+			 * @example Entgeltbescheinigung
+			 */
+			description: string | null;
+		};
+		/**
+		 * DocumentTypePatch
+		 * @description Fields left out stay; a `description` of null or empty removes it.
+		 * @example {
+		 *       "description": "Entgeltbescheinigung"
+		 *     }
+		 */
+		DocumentTypePatch: {
+			/** Name */
+			name?: string | null;
+			/** Description */
+			description?: string | null;
 		};
 		/**
 		 * DrawerCreate
@@ -6094,7 +6210,7 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					'application/json': components['schemas']['MasterDataOut'][];
+					'application/json': components['schemas']['ContactOut'][];
 				};
 			};
 			/** @description Unauthorized */
@@ -6142,7 +6258,7 @@ export interface operations {
 		};
 		requestBody: {
 			content: {
-				'application/json': components['schemas']['NameIn'];
+				'application/json': components['schemas']['ContactCreate'];
 			};
 		};
 		responses: {
@@ -6152,7 +6268,7 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					'application/json': components['schemas']['MasterDataOut'];
+					'application/json': components['schemas']['ContactOut'];
 				};
 			};
 			/** @description Unauthorized */
@@ -6276,7 +6392,7 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					'application/json': components['schemas']['MasterDataOut'];
+					'application/json': components['schemas']['ContactOut'];
 				};
 			};
 			/** @description Unauthorized */
@@ -6471,7 +6587,7 @@ export interface operations {
 			};
 		};
 	};
-	rename_contact_api_v1_contacts__id__patch: {
+	change_contact_api_v1_contacts__id__patch: {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -6482,7 +6598,7 @@ export interface operations {
 		};
 		requestBody: {
 			content: {
-				'application/json': components['schemas']['NameIn'];
+				'application/json': components['schemas']['ContactPatch'];
 			};
 		};
 		responses: {
@@ -6492,7 +6608,7 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					'application/json': components['schemas']['MasterDataOut'];
+					'application/json': components['schemas']['ContactOut'];
 				};
 			};
 			/** @description Unauthorized */
@@ -6631,7 +6747,7 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					'application/json': components['schemas']['MasterDataOut'][];
+					'application/json': components['schemas']['DocumentTypeOut'][];
 				};
 			};
 			/** @description Unauthorized */
@@ -6679,7 +6795,7 @@ export interface operations {
 		};
 		requestBody: {
 			content: {
-				'application/json': components['schemas']['NameIn'];
+				'application/json': components['schemas']['DocumentTypeCreate'];
 			};
 		};
 		responses: {
@@ -6689,7 +6805,7 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					'application/json': components['schemas']['MasterDataOut'];
+					'application/json': components['schemas']['DocumentTypeOut'];
 				};
 			};
 			/** @description Unauthorized */
@@ -6813,7 +6929,7 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					'application/json': components['schemas']['MasterDataOut'];
+					'application/json': components['schemas']['DocumentTypeOut'];
 				};
 			};
 			/** @description Unauthorized */
@@ -7008,7 +7124,7 @@ export interface operations {
 			};
 		};
 	};
-	rename_document_type_api_v1_document_types__id__patch: {
+	change_document_type_api_v1_document_types__id__patch: {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -7019,7 +7135,7 @@ export interface operations {
 		};
 		requestBody: {
 			content: {
-				'application/json': components['schemas']['NameIn'];
+				'application/json': components['schemas']['DocumentTypePatch'];
 			};
 		};
 		responses: {
@@ -7029,7 +7145,7 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					'application/json': components['schemas']['MasterDataOut'];
+					'application/json': components['schemas']['DocumentTypeOut'];
 				};
 			};
 			/** @description Unauthorized */
