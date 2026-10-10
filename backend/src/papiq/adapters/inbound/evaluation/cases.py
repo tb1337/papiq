@@ -4,7 +4,8 @@ expected of it and, for runs without a model, a fixed answer.
 Layout of a set directory:
 
 - `master_data.json`: `contacts`, `document_types`, `tags` (names) and `fields`
-  (`name`, `data_type`, `document_types` (names, or null for global), `choices`).
+  (`name`, `data_type`, `document_types` (names, or null for global), `choices`); optional
+  `contact_aliases` (aliases by contact name) and `type_descriptions` (by type name).
 - `cases/<name>.md`: the document text, as the parse step would produce it.
 - `cases/<name>.json`: `description`, `expected` (`lane`, `contact`, `document_type`, `tags`,
   `document_date`, `fields` by name, in the JSON form of the API) and `fake`
@@ -42,6 +43,8 @@ class MasterDataSpec:
     document_types: tuple[str, ...]
     tags: tuple[str, ...]
     fields: tuple[FieldSpec, ...]
+    contact_aliases: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    type_descriptions: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -129,9 +132,21 @@ def _master_data(data: Any) -> MasterDataSpec:
             document_types=tuple(data["document_types"]),
             tags=tuple(data["tags"]),
             fields=fields,
+            contact_aliases={
+                name: tuple(aliases) for name, aliases in data.get("contact_aliases", {}).items()
+            },
+            type_descriptions=dict(data.get("type_descriptions", {})),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise EvaluationSetError(f"master_data.json: {error!r}") from None
+    for what, names, known in (
+        ("contact_aliases", master.contact_aliases, master.contacts),
+        ("type_descriptions", master.type_descriptions, master.document_types),
+    ):
+        if set(names) - set(known):
+            raise EvaluationSetError(
+                f"master_data.json: {what} names unknown {set(names) - set(known)}"
+            )
     for definition in fields:
         unknown = set(definition.document_types or ()) - set(master.document_types)
         if unknown:
