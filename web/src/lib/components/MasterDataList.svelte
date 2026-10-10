@@ -5,22 +5,21 @@
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
-	import NameDialog from '#lib/components/NameDialog.svelte';
+	import MasterDataDialog from '#lib/components/MasterDataDialog.svelte';
 	import { Button } from '#lib/components/ui/button/index.ts';
 	import { describeError } from '#lib/errors.ts';
-	import type { MasterData } from '#lib/masterdata.svelte.ts';
-	import { KINDS, type SimpleKind } from '#lib/masterdata-api.ts';
+	import { type Item, KINDS, type SimpleKind, type Values } from '#lib/masterdata-api.ts';
 	import { m } from '#lib/paraglide/messages.js';
 
-	// Contacts, document types or tags: a list with add, rename and delete.
+	// Contacts, document types or tags: a list with add, change and delete.
 	let { kind }: { kind: SimpleKind } = $props();
 	const ops = $derived(KINDS[kind]);
 
-	let items = $state<MasterData[] | null>(null);
+	let items = $state<Item[] | null>(null);
 	let problem = $state<string | null>(null);
 	let creating = $state(false);
-	let renaming = $state<MasterData | null>(null);
-	let removing = $state<MasterData | null>(null);
+	let editing = $state<Item | null>(null);
+	let removing = $state<Item | null>(null);
 
 	async function load() {
 		try {
@@ -33,15 +32,15 @@
 
 	onMount(() => void load());
 
-	async function create(name: string) {
-		await ops.create(name);
+	async function create(values: Values) {
+		await ops.create(values);
 		toast.success(m.master_created());
 		await load();
 	}
-	async function rename(name: string) {
-		if (!renaming) return;
-		await ops.rename(renaming.id, name);
-		toast.success(m.master_renamed());
+	async function change(values: Values) {
+		if (!editing) return;
+		await ops.change(editing.id, values);
+		toast.success(m.master_saved());
 		await load();
 	}
 	async function remove() {
@@ -73,12 +72,21 @@
 		<ul class="flex flex-col gap-2">
 			{#each items as item (item.id)}
 				<li class="flex items-center gap-3 rounded-2xl border bg-card px-4 py-2">
-					<span class="min-w-0 flex-1 truncate">{item.name}</span>
+					<div class="flex min-w-0 flex-1 flex-col">
+						<span class="truncate">{item.name}</span>
+						{#if item.aliases?.length}
+							<span class="truncate text-sm text-muted-foreground">
+								{m.master_aliases_list({ aliases: item.aliases.join(', ') })}
+							</span>
+						{:else if item.description}
+							<span class="truncate text-sm text-muted-foreground">{item.description}</span>
+						{/if}
+					</div>
 					<Button
 						variant="ghost"
 						size="icon"
-						aria-label={m.master_rename({ name: item.name })}
-						onclick={() => (renaming = item)}
+						aria-label={m.master_edit({ name: item.name })}
+						onclick={() => (editing = item)}
 					>
 						<Pencil aria-hidden="true" />
 					</Button>
@@ -96,12 +104,19 @@
 	{/if}
 </div>
 
-<NameDialog bind:open={creating} title={ops.add()} submitLabel={m.create()} onsubmit={create} />
-<NameDialog
-	bind:open={() => renaming !== null, (open) => !open && (renaming = null)}
-	title={m.master_rename({ name: renaming?.name ?? '' })}
-	initial={renaming?.name ?? ''}
-	onsubmit={rename}
+<MasterDataDialog
+	bind:open={creating}
+	title={ops.add()}
+	extra={ops.extra}
+	submitLabel={m.create()}
+	onsubmit={create}
+/>
+<MasterDataDialog
+	bind:open={() => editing !== null, (open) => !open && (editing = null)}
+	title={m.master_edit({ name: editing?.name ?? '' })}
+	extra={ops.extra}
+	initial={editing}
+	onsubmit={change}
 />
 <ConfirmDialog
 	bind:open={() => removing !== null, (open) => !open && (removing = null)}

@@ -14,7 +14,7 @@ from papiq.core.domain.fields import FieldDefinition
 from papiq.core.domain.identity import ApiToken, ExternalIdentity, Session
 from papiq.core.domain.ids import EventId, JobId
 from papiq.core.domain.jobs import Job
-from papiq.core.domain.master_data import MasterData
+from papiq.core.domain.master_data import Contact, MasterData
 from papiq.core.domain.pipeline import StepRun
 from papiq.core.domain.users import User
 from papiq.core.domain.validation import name_key
@@ -43,6 +43,10 @@ def _name_keys(item: MasterData) -> Iterable[Hashable]:
     return [("name", name_key(item.name))]
 
 
+def _contact_keys(contact: Contact) -> Iterable[Hashable]:
+    return [*_name_keys(contact), *(("alias", name_key(alias)) for alias in contact.aliases)]
+
+
 def _field_keys(item: FieldDefinition) -> Iterable[Hashable]:
     return _name_keys(item)
 
@@ -69,7 +73,7 @@ def _external_identity_keys(identity: ExternalIdentity) -> Iterable[Hashable]:
 
 USERS = Table("user", _user_keys)
 DRAWERS = Table("drawer", _drawer_keys)
-CONTACTS = Table("contact", _name_keys)
+CONTACTS = Table("contact", _contact_keys)
 DOCUMENT_TYPES = Table("document type", _name_keys)
 TAGS = Table("tag", _name_keys)
 FIELDS = Table("field", _field_keys)

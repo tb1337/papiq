@@ -112,8 +112,14 @@ async def _owner(environment: Environment) -> User:
 
 async def _seed(environment: Environment, spec: MasterDataSpec) -> MasterData:
     now = environment.clock.now()
-    contacts = [Contact.create(name=name, now=now) for name in spec.contacts]
-    types = [DocumentType.create(name=name, now=now) for name in spec.document_types]
+    contacts = [
+        Contact.create(name=name, now=now, aliases=spec.contact_aliases.get(name, ()))
+        for name in spec.contacts
+    ]
+    types = [
+        DocumentType.create(name=name, now=now, description=spec.type_descriptions.get(name))
+        for name in spec.document_types
+    ]
     tags = [Tag.create(name=name, now=now) for name in spec.tags]
     type_ids = {item.name: item.id for item in types}
     fields = [
