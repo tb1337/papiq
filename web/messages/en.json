@@ -428,7 +428,7 @@
 	"rule_remove": "Remove",
 	"rule_move_up": "Move up",
 	"rule_move_down": "Move down",
-	"rule_condition_subject": "Field",
+	"rule_condition_subject": "Subject",
 	"rule_condition_operator": "Comparison",
 	"rule_condition_value": "Value",
 	"rule_condition_field": "Field",
