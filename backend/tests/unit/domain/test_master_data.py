@@ -21,19 +21,17 @@ def test_master_data_has_a_name(kind: type[Contact | DocumentType | Tag]) -> Non
 
 
 def test_contact_aliases() -> None:
-    contact = Contact.create(
-        name="INTER", now=NOW, aliases=[" INTER AG ", "inter ag", "INTER\n\x00KV"]
-    )
-    assert contact.aliases == ["INTER AG", "INTER KV"]
-    assert contact.is_named("inter kv") and not contact.is_named("INTER Leben")
+    contact = Contact.create(name="Nord", now=NOW, aliases=[" Nord AG ", "nord ag", "Nord\n\x00KV"])
+    assert contact.aliases == ["Nord AG", "Nord KV"]
+    assert contact.is_named("nord kv") and not contact.is_named("Nord Leben")
     with pytest.raises(ValidationError):
-        contact.set_aliases(["Inter"])
+        contact.set_aliases(["Nord"])
     with pytest.raises(ValidationError):
         contact.set_aliases([" "])
     with pytest.raises(ValidationError):
         contact.set_aliases(f"Alias {number}" for number in range(MAX_ALIASES + 1))
-    contact.rename("Inter AG")  # an alias that becomes the name is no longer an alias
-    assert contact.aliases == ["INTER KV"]
+    contact.rename("Nord AG")  # an alias that becomes the name is no longer an alias
+    assert contact.aliases == ["Nord KV"]
 
 
 def test_document_type_description() -> None:

@@ -40,7 +40,7 @@ Bericht; die Auswahl steht als Paperless-IDs.
 | Feld | Treffer | von | Bemerkung |
 | --- | --- | --- | --- |
 | Dokumenttyp | 8 | 10 | ein „Dokument“ in Paperless wurde als „Kontoauszug“ erkannt (passender als das Soll); einmal neuer Typ „Sammelbestätigung“ statt „Spendennachweis“ |
-| Kontakt | 2 | 10 | Vorschläge sind meist richtig, aber nicht der Paperless-Name: „ING-DiBa AG“ statt „ING“, „Scalable Capital GmbH“ statt des Kurznamens; bei Gehalts- und Zeitnachweisen nennt das Modell den Empfänger statt den Absender; der Abgleich ist buchstabengenau mit Ähnlichkeitsschwelle 0,75 |
+| Kontakt | 2 | 10 | Vorschläge sind meist richtig, aber nicht der Paperless-Name: „Beispielbank AG“ statt „Beispielbank“, „Beispiel Broker GmbH“ statt des Kurznamens (Namen geändert); bei Gehalts- und Zeitnachweisen nennt das Modell den Empfänger statt den Absender; der Abgleich ist buchstabengenau mit Ähnlichkeitsschwelle 0,75 |
 | Dokumentdatum | 5 | 10 | drei Abweichungen um einen Tag (Paperless „erstellt“ gegen das Datum im Dokument), zwei nicht erkannt |
 | Tags | 1 | 3 | nur drei Dokumente haben Tags in Paperless |
 | Felder | 0 | 16 | nicht aussagekräftig: die Testinstanz trägt Testwerte („Das ist ein Text“, Zufallstext, Verweise auf andere Dokumente), die kein Modell aus dem Dokument lesen kann; siehe Befund unten |

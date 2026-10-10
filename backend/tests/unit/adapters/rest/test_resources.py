@@ -308,22 +308,25 @@ async def test_field_definitions_change(api: Api) -> None:
 
 async def test_contact_aliases_and_type_descriptions(api: Api) -> None:
     a = auth(await api.admin())
-    contact = await post(api, "/contacts", {"name": "INTER", "aliases": ["INTER KV"]}, a)
-    assert contact["aliases"] == ["INTER KV"]
+    contact = await post(api, "/contacts", {"name": "Nord", "aliases": ["Nord KV"]}, a)
+    assert contact["aliases"] == ["Nord KV"]
     tag = await post(api, "/tags", {"name": "tax"}, a)
     assert "aliases" not in tag and "description" not in tag
     path = f"{PREFIX}/contacts/{contact['id']}"
-    response = await api.client.patch(path, json={"name": "INTER Gruppe"}, headers=a)
-    assert response.json()["aliases"] == ["INTER KV"]  # left out: kept
-    response = await api.client.patch(path, json={"aliases": ["INTER AG", "inter ag"]}, headers=a)
-    assert (response.json()["name"], response.json()["aliases"]) == ("INTER Gruppe", ["INTER AG"])
-    other = await post(api, "/contacts", {"name": "Allianz"}, a)
+    response = await api.client.patch(path, json={"name": "Nord Gruppe"}, headers=a)
+    assert response.json()["aliases"] == ["Nord KV"]  # left out: kept
+    response = await api.client.patch(path, json={"aliases": ["Nord AG", "nord ag"]}, headers=a)
+    assert (response.json()["name"], response.json()["aliases"]) == (
+        "Nord Gruppe",
+        ["Nord AG"],
+    )
+    other = await post(api, "/contacts", {"name": "Muster"}, a)
     response = await api.client.post(
-        f"{PREFIX}/contacts", json={"name": "Other", "aliases": ["INTER Gruppe"]}, headers=a
+        f"{PREFIX}/contacts", json={"name": "Other", "aliases": ["Nord Gruppe"]}, headers=a
     )
     assert response.status_code == 409
     response = await api.client.patch(
-        f"{PREFIX}/contacts/{other['id']}", json={"aliases": ["Allianz"]}, headers=a
+        f"{PREFIX}/contacts/{other['id']}", json={"aliases": ["Muster"]}, headers=a
     )
     assert response.status_code == 422  # its own name
 
@@ -338,8 +341,8 @@ async def test_contact_aliases_and_type_descriptions(api: Api) -> None:
     assert response.status_code == 422
     listed = (await api.client.get(f"{PREFIX}/contacts", headers=a)).json()
     assert {item["name"]: item["aliases"] for item in listed} == {
-        "Allianz": [],
-        "INTER Gruppe": ["INTER AG"],
+        "Muster": [],
+        "Nord Gruppe": ["Nord AG"],
     }
 
 

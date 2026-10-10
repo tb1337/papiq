@@ -51,21 +51,23 @@ async def test_only_admins_change_master_data(world: World) -> None:
 async def test_contact_aliases_and_type_descriptions(world: World) -> None:
     admin = await world.user(role=Role.ADMIN)
     service = world.master_data
-    inter = await service.create_contact(admin.id, "INTER Versicherungsgruppe", ["INTER AG"])
-    other = await service.create_contact(admin.id, "Allianz")
+    example = await service.create_contact(admin.id, "Nord Versicherungsgruppe", ["Nord AG"])
+    other = await service.create_contact(admin.id, "Muster")
     changed = await service.change_contact(
-        admin.id, inter.id, aliases=["INTER Krankenversicherung AG", "inter krankenversicherung ag"]
+        admin.id,
+        example.id,
+        aliases=["Nord Krankenversicherung AG", "nord krankenversicherung ag"],
     )
-    assert changed.aliases == ["INTER Krankenversicherung AG"]
-    assert (await service.rename_contact(admin.id, inter.id, "INTER")).aliases == changed.aliases
+    assert changed.aliases == ["Nord Krankenversicherung AG"]
+    assert (await service.rename_contact(admin.id, example.id, "Nord")).aliases == changed.aliases
     # A name or an alias of one contact is never a name or an alias of another.
     for change in (
-        service.change_contact(admin.id, other.id, aliases=["Inter"]),
-        service.change_contact(admin.id, other.id, name="inter krankenversicherung ag"),
-        service.create_contact(admin.id, "Other", ["INTER Krankenversicherung AG"]),
+        service.change_contact(admin.id, other.id, aliases=["Nord"]),
+        service.change_contact(admin.id, other.id, name="nord krankenversicherung ag"),
+        service.create_contact(admin.id, "Other", ["Nord Krankenversicherung AG"]),
         # As classification compares names: legal forms and punctuation do not count.
-        service.create_contact(admin.id, "Other", ["INTER Krankenversicherung"]),
-        service.create_contact(admin.id, "INTER Krankenversicherung GmbH"),
+        service.create_contact(admin.id, "Other", ["Nord Krankenversicherung"]),
+        service.create_contact(admin.id, "Nord Krankenversicherung GmbH"),
     ):
         with pytest.raises(ConflictError):
             await change
@@ -81,24 +83,24 @@ async def test_contact_aliases_and_type_descriptions(world: World) -> None:
 async def test_learn_alias(world: World) -> None:
     admin = await world.user(role=Role.ADMIN)
     service = world.master_data
-    inter = await service.create_contact(admin.id, "INTER Versicherungsgruppe")
-    allianz = await service.create_contact(admin.id, "Allianz", ["INTER Kranken"])
+    example = await service.create_contact(admin.id, "Nord Versicherungsgruppe")
+    other = await service.create_contact(admin.id, "Muster", ["Nord Kranken"])
     async with world.uow() as uow:
-        learned = await learn_alias(uow, inter.id, "INTER Krankenversicherung AG")
-        assert learned is not None and learned.aliases == ["INTER Krankenversicherung AG"]
-        assert await learn_alias(uow, inter.id, "inter versicherungsgruppe") is None  # its name
-        assert await learn_alias(uow, inter.id, "ALLIANZ") is None  # another contact's name
-        assert await learn_alias(uow, inter.id, "Allianz SE") is None  # the same, compared
-        assert await learn_alias(uow, inter.id, "Max Mustermann") is None  # unrelated
-        assert await learn_alias(uow, inter.id, "GmbH") is None  # nothing to compare
-        assert await learn_alias(uow, inter.id, "INTER\nKranken") is not None  # moves
+        learned = await learn_alias(uow, example.id, "Nord Krankenversicherung AG")
+        assert learned is not None and learned.aliases == ["Nord Krankenversicherung AG"]
+        assert await learn_alias(uow, example.id, "nord versicherungsgruppe") is None  # its name
+        assert await learn_alias(uow, example.id, "MUSTER") is None  # another contact's name
+        assert await learn_alias(uow, example.id, "Muster SE") is None  # the same, compared
+        assert await learn_alias(uow, example.id, "Max Mustermann") is None  # unrelated
+        assert await learn_alias(uow, example.id, "GmbH") is None  # nothing to compare
+        assert await learn_alias(uow, example.id, "Nord\nKranken") is not None  # moves
         await uow.commit()
     async with world.uow() as uow:
-        assert (await uow.contacts.get(inter.id)).aliases == [
-            "INTER Krankenversicherung AG",
-            "INTER Kranken",
+        assert (await uow.contacts.get(example.id)).aliases == [
+            "Nord Krankenversicherung AG",
+            "Nord Kranken",
         ]
-        assert (await uow.contacts.get(allianz.id)).aliases == []
+        assert (await uow.contacts.get(other.id)).aliases == []
 
 
 async def test_names_are_unique_per_kind(world: World) -> None:

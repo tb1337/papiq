@@ -36,8 +36,8 @@ class MasterData:
 class Contact(MasterData):
     """The other party of a document (Paperless-ngx: correspondent).
 
-    `aliases` are other names the contact is written as in documents ("INTER Krankenversicherung
-    AG" for "INTER Versicherungsgruppe"); classification matches them like the name. They are
+    `aliases` are other names the contact is written as in documents ("Nord Krankenversicherung
+    AG" for "Nord Versicherungsgruppe"); classification matches them like the name. They are
     unique regardless of case and differ from the name; across contacts, names and aliases are
     unique too (see `MasterDataService`)."""
 

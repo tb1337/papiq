@@ -339,31 +339,31 @@ class UnitOfWorkContract:
     ) -> None:
         """Aliases keep their order, change with the contact and go with it; an alias is unique
         across contacts. A document type keeps its description."""
-        inter = Contact.create(
-            name="INTER Versicherungsgruppe",
+        example = Contact.create(
+            name="Nord Versicherungsgruppe",
             now=NOW,
-            aliases=["INTER Krankenversicherung AG", "INTER Lebensversicherung AG"],
+            aliases=["Nord Krankenversicherung AG", "Nord Lebensversicherung AG"],
         )
         pay = DocumentType.create(name="Pay slip", now=NOW, description="Entgeltbescheinigung")
         async with uow_factory() as uow:
-            await uow.contacts.add(inter)
+            await uow.contacts.add(example)
             await uow.document_types.add(pay)
             await uow.commit()
         async with uow_factory() as uow:
-            assert await uow.contacts.get(inter.id) == inter
+            assert await uow.contacts.get(example.id) == example
             assert (await uow.document_types.get(pay.id)).description == "Entgeltbescheinigung"
-            stored = await uow.contacts.get(inter.id)
-            stored.set_aliases(["INTER Lebensversicherung AG", "INTER Allgemeine"])
+            stored = await uow.contacts.get(example.id)
+            stored.set_aliases(["Nord Lebensversicherung AG", "Nord Allgemeine"])
             await uow.contacts.update(stored)
             await uow.commit()
         async with uow_factory() as uow:
-            assert (await uow.contacts.get(inter.id)).aliases == [
-                "INTER Lebensversicherung AG",
-                "INTER Allgemeine",
+            assert (await uow.contacts.get(example.id)).aliases == [
+                "Nord Lebensversicherung AG",
+                "Nord Allgemeine",
             ]
             with pytest.raises(ConflictError):
                 await uow.contacts.add(
-                    Contact.create(name="Other", now=NOW, aliases=["inter allgemeine"])
+                    Contact.create(name="Other", now=NOW, aliases=["nord allgemeine"])
                 )
                 await uow.commit()
         other = Contact.create(name="Other", now=NOW)
@@ -372,22 +372,20 @@ class UnitOfWorkContract:
             await uow.commit()
         async with uow_factory() as uow:
             # An alias moves to another contact in one transaction.
-            source, target = await uow.contacts.get(inter.id), await uow.contacts.get(other.id)
-            source.set_aliases(["INTER Lebensversicherung AG"])
-            target.set_aliases(["INTER Allgemeine"])
+            source, target = await uow.contacts.get(example.id), await uow.contacts.get(other.id)
+            source.set_aliases(["Nord Lebensversicherung AG"])
+            target.set_aliases(["Nord Allgemeine"])
             await uow.contacts.update(source)
             await uow.contacts.update(target)
             await uow.commit()
         async with uow_factory() as uow:
-            assert (await uow.contacts.get(other.id)).aliases == ["INTER Allgemeine"]
-            await uow.contacts.remove(inter.id)
+            assert (await uow.contacts.get(other.id)).aliases == ["Nord Allgemeine"]
+            await uow.contacts.remove(example.id)
             await uow.contacts.remove(other.id)
             await uow.commit()
         async with uow_factory() as uow:
             # The aliases went with the contact: they are free again.
-            await uow.contacts.add(
-                Contact.create(name="New", now=NOW, aliases=["INTER Allgemeine"])
-            )
+            await uow.contacts.add(Contact.create(name="New", now=NOW, aliases=["Nord Allgemeine"]))
             await uow.commit()
 
     async def test_field_definition_round_trip(self, uow_factory: UnitOfWorkFactory) -> None:

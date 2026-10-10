@@ -34,7 +34,7 @@ INVOICE = """\
 # Stadtwerke Musterstadt GmbH
 Postfach 12 34, 12345 Musterstadt
 
-Herrn Max Beispiel, Musterweg 1, 12345 Musterstadt
+Herrn Max Nord, Musterweg 1, 12345 Musterstadt
 
 Musterstadt, 31.03.2026
 
@@ -447,63 +447,63 @@ async def add_contact(world: World, name: str, *aliases: str) -> Contact:
     return contact
 
 
-INTER_LETTER = INVOICE.replace("Stadtwerke Musterstadt GmbH", "INTER Krankenversicherung AG")
+EXAMPLE_LETTER = INVOICE.replace("Stadtwerke Musterstadt GmbH", "Nord Krankenversicherung AG")
 
 
-@pytest.mark.parametrize("name", ["INTER Versicherungsgruppe", "INTER Krankenversicherung AG"])
+@pytest.mark.parametrize("name", ["Nord Versicherungsgruppe", "Nord Krankenversicherung AG"])
 async def test_a_contact_named_by_an_alias_is_applied(world: World, name: str) -> None:
     """The model gives the listed name or the one in the text; the text shows an alias."""
     await seed(world)
-    inter = await add_contact(world, "INTER Versicherungsgruppe", "INTER Krankenversicherung AG")
+    example = await add_contact(world, "Nord Versicherungsgruppe", "Nord Krankenversicherung AG")
     result = await classify(
-        world, classification(contact={"value": name, "evidence": None}), INTER_LETTER
+        world, classification(contact={"value": name, "evidence": None}), EXAMPLE_LETTER
     )
     contact = checks(result.result)["contact"]
     assert contact.ok
-    assert result.changes.contact_id == inter.id
+    assert result.changes.contact_id == example.id
 
 
 async def test_without_the_alias_the_contact_is_new(world: World) -> None:
     await seed(world)
-    await add_contact(world, "INTER Versicherungsgruppe")
+    await add_contact(world, "Nord Versicherungsgruppe")
     result = await classify(
         world,
-        classification(contact={"value": "INTER Krankenversicherung AG", "evidence": None}),
-        INTER_LETTER,
+        classification(contact={"value": "Nord Krankenversicherung AG", "evidence": None}),
+        EXAMPLE_LETTER,
     )
     contact = checks(result.result)["contact"]
-    assert contact.new_name == "INTER Krankenversicherung AG"
+    assert contact.new_name == "Nord Krankenversicherung AG"
 
 
 async def test_an_alias_of_another_contact_does_not_count_as_named(world: World) -> None:
-    """Allianz's alias in the text does not name INTER."""
+    """The other insurer's alias in the text does not name the example."""
     await seed(world)
-    inter = await add_contact(world, "INTER Versicherungsgruppe")
-    await add_contact(world, "Allianz", "INTER Krankenversicherung AG Allianz")
+    example = await add_contact(world, "Nord Versicherungsgruppe")
+    await add_contact(world, "Muster", "Nord Krankenversicherung AG Muster")
     result = await classify(
         world,
-        classification(contact={"value": "INTER Versicherungsgruppe", "evidence": None}),
-        INTER_LETTER,
+        classification(contact={"value": "Nord Versicherungsgruppe", "evidence": None}),
+        EXAMPLE_LETTER,
     )
     contact = checks(result.result)["contact"]
     assert not contact.ok
-    assert contact.suggestion == str(inter.id)
+    assert contact.suggestion == str(example.id)
 
 
 async def test_contacts_the_text_names_most_are_listed(world: World) -> None:
     await seed(world)
-    await add_contact(world, "INTER Versicherungsgruppe", "INTER Krankenversicherung AG")
-    await add_contact(world, "Mannheimer Versicherung")
-    await add_contact(world, "INTER Sport")
+    await add_contact(world, "Nord Versicherungsgruppe", "Nord Krankenversicherung AG")
+    await add_contact(world, "Südstädter Versicherung")
+    await add_contact(world, "Nord Sport")
     fake = model(classification())
-    text = INTER_LETTER + "\nINTER, Mannheim\n"
+    text = EXAMPLE_LETTER + "\nINTER, Südstadt\n"
     step = classify_step(world, fake, max_contacts=3)
     result = await step.run(await document_with(world, text))
     contacts = fake.requests[0].user.split("\n\nDocument types:")[0]
     assert contacts == (
         "Contacts:\n"
-        "- INTER Versicherungsgruppe (also written as: INTER Krankenversicherung AG)\n"
-        "- INTER Sport\n"  # half of the words, like the next; then by name
+        "- Nord Versicherungsgruppe (also written as: Nord Krankenversicherung AG)\n"
+        "- Nord Sport\n"  # half of the words, like the next; then by name
         "- Stadtwerke Musterstadt GmbH"
     )  # not the contacts whose words the text does not show
     assert isinstance(result, MetadataResult)
