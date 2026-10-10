@@ -54,7 +54,9 @@ async def test_contact_aliases_and_type_descriptions(world: World) -> None:
     example = await service.create_contact(admin.id, "Nord Versicherungsgruppe", ["Nord AG"])
     other = await service.create_contact(admin.id, "Muster")
     changed = await service.change_contact(
-        admin.id, example.id, aliases=["Nord Krankenversicherung AG", "nord krankenversicherung ag"]
+        admin.id,
+        example.id,
+        aliases=["Nord Krankenversicherung AG", "nord krankenversicherung ag"],
     )
     assert changed.aliases == ["Nord Krankenversicherung AG"]
     assert (await service.rename_contact(admin.id, example.id, "Nord")).aliases == changed.aliases

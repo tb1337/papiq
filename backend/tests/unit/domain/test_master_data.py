@@ -21,9 +21,7 @@ def test_master_data_has_a_name(kind: type[Contact | DocumentType | Tag]) -> Non
 
 
 def test_contact_aliases() -> None:
-    contact = Contact.create(
-        name="Nord", now=NOW, aliases=[" Nord AG ", "nord ag", "Nord\n\x00KV"]
-    )
+    contact = Contact.create(name="Nord", now=NOW, aliases=[" Nord AG ", "nord ag", "Nord\n\x00KV"])
     assert contact.aliases == ["Nord AG", "Nord KV"]
     assert contact.is_named("nord kv") and not contact.is_named("Nord Leben")
     with pytest.raises(ValidationError):

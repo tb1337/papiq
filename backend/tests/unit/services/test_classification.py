@@ -34,7 +34,7 @@ INVOICE = """\
 # Stadtwerke Musterstadt GmbH
 Postfach 12 34, 12345 Musterstadt
 
-Herrn Max Beispiel, Musterweg 1, 12345 Musterstadt
+Herrn Max Nord, Musterweg 1, 12345 Musterstadt
 
 Musterstadt, 31.03.2026
 
