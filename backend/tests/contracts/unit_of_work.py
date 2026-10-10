@@ -385,9 +385,7 @@ class UnitOfWorkContract:
             await uow.commit()
         async with uow_factory() as uow:
             # The aliases went with the contact: they are free again.
-            await uow.contacts.add(
-                Contact.create(name="New", now=NOW, aliases=["Nord Allgemeine"])
-            )
+            await uow.contacts.add(Contact.create(name="New", now=NOW, aliases=["Nord Allgemeine"]))
             await uow.commit()
 
     async def test_field_definition_round_trip(self, uow_factory: UnitOfWorkFactory) -> None:

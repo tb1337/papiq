@@ -316,7 +316,10 @@ async def test_contact_aliases_and_type_descriptions(api: Api) -> None:
     response = await api.client.patch(path, json={"name": "Nord Gruppe"}, headers=a)
     assert response.json()["aliases"] == ["Nord KV"]  # left out: kept
     response = await api.client.patch(path, json={"aliases": ["Nord AG", "nord ag"]}, headers=a)
-    assert (response.json()["name"], response.json()["aliases"]) == ("Nord Gruppe", ["Nord AG"])
+    assert (response.json()["name"], response.json()["aliases"]) == (
+        "Nord Gruppe",
+        ["Nord AG"],
+    )
     other = await post(api, "/contacts", {"name": "Muster"}, a)
     response = await api.client.post(
         f"{PREFIX}/contacts", json={"name": "Other", "aliases": ["Nord Gruppe"]}, headers=a

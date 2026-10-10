@@ -144,7 +144,8 @@ def test_classify_message_lists_contacts_and_type_descriptions() -> None:
     message = classify_message(
         [
             Listed(
-                "Nord Versicherungsgruppe", aliases=("Nord Krankenversicherung AG", "Nord\nKV")
+                "Nord Versicherungsgruppe",
+                aliases=("Nord Krankenversicherung AG", "Nord\nKV"),
             )
         ],
         [
@@ -155,8 +156,9 @@ def test_classify_message_lists_contacts_and_type_descriptions() -> None:
         shorten("text", 100),
     )
     assert message.startswith(
-        "Contacts:\n- Nord Versicherungsgruppe (also written as: Nord Krankenversicherung AG; "
-        "Nord KV)\n\nDocument types:\n- Lohnabrechnung: Gehaltsabrechnung, Entgeltbescheinigung"
+        "Contacts:\n- Nord Versicherungsgruppe (also written as: "
+        "Nord Krankenversicherung AG; Nord KV)\n\nDocument types:"
+        "\n- Lohnabrechnung: Gehaltsabrechnung, Entgeltbescheinigung"
         "\n- Brief\n\nTags:\n- Steuer\n\n"
     )
 
