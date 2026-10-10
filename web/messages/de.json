@@ -428,7 +428,7 @@
 	"rule_remove": "Entfernen",
 	"rule_move_up": "Nach oben",
 	"rule_move_down": "Nach unten",
-	"rule_condition_subject": "Feld",
+	"rule_condition_subject": "Bezug",
 	"rule_condition_operator": "Vergleich",
 	"rule_condition_value": "Wert",
 	"rule_condition_field": "Feld",
