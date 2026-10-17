@@ -32,6 +32,8 @@ async def run_worker(settings: Settings) -> None:
             webhooks=services.webhook_delivery,
             webhook_concurrency=settings.webhook_concurrency,
             classifier=services.classifier,
+            logos=services.logos,
+            master_data=services.master_data,
         )
         loop = asyncio.get_running_loop()
         for signum in (signal.SIGTERM, signal.SIGINT):

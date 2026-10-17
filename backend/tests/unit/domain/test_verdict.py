@@ -1,13 +1,13 @@
-"""The judge's rules for contact, document type and tags."""
+"""The judge's rules for contact, document type, topic and tags."""
 
 from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
 
-from papiq.core.domain.classification import CandidateSource
+from papiq.core.domain.classification import CandidateSource, FieldCheck
 from papiq.core.domain.ids import ContactId, DocumentTypeId, TagId
-from papiq.core.domain.master_data import Contact, DocumentType, Tag
+from papiq.core.domain.master_data import Assignment, Contact, DocumentType, Tag, TagScope
 from papiq.core.domain.pipeline import Outcome
 from papiq.core.domain.verdict import (
     ClassifierView,
@@ -18,6 +18,7 @@ from papiq.core.domain.verdict import (
     Signals,
     judge_contact,
     judge_tags,
+    judge_topic,
     judge_type,
 )
 
@@ -222,7 +223,7 @@ def test_similar_documents_cover_only_what_confirmed_documents_carry() -> None:
     )
     for known in (knowing, replace(signals, neighbours_know=None)):
         assert judge_type(known, TYPES).outcome is Outcome.UNCERTAIN
-        assert judge_tags(known, TAGS).suggestion == ["Energie"]
+        assert judge_tags(known, TAGS).suggestion == [str(ENERGY.id)]
 
 
 def test_a_signal_naming_another_value_contradicts_even_one_it_does_not_know() -> None:
@@ -325,7 +326,144 @@ def test_tags_two_signals_name_are_set_one_is_a_suggestion() -> None:
     check = judge_tags(signals, TAGS)
     assert check.outcome is Outcome.OK
     assert check.value == [str(ENERGY.id)]
-    assert check.suggestion == ["Finanzen", "Unbekannt", "Strom"]
+    # Ids, as the review takes them; the model's new tags stand in what it proposed.
+    assert check.suggestion == [str(MONEY.id)]
+    assert check.proposed == {"tags": ["Energie", "Finanzen", "Unbekannt"], "new_tags": ["Strom"]}
     # Before the classifier knows the tags, the model's are set.
     cold = judge_tags(Signals(model=model(tags=("Energie",))), TAGS)
     assert cold.value == [str(ENERGY.id)]
+
+
+def test_tags_set_by_hand_are_never_proposed_and_a_child_beats_its_parent() -> None:
+    """A status tag set by hand is no target even when a signal names it; set together with its
+    child, a parent is left out (the child says more)."""
+    paid = Tag.create(name="Bezahlt", now=NOW, assignment=Assignment.MANUAL)
+    electricity = Tag.create(name="Strom", now=NOW, parent_id=ENERGY.id)
+    tags = [*TAGS, paid, electricity]
+    signals = Signals(
+        model=model(tags=("Energie", "Strom", "Bezahlt")),
+        classifier=classifier(tags={paid.id: 0.99, electricity.id: 0.95, ENERGY.id: 0.95}),
+    )
+    check = judge_tags(signals, tags)
+    assert check.value == [str(electricity.id)]
+    assert {candidate.label for candidate in check.candidates} == {"Energie", "Strom"}
+    assert check.suggestion is None
+
+
+# --- topic ------------------------------------------------------------------------------------
+
+WORK = Tag.create(name="Arbeit", now=NOW, scope=TagScope.TOPIC)
+HEALTH = Tag.create(name="Krankenversicherung", now=NOW, scope=TagScope.TOPIC)
+PRIVATE = Tag.create(name="Privat", now=NOW, scope=TagScope.TOPIC, assignment=Assignment.MANUAL)
+ELSEWHERE = Tag.create(name="Girokonto", now=NOW, scope=TagScope.TOPIC)
+TOPICS = [WORK, HEALTH, PRIVATE, ELSEWHERE, *TAGS]
+NORD = Contact.create(name="Nord", now=NOW, topic_ids=[WORK.id, HEALTH.id, PRIVATE.id])
+GREEN = FieldCheck(field="contact", outcome=Outcome.OK, confidence=1, value=str(NORD.id))
+YELLOW = FieldCheck(
+    field="contact",
+    outcome=Outcome.UNCERTAIN,
+    confidence=0.5,
+    reason="only one signal",
+    suggestion=str(NORD.id),
+)
+NONE = FieldCheck(field="contact", outcome=Outcome.UNCERTAIN, confidence=0, reason="none")
+
+
+def pair(*topics: Tag) -> FactsView:
+    """Identifiers of Nord in the text, each pointing to one of `topics`."""
+    return FactsView(
+        identifiers={NORD.id: ("personnel_number",) * len(topics)},
+        topics={NORD.id: {topic.id: ("personnel_number",) for topic in topics}},
+    )
+
+
+def topics_of(**p: float) -> ClassifierView:
+    known = {"work": WORK, "health": HEALTH, "elsewhere": ELSEWHERE}
+    return ClassifierView(
+        topics=sorted(((known[name].id, value) for name, value in p.items()), key=lambda i: -i[1])
+    )
+
+
+def judge(signals: Signals, contact: FieldCheck = GREEN) -> FieldCheck:
+    return judge_topic(signals, contact, [NORD, UTILITY], TOPICS)
+
+
+@pytest.mark.parametrize(
+    "signals",
+    [
+        # An identifier of the pair and a signal.
+        Signals(model=model(topic="Arbeit"), facts=pair(WORK)),
+        Signals(classifier=topics_of(work=0.9, health=0.1), facts=pair(WORK)),
+        # Two signals.
+        Signals(model=model(topic="arbeit"), classifier=topics_of(work=0.85)),
+        Signals(
+            model=model(topic="Arbeit"),
+            neighbours=tuple(
+                replace(item, topic=WORK.id) for item in neighbours((NORD.id, None), (None, None))
+            ),
+        ),
+    ],
+)
+def test_a_topic_is_set_under_a_green_contact_by_evidence_and_a_signal_or_two_signals(
+    signals: Signals,
+) -> None:
+    check = judge(signals)
+    assert (check.outcome, check.value, check.suggestion) == (Outcome.OK, str(WORK.id), None)
+    assert check.candidates[0].label == "Arbeit"
+
+
+@pytest.mark.parametrize(
+    ("signals", "reason"),
+    [
+        (Signals(model=model(topic="Arbeit")), "only one signal names 'Arbeit'"),
+        (Signals(facts=pair(WORK)), "only an identifier points to 'Arbeit'"),
+        (
+            Signals(model=model(topic="Arbeit"), classifier=topics_of(work=0.7, health=0.3)),
+            "only one signal names 'Arbeit'",
+        ),
+    ],
+)
+def test_a_topic_one_source_names_is_a_suggestion(signals: Signals, reason: str) -> None:
+    check = judge(signals)
+    assert (check.outcome, check.value, check.suggestion) == (Outcome.OK, None, str(WORK.id))
+    assert check.reason == reason
+
+
+@pytest.mark.parametrize(
+    "signals",
+    [
+        Signals(facts=pair(WORK, HEALTH)),
+        Signals(model=model(topic="Arbeit"), facts=pair(HEALTH)),
+        Signals(model=model(topic="Arbeit"), classifier=topics_of(health=0.9, work=0.1)),
+    ],
+)
+def test_topics_named_against_each_other_leave_it_empty_with_all_candidates(
+    signals: Signals,
+) -> None:
+    check = judge(signals)
+    assert (check.outcome, check.value, check.suggestion) == (Outcome.OK, None, None)
+    assert {item.label for item in check.candidates} == {"Arbeit", "Krankenversicherung"}
+    assert all(item.contradicted for item in check.candidates)
+    assert check.reason is not None and check.reason.startswith("the signals disagree")
+
+
+def test_under_a_suggested_contact_the_topic_is_only_suggested() -> None:
+    signals = Signals(model=model(topic="Arbeit"), facts=pair(WORK))
+    check = judge(signals, YELLOW)
+    assert (check.value, check.suggestion) == (None, str(WORK.id))
+    assert check.reason == "the contact 'Nord' is only suggested"
+    sources = [source.signal for source in check.candidates[0].sources]
+    assert sources == ["signal_llm", "signal_facts"]
+    assert check.candidates[0].sources[1].identifiers == ("personnel_number",)
+
+
+def test_only_the_contacts_topics_that_the_classification_sets_count() -> None:
+    # Another contact's topic, one set by hand, and no contact at all.
+    for signals in (
+        Signals(model=model(topic="Girokonto"), classifier=topics_of(elsewhere=0.95)),
+        Signals(model=model(topic="Privat")),
+    ):
+        check = judge(signals)
+        assert (check.value, check.suggestion, check.candidates) == (None, None, ())
+    check = judge(Signals(model=model(topic="Arbeit"), facts=pair(WORK)), NONE)
+    assert (check.outcome, check.value, check.suggestion) == (Outcome.OK, None, None)

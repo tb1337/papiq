@@ -24,11 +24,19 @@ class FakeClassifier:
             raise ClassifierError("no example has any text")
         contacts = _classes((example.contact, example.text) for example in examples)
         types = _classes((example.document_type, example.text) for example in examples)
+        topics = _classes((example.topic, example.text) for example in examples)
         tags = {str(tag): sorted(words) for tag, words in _tag_words(examples).items()}
-        data = {"format": _FORMAT, "contact": contacts, "document_type": types, "tags": tags}
+        data = {
+            "format": _FORMAT,
+            "contact": contacts,
+            "document_type": types,
+            "topic": topics,
+            "tags": tags,
+        }
         classes: JsonObject = {
             "contact": len(contacts),
             "document_type": len(types),
+            "topic": len(topics),
             "tags": len(tags),
         }
         summary: JsonObject = {"classes": classes}
@@ -42,6 +50,7 @@ class FakeClassifier:
             words = _words(text)
             contacts = _ranked(data["contact"], words)
             types = _ranked(data["document_type"], words)
+            topics = _ranked(data.get("topic", {}), words)
             tags = {TagId(UUID(tag)): _share(set(own), words) for tag, own in data["tags"].items()}
         except (ValueError, KeyError, TypeError, AttributeError):
             raise ClassifierError("the model cannot be read") from None
@@ -49,6 +58,7 @@ class FakeClassifier:
             contacts=[(ContactId(UUID(key)), share) for key, share in contacts],
             document_types=[(DocumentTypeId(UUID(key)), share) for key, share in types],
             tags=tags,
+            topics=[(TagId(UUID(key)), share) for key, share in topics],
         )
 
 

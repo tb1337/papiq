@@ -12,7 +12,7 @@ const lookup = {
 	contacts: [{ id: UTILITY, name: 'Stadtwerke' }],
 	documentTypes: [{ id: INVOICE, name: 'Rechnung' }],
 	tags: [],
-	drawers: [],
+	spaces: [],
 	users: []
 } as unknown as Lookup;
 
@@ -112,5 +112,22 @@ describe('signalSummary', () => {
 			[m.signal_unknown_identifiers(), [m.signal_none()]]
 		]);
 		expect(signalSummary(entry('judge', {}), lookup)).toEqual([]);
+	});
+});
+
+describe('the topic in the signals', () => {
+	const TOPIC = '0199a6c4-0000-7000-8000-0000000000b1';
+	const topics = {
+		...lookup,
+		tags: [{ id: TOPIC, name: 'Arbeit', path: ['Arbeit'], scope: 'topic' }]
+	} as unknown as Lookup;
+
+	it('shows the topic the model named, and the classifier’s best topics', () => {
+		const proposal = { sender: { value: null, evidence: null }, topic: 'Arbeit' };
+		const llm = texts(signalSummary(entry('signal_llm', { proposal }), topics));
+		expect(llm).toContainEqual([m.field_topic(), ['Arbeit']]);
+		const output = { contacts: [], document_types: [], topics: [[TOPIC, 0.93]] };
+		const classifier = texts(signalSummary(entry('signal_classifier', output), topics));
+		expect(classifier).toContainEqual([m.signal_topics(), ['Arbeit 93%']]);
 	});
 });

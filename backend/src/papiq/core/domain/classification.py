@@ -17,6 +17,7 @@ from papiq.core.domain.pipeline import Outcome
 
 CONTACT = "contact"
 DOCUMENT_TYPE = "document_type"
+TOPIC = "topic"
 TAGS = "tags"
 DOCUMENT_DATE = "document_date"
 TITLE = "title"
@@ -133,8 +134,8 @@ class FieldCheck:
 
     - `proposed`: what the model answered for the field, unchanged.
     - `evidence`: the excerpt the model quoted, if any.
-    - `value`: the checked value as JSON (contact or type id, tag ids, ISO date, field
-      value), set if the field is OK; it was applied to the document.
+    - `value`: the checked value as JSON (contact, type or topic id, tag ids, ISO date,
+      field value), set if the field is OK; it was applied to the document.
     - `suggestion`: for an uncertain field, a value a person may accept as it is (an existing
       contact, a date or field value that is valid but not shown in the text).
     - `new_name`: the name of a contact or type the model proposed that does not exist; only

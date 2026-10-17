@@ -22,8 +22,9 @@ def openapi_document() -> dict[str, object]:
         ApiContext(
             auth=services.auth,
             users=services.users,
-            drawers=services.drawers,
+            spaces=services.spaces,
             master_data=services.master_data,
+            logos=services.logos,
             pipeline=services.pipeline,
             documents=services.documents,
             rules=services.rules,

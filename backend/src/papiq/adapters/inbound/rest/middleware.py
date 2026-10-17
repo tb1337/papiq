@@ -1,5 +1,8 @@
-"""ASGI middleware of the API."""
+"""ASGI middleware of the API.
 
+Paths given to them may name a segment `{id}`: it stands for one segment of any value."""
+
+import re
 from collections.abc import Collection, Sequence
 
 from starlette.datastructures import MutableHeaders
@@ -17,19 +20,28 @@ class RequestTooLargeError(HTTPException):
         super().__init__(413, f"the request body is larger than {limit} bytes")
 
 
+def _pattern(path: str) -> re.Pattern[str]:
+    return re.compile(
+        "/".join(r"[^/]+" if part == "{id}" else re.escape(part) for part in path.split("/"))
+    )
+
+
 class LimitRequestBody:
     """Bounds request bodies: by `Content-Length` before anything is read, and by the bytes
     received otherwise. Routes in `exempt` (method, path) have limits of their own, such as the
-    upload. FastAPI reads JSON bodies completely before validating them, so without this a
+    uploads. FastAPI reads JSON bodies completely before validating them, so without this a
     client could make the process hold any amount of data."""
 
     def __init__(self, app: ASGIApp, *, limit: int, exempt: Collection[tuple[str, str]]) -> None:
         self._app = app
         self._limit = limit
-        self._exempt = frozenset(exempt)
+        self._exempt = [(method, _pattern(path)) for method, path in exempt]
+
+    def _exempted(self, method: str, path: str) -> bool:
+        return any(method == wanted and pattern.fullmatch(path) for wanted, pattern in self._exempt)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or (scope["method"], scope["path"]) in self._exempt:
+        if scope["type"] != "http" or self._exempted(scope["method"], scope["path"]):
             await self._app(scope, receive, send)
             return
         headers = dict(scope["headers"])
@@ -57,12 +69,22 @@ class NoStore:
     `X-Content-Type-Options: nosniff`, also errors and redirects: the API's answers are
     personal (documents, users, logs) and some carry CSRF tokens, TOTP secrets, recovery codes
     and API tokens, which no browser or proxy cache may keep. `public` names the paths below
-    the prefix that are not personal (health, the API description)."""
+    the prefix that are not personal (health, the API description). On `cacheable` paths, a
+    successful answer keeps the `Cache-Control` its route gives (a logo with its version in the
+    URL); every other answer there is marked as well."""
 
-    def __init__(self, app: ASGIApp, *, prefix: str, public: Sequence[str] = ()) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        prefix: str,
+        public: Sequence[str] = (),
+        cacheable: Sequence[str] = (),
+    ) -> None:
         self._app = app
         self._prefix = prefix.rstrip("/")
         self._public = tuple(public)
+        self._cacheable = [_pattern(path) for path in cacheable]
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         path = scope.get("path", "")
@@ -73,11 +95,16 @@ class NoStore:
         ):
             await self._app(scope, receive, send)
             return
+        cacheable = scope["method"] in ("GET", "HEAD") and any(
+            pattern.fullmatch(path) for pattern in self._cacheable
+        )
 
         async def marked(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
-                headers["Cache-Control"] = "no-store"
+                kept = cacheable and message["status"] == 200 and "cache-control" in headers
+                if not kept:
+                    headers["Cache-Control"] = "no-store"
                 headers["X-Content-Type-Options"] = "nosniff"
             await send(message)
 

@@ -5,12 +5,13 @@ with `output.abstained` naming why (no model trained, no embeddings, ...). Only 
 model's signal fails, when its answers do not fit or it cannot be reached after every retry.
 
 - `signal_facts`: contacts whose name or alias stands whole in the text, and identifiers of
-  contacts (IBAN, VAT number, ...) found in it; evidence, not a proposal of its own. The codes
-  on the archive's pages count as well (`domain.codes`): their identifiers like those of the
-  text, the payee of a GiroCode like a name in the text.
-- `signal_classifier`: the trained classifier's probabilities for contact, type and tags.
+  contacts (IBAN, VAT number, ...) found in it, with the topic each points to; evidence, not a
+  proposal of its own. The codes on the archive's pages count as well (`domain.codes`): their
+  identifiers like those of the text, the payee of a GiroCode like a name in the text.
+- `signal_classifier`: the trained classifier's probabilities for contact, type, topic and
+  tags.
 - `signal_neighbours`: the most similar confirmed documents the owner may read, by vector,
-  with their contact, type and tags.
+  with their contact, type, topic and tags.
 """
 
 import json
@@ -189,6 +190,7 @@ def facts_of(text: str, contacts: Sequence[Contact], codes: Sequence[Code] = ())
                     "contact_id": str(item.contact_id),
                     "kind": item.kind.value,
                     "value": item.value,
+                    **({} if item.topic_id is None else {"topic_id": str(item.topic_id)}),
                 },
                 item.in_code,
             )
@@ -231,10 +233,12 @@ class ClassifierSignal:
             "document_types": [
                 [str(id), round(p, 4)] for id, p in prediction.document_types[:_RANKED]
             ],
+            "topics": [[str(id), round(p, 4)] for id, p in prediction.topics[:_RANKED]],
             "tags": {str(id): round(p, 4) for id, p in prediction.tags.items()},
             "known": {
                 "contacts": _texts(prediction.known_contacts),
                 "document_types": _texts(prediction.known_types),
+                "topics": _texts(prediction.known_topics),
             },
         }
         return NodeResult(
@@ -254,9 +258,9 @@ class NeighboursPolicy:
 
 class NeighboursSignal:
     """The most similar confirmed documents the owner may read: by the vector of the start of
-    the text, against the index's vectors; their contact, type and tags (from the database,
-    not the index, which lags a little), and what any confirmed document carries (`known`):
-    the values similar documents could have named."""
+    the text, against the index's vectors; their contact, type, topic and tags (from the
+    database, not the index, which lags a little), and what any confirmed document carries
+    (`known`): the values similar documents could have named."""
 
     def __init__(
         self,
@@ -291,8 +295,8 @@ class NeighboursSignal:
             return abstained("the text's vector does not fit the index")
         async with self._uow() as uow:
             owner = await uow.users.get(document.owner_id)
-            drawers = await uow.drawers.list_accessible(owner.id)
-        visibility = Visibility(owner.id, frozenset(drawer.id for drawer in drawers))
+            spaces = await uow.spaces.list_accessible(owner.id)
+        visibility = Visibility(owner.id, frozenset(space.id for space in spaces))
         try:
             hits = await self._index.similar(
                 SimilarQuery(
@@ -308,12 +312,17 @@ class NeighboursSignal:
         neighbours: list[JsonValue] = []
         async with self._uow() as uow:
             known = await uow.documents.confirmed_labels(owner.id)
+            # They vote on the tags and topics the classification sets only, not on those set
+            # by hand.
+            tags = await uow.tags.list_all()
+            targets = {tag.id for tag in tags if tag.is_target}
+            topics = {tag.id for tag in tags if tag.is_topic_target}
             for hit in hits:
                 found = await uow.documents.find(hit.id)
                 if found is None or found.confirmed_at is None:
                     continue  # the index is behind
-                drawer = await uow.drawers.find(found.drawer_id)
-                if drawer is None or reach_access(owner, found, drawer) is None:
+                space = await uow.spaces.find(found.space_id)
+                if space is None or reach_access(owner, found, space) is None:
                     continue
                 neighbours.append(
                     {
@@ -323,7 +332,8 @@ class NeighboursSignal:
                         "document_type_id": (
                             None if found.document_type_id is None else str(found.document_type_id)
                         ),
-                        "tag_ids": _texts(found.tag_ids),
+                        "tag_ids": _texts(found.tag_ids & targets),
+                        "topic_id": (str(found.topic_id) if found.topic_id in topics else None),
                     }
                 )
         if not neighbours:
@@ -333,7 +343,8 @@ class NeighboursSignal:
             "known": {
                 "contacts": _texts(known.contacts),
                 "document_types": _texts(known.document_types),
-                "tags": _texts(known.tags),
+                "tags": _texts(known.tags & targets),
+                "topics": _texts(known.topics & topics),
             },
         }
         return NodeResult(outcome=Outcome.OK, output=output)
@@ -398,6 +409,7 @@ def _model_view(output: Mapping[str, Any] | None) -> ModelProposal | None:
         new_document_type=_optional_text(proposal.get("new_document_type")),
         tags=tuple(item for item in proposal.get("tags") or () if isinstance(item, str)),
         new_tags=tuple(item for item in proposal.get("new_tags") or () if isinstance(item, str)),
+        topic=_optional_text(proposal.get("topic")),
     )
 
 
@@ -413,6 +425,8 @@ def _classifier_view(output: Mapping[str, Any] | None) -> ClassifierView | None:
         tags={TagId(UUID(id)): float(p) for id, p in (output.get("tags") or {}).items()},
         known_contacts=frozenset(ContactId(UUID(id)) for id in known.get("contacts") or ()),
         known_types=frozenset(DocumentTypeId(UUID(id)) for id in known.get("document_types") or ()),
+        topics=[(TagId(UUID(id)), float(p)) for id, p in output.get("topics") or ()],
+        known_topics=frozenset(TagId(UUID(id)) for id in known.get("topics") or ()),
     )
 
 
@@ -430,6 +444,7 @@ def _neighbours_view(output: Mapping[str, Any] | None) -> tuple[Neighbour, ...] 
             ),
             tags=frozenset(TagId(UUID(tag)) for tag in item.get("tag_ids") or ()),
             similarity=float(item["score"]) if isinstance(item.get("score"), int | float) else None,
+            topic=None if item.get("topic_id") is None else TagId(UUID(item["topic_id"])),
         )
         for item in output.get("neighbours") or ()
     )
@@ -447,6 +462,7 @@ def _known_view(output: Mapping[str, Any] | None) -> KnownLabels | None:
             DocumentTypeId(UUID(id)) for id in known.get("document_types") or ()
         ),
         tags=frozenset(TagId(UUID(id)) for id in known.get("tags") or ()),
+        topics=frozenset(TagId(UUID(id)) for id in known.get("topics") or ()),
     )
 
 
@@ -454,12 +470,18 @@ def _facts_view(output: Mapping[str, Any] | None) -> FactsView | None:
     if output is None:
         return None
     identifiers: dict[ContactId, tuple[str, ...]] = {}
+    topics: dict[ContactId, dict[TagId, tuple[str, ...]]] = {}
     for item in output.get("identifiers") or ():
-        contact = ContactId(UUID(item["contact_id"]))
-        identifiers[contact] = (*identifiers.get(contact, ()), str(item["kind"]))
+        contact, kind = ContactId(UUID(item["contact_id"])), str(item["kind"])
+        identifiers[contact] = (*identifiers.get(contact, ()), kind)
+        if item.get("topic_id") is not None:
+            pairs = topics.setdefault(contact, {})
+            topic = TagId(UUID(item["topic_id"]))
+            pairs[topic] = (*pairs.get(topic, ()), kind)
     return FactsView(
         named=frozenset(ContactId(UUID(item["contact_id"])) for item in output.get("named") or ()),
         identifiers=identifiers,
+        topics=topics,
     )
 
 

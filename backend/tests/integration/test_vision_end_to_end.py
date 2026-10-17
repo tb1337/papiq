@@ -103,6 +103,7 @@ def answers(case: Case) -> FakeLanguageModel:
         "recipient": None,
         "document_type": case.kind,
         "new_document_type": None,
+        "topic": None,
         "tags": [],
         "new_tags": [],
         "language": "de",
@@ -144,7 +145,7 @@ async def test_the_vision_model_reads_what_tesseract_cannot(
     )
     async with container.unit_of_work() as uow:
         await uow.users.add(owner)
-        await uow.drawers.add(builders.default_drawer(owner))
+        await uow.spaces.add(builders.default_space(owner))
         await uow.contacts.add(contact)
         await uow.document_types.add(kind)
         await uow.fields.add(field)

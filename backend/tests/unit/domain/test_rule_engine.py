@@ -12,17 +12,17 @@ from papiq.core.domain.fields import FieldDefinition, FieldType, Money, Url
 from papiq.core.domain.ids import (
     ContactId,
     DocumentTypeId,
-    DrawerId,
     FieldId,
+    SpaceId,
     TagId,
     UserId,
     new_id,
 )
 from papiq.core.domain.json_value import JsonValue
+from papiq.core.domain.master_data import Tag, TagScope
 from papiq.core.domain.periods import Period
 from papiq.core.domain.pipeline import Outcome
 from papiq.core.domain.rule_engine import (
-    DrawerTarget,
     Effect,
     Facts,
     Match,
@@ -30,6 +30,8 @@ from papiq.core.domain.rule_engine import (
     Note,
     RulePlan,
     Situation,
+    SpaceTarget,
+    Taxonomy,
     Truth,
     changed_fields,
     evaluate,
@@ -53,10 +55,12 @@ from papiq.core.domain.rules import (
     RuleVersion,
     SetContact,
     SetDocumentType,
-    SetDrawer,
     SetField,
+    SetSpace,
     SetTitle,
+    SetTopic,
 )
+from papiq.core.domain.tag_tree import TagTree
 from tests import builders
 from tests.builders import NOW
 
@@ -68,14 +72,14 @@ def _fixed(number: int) -> UUID:
 
 OWNER = UserId(_fixed(1))
 STRANGER = UserId(_fixed(2))
-DEFAULT = DrawerId(_fixed(3))
-OWN = DrawerId(_fixed(4))  # the owner's own, not shared
-SHARED = DrawerId(_fixed(5))  # others see documents in it
-READ_ONLY = DrawerId(_fixed(6))
-DRAWERS = {
-    OWN: DrawerTarget("Taxes", writable=True, shared=False),
-    SHARED: DrawerTarget("Family", writable=True, shared=True),
-    READ_ONLY: DrawerTarget("Boss", writable=False, shared=True),
+DEFAULT = SpaceId(_fixed(3))
+OWN = SpaceId(_fixed(4))  # the owner's own, not shared
+SHARED = SpaceId(_fixed(5))  # others see documents in it
+READ_ONLY = SpaceId(_fixed(6))
+SPACES = {
+    OWN: SpaceTarget("Taxes", writable=True, shared=False),
+    SHARED: SpaceTarget("Family", writable=True, shared=True),
+    READ_ONLY: SpaceTarget("Boss", writable=False, shared=True),
 }
 ACME, BETA = ContactId(_fixed(7)), ContactId(_fixed(8))
 INVOICE, LETTER = DocumentTypeId(_fixed(9)), DocumentTypeId(_fixed(10))
@@ -136,7 +140,7 @@ def rule(
 
 
 def doc(**fields: Any) -> Document:
-    """A document of OWNER in their default drawer, from `Rechnung 2026.pdf`, via the API."""
+    """A document of OWNER in their default space, from `Rechnung 2026.pdf`, via the API."""
     document = builders.document(OWNER, DEFAULT, filename="Rechnung 2026.pdf")
     for name, value in fields.items():
         setattr(document, name, value)
@@ -145,9 +149,9 @@ def doc(**fields: Any) -> Document:
 
 def situation(document: Document, mode: Mode = Mode.INGEST, **fields: Any) -> Situation:
     values: dict[str, Any] = {
-        "default_drawer": DEFAULT,
+        "default_space": DEFAULT,
         "definitions": {},
-        "drawers": DRAWERS,
+        "spaces": SPACES,
         "existing": EXISTING,
         "names": NAMES,
         "render": builders.TEMPLATES.render,
@@ -548,6 +552,50 @@ def test_different_values_conflict_whatever_the_priority() -> None:
     assert result.reasons[0].startswith("contact: rules set different values")
 
 
+def test_reasons_name_values_not_ids() -> None:
+    """Contacts, types, topics, spaces, tags and fields by their names, a field's value as
+    written; the ids stay in the suggestion and the effects."""
+    names = {**NAMES, PAID: "Paid"}
+    contacts = run(
+        [rule(SetContact(ACME), name="Nord, Arbeit"), rule(SetContact(BETA), name="Süd")],
+        situation(doc(), names=names),
+    )
+    assert check(contacts, "contact").reason == (
+        "rules set different values ('Nord, Arbeit': 'ACME GmbH', 'Süd': 'Beta AG')"
+    )
+    assert check(contacts, "contact").suggestion == str(ACME)
+    amounts = run(
+        [
+            rule(SetField(AMOUNT.id, {"amount": "12.50", "currency": "EUR"}), name="a"),
+            rule(SetField(AMOUNT.id, {"amount": "13", "currency": "EUR"}), name="b"),
+            rule(SetField(INTERVAL.id, "monthly"), name="c"),
+            rule(SetField(INTERVAL.id, "yearly"), name="d"),
+            rule(SetField(SPAN.id, {"start": "2026-09-01", "end": "2026-09-30"}), name="e"),
+            rule(SetField(SPAN.id, {"start": "2026-07-01", "end": "2026-09-30"}), name="f"),
+        ],
+        situation(doc(), definitions=DEFINITIONS),
+    )
+    assert amounts.reasons == [
+        "'amount': rules set different values ('a': 12.50 EUR, 'b': 13 EUR)",
+        "'choice': rules set different values ('c': 'monthly', 'd': 'yearly')",
+        "'period': rules set different values ('e': 2026-09, 'f': 2026-Q3)",
+    ]
+    model = run(
+        [rule(SetContact(ACME))],
+        situation(doc(contact_id=BETA), names=names, model_values={"contact": str(BETA)}),
+    )
+    assert check(model, "contact").reason == "rules: the model set another value ('Beta AG')"
+    tags = run(
+        [rule(AddTags(frozenset({PAID}))), rule(RemoveTags(frozenset({PAID})))],
+        situation(doc(), names=names),
+    )
+    assert check(tags, "tags").reason == "tag 'Paid' is added and removed by rules"
+    refused = run([rule(SetSpace(READ_ONLY))], situation(doc()))
+    assert check(refused, "space").reason.endswith(
+        f"no write access to space '{SPACES[READ_ONLY].name}' (any more)"
+    )
+
+
 def test_person_decided_field_overrules_the_rule() -> None:
     result = run(
         [rule(SetContact(ACME))],
@@ -664,22 +712,22 @@ def test_tags_already_as_wanted_change_nothing() -> None:
     assert result.effects == []
 
 
-# --- drawers and distrust ---------------------------------------------------------------------
+# --- spaces and distrust ---------------------------------------------------------------------
 
 
 def distrusted(document: Document) -> Facts:
     return Facts.of(document, unverified=frozenset({"contact"}))
 
 
-def test_unconfirmed_contact_does_not_file_into_a_shared_drawer() -> None:
+def test_unconfirmed_contact_does_not_file_into_a_shared_space() -> None:
     document = doc(contact_id=ACME)
 
     result = run(
-        [rule(SetDrawer(SHARED), when=FROM_ACME)], situation(document), facts=distrusted(document)
+        [rule(SetSpace(SHARED), when=FROM_ACME)], situation(document), facts=distrusted(document)
     )
 
-    assert result.drawer is None
-    assert notes(result) == [("drawer", "refused")]
+    assert result.space is None
+    assert notes(result) == [("space", "refused")]
     assert "only with a confirmed contact" in result.reports[0].notes[0].reason
     contact = check(result, "contact")
     assert contact.outcome is Outcome.UNCERTAIN
@@ -687,43 +735,43 @@ def test_unconfirmed_contact_does_not_file_into_a_shared_drawer() -> None:
     assert result.uncertain
 
 
-def test_unconfirmed_contact_may_file_into_the_owners_own_drawer() -> None:
+def test_unconfirmed_contact_may_file_into_the_owners_own_space() -> None:
     document = doc(contact_id=ACME)
 
     result = run(
-        [rule(SetDrawer(OWN), when=FROM_ACME)], situation(document), facts=distrusted(document)
+        [rule(SetSpace(OWN), when=FROM_ACME)], situation(document), facts=distrusted(document)
     )
 
-    assert result.drawer == OWN
-    assert result.reports[0].applied == [Effect("drawer", str(DEFAULT), str(OWN))]
+    assert result.space == OWN
+    assert result.reports[0].applied == [Effect("space", str(DEFAULT), str(OWN))]
     assert not result.uncertain
 
 
-def test_confirmed_contact_files_into_a_shared_drawer() -> None:
-    result = run([rule(SetDrawer(SHARED), when=FROM_ACME)], situation(doc(contact_id=ACME)))
+def test_confirmed_contact_files_into_a_shared_space() -> None:
+    result = run([rule(SetSpace(SHARED), when=FROM_ACME)], situation(doc(contact_id=ACME)))
 
-    assert result.drawer == SHARED
+    assert result.space == SHARED
 
 
 def test_unconfirmed_contact_on_change_is_reported_only() -> None:
     document = doc(contact_id=ACME)
 
     result = run(
-        [rule(SetDrawer(SHARED), when=FROM_ACME)],
+        [rule(SetSpace(SHARED), when=FROM_ACME)],
         situation(document, Mode.CHANGE),
         facts=distrusted(document),
     )
 
-    assert result.drawer is None
-    assert notes(result) == [("drawer", "refused")]
+    assert result.space is None
+    assert notes(result) == [("space", "refused")]
     assert not result.uncertain
 
 
 def test_retroactive_filing_on_unconfirmed_values_is_a_conflict() -> None:
-    """Applied to existing documents, filing into a shared drawer on an unconfirmed contact is
+    """Applied to existing documents, filing into a shared space on an unconfirmed contact is
     a conflict: it acts only where the person accepted it."""
     document = doc(contact_id=ACME)
-    rules = [rule(SetDrawer(SHARED), when=FROM_ACME)]
+    rules = [rule(SetSpace(SHARED), when=FROM_ACME)]
 
     refused = run(rules, situation(document, Mode.RETROACTIVE), facts=distrusted(document))
     accepted = run(
@@ -732,41 +780,41 @@ def test_retroactive_filing_on_unconfirmed_values_is_a_conflict() -> None:
         facts=distrusted(document),
     )
 
-    assert refused.drawer is None
-    assert notes(refused) == [("drawer", "conflict")]
-    assert accepted.drawer == SHARED
+    assert refused.space is None
+    assert notes(refused) == [("space", "conflict")]
+    assert accepted.space == SHARED
 
 
-def test_no_write_access_to_the_drawer() -> None:
-    ingest = run([rule(SetDrawer(READ_ONLY))], situation(doc()))
-    change = run([rule(SetDrawer(READ_ONLY))], situation(doc(), Mode.CHANGE))
+def test_no_write_access_to_the_space() -> None:
+    ingest = run([rule(SetSpace(READ_ONLY))], situation(doc()))
+    change = run([rule(SetSpace(READ_ONLY))], situation(doc(), Mode.CHANGE))
 
-    assert ingest.drawer is None and change.drawer is None
-    assert notes(ingest) == notes(change) == [("drawer", "refused")]
-    assert check(ingest, "drawer").outcome is Outcome.UNCERTAIN
+    assert ingest.space is None and change.space is None
+    assert notes(ingest) == notes(change) == [("space", "refused")]
+    assert check(ingest, "space").outcome is Outcome.UNCERTAIN
     assert not change.uncertain
 
 
-def test_drawer_of_a_rule_of_another_user_is_refused() -> None:
-    result = run([rule(SetDrawer(OWN), owner=STRANGER)], situation(doc()))
+def test_space_of_a_rule_of_another_user_is_refused() -> None:
+    result = run([rule(SetSpace(OWN), owner=STRANGER)], situation(doc()))
 
-    assert result.drawer is None
-    assert notes(result) == [("drawer", "refused")]
+    assert result.space is None
+    assert notes(result) == [("space", "refused")]
 
 
-def test_deleted_drawer_is_skipped() -> None:
-    result = run([rule(SetDrawer(DrawerId(new_id())))], situation(doc()))
+def test_deleted_space_is_skipped() -> None:
+    result = run([rule(SetSpace(SpaceId(new_id())))], situation(doc()))
 
-    assert result.drawer is None
-    assert notes(result) == [("drawer", "skipped")]
+    assert result.space is None
+    assert notes(result) == [("space", "skipped")]
     assert not result.uncertain
 
 
-def test_rules_filing_into_different_drawers_conflict() -> None:
-    result = run([rule(SetDrawer(OWN)), rule(SetDrawer(SHARED))], situation(doc()))
+def test_rules_filing_into_different_spaces_conflict() -> None:
+    result = run([rule(SetSpace(OWN)), rule(SetSpace(SHARED))], situation(doc()))
 
-    assert result.drawer is None
-    assert check(result, "drawer").outcome is Outcome.UNCERTAIN
+    assert result.space is None
+    assert check(result, "space").outcome is Outcome.UNCERTAIN
 
 
 # --- global rules -----------------------------------------------------------------------------
@@ -786,11 +834,11 @@ def global_rule_storing(*actions: Action) -> Rule:
     return found
 
 
-def test_global_rule_cannot_change_drawer_or_visibility() -> None:
+def test_global_rule_cannot_change_space_or_visibility() -> None:
     result = run(
         [
             global_rule_storing(
-                SetDrawer(OWN),
+                SetSpace(OWN),
                 SetContact(ACME),
                 SetDocumentType(INVOICE),
                 SetTitle("{contact}"),
@@ -800,12 +848,12 @@ def test_global_rule_cannot_change_drawer_or_visibility() -> None:
         situation(doc(contact_id=ACME)),
     )
 
-    assert result.drawer is None
+    assert result.space is None
     assert result.changes == DocumentChanges(tag_ids=frozenset({PAID}))
     assert sorted(notes(result)) == [
         ("contact", "refused"),
         ("document_type", "refused"),
-        ("drawer", "refused"),
+        ("space", "refused"),
         ("title", "refused"),
     ]
 
@@ -930,18 +978,18 @@ def test_retroactive_conflict_with_an_existing_value() -> None:
     assert not refused.uncertain and refused.checks == []
 
 
-def test_retroactive_default_drawer_and_file_name_title_count_as_empty() -> None:
-    actions = (SetDrawer(OWN), SetTitle("{{ contact }} invoice"))
+def test_retroactive_default_space_and_file_name_title_count_as_empty() -> None:
+    actions = (SetSpace(OWN), SetTitle("{{ contact }} invoice"))
     fresh = run([rule(*actions)], situation(doc(contact_id=ACME), Mode.RETROACTIVE))
     filed = run(
         [rule(*actions)],
-        situation(doc(contact_id=ACME, drawer_id=SHARED, title="Mine"), Mode.RETROACTIVE),
+        situation(doc(contact_id=ACME, space_id=SHARED, title="Mine"), Mode.RETROACTIVE),
     )
 
-    assert fresh.drawer == OWN
+    assert fresh.space == OWN
     assert fresh.changes.title == "ACME GmbH invoice"
-    assert filed.drawer is None and filed.changes.title is UNSET
-    assert notes(filed) == [("drawer", "conflict"), ("title", "conflict")]
+    assert filed.space is None and filed.changes.title is UNSET
+    assert notes(filed) == [("space", "conflict"), ("title", "conflict")]
 
 
 def test_retroactive_the_machines_title_counts_as_empty() -> None:
@@ -1001,8 +1049,8 @@ def test_empty_title_is_skipped() -> None:
     assert notes(result) == [("title", "skipped")]
 
 
-def test_the_title_sees_fields_tags_drawer_and_owner() -> None:
-    template = "{{ field.amount }} {{ tags | join: '+' }} {{ drawer }} {{ owner }}"
+def test_the_title_sees_fields_tags_space_and_owner() -> None:
+    template = "{{ field.amount }} {{ tags | join: '+' }} {{ space }} {{ owner }}"
     document = doc(fields={AMOUNT.id: Money(Decimal("99.90"), "EUR")}, tag_ids={PAID})
     names = {**NAMES, PAID: "paid", URGENT: "urgent", DEFAULT: "Inbox"}
     result = run(
@@ -1202,3 +1250,226 @@ def test_plan_to_json() -> None:
     ]
     assert data["reviews"] == []
     assert isinstance(data["fields"], list) and len(data["fields"]) == 1
+
+
+# --- tags in trees and groups -------------------------------------------------------------
+
+
+def _tagged() -> tuple[dict[str, Tag], Taxonomy]:
+    """Insurance with Health (with Dental); the contact group Insurer with Health insurer,
+    whose member is ACME; the type group Bills, whose member is INVOICE."""
+    insurance = Tag.create(name="Insurance", now=NOW)
+    health = Tag.create(name="Health", now=NOW, parent_id=insurance.id)
+    dental = Tag.create(name="Dental", now=NOW, parent_id=health.id)
+    insurer = Tag.create(name="Insurer", now=NOW, scope=TagScope.CONTACT)
+    health_insurer = Tag.create(
+        name="Health insurer", now=NOW, scope=TagScope.CONTACT, parent_id=insurer.id
+    )
+    bills = Tag.create(name="Bills", now=NOW, scope=TagScope.DOCUMENT_TYPE)
+    tags = {
+        "insurance": insurance,
+        "health": health,
+        "dental": dental,
+        "insurer": insurer,
+        "health_insurer": health_insurer,
+        "bills": bills,
+    }
+    groups = {ACME: frozenset({health_insurer.id}), INVOICE: frozenset({bills.id})}
+    by_id: dict[UUID, frozenset[TagId]] = dict(groups)
+    return tags, Taxonomy(TagTree.of(tags.values()), by_id)
+
+
+def test_a_tag_condition_matches_the_tags_below_it() -> None:
+    tags, taxonomy = _tagged()
+    facts = Facts.of(doc(tag_ids={tags["dental"].id}), taxonomy=taxonomy)
+    for wanted, expected in (("insurance", True), ("health", True), ("dental", True)):
+        condition = cond(ConditionField.TAGS, Operator.CONTAINS, str(tags[wanted].id))
+        assert evaluate(all_(condition), facts, {}) is expected
+    on_health = cond(ConditionField.TAGS, Operator.CONTAINS, str(tags["health"].id))
+    assert (
+        evaluate(
+            all_(on_health), Facts.of(doc(tag_ids={tags["insurance"].id}), taxonomy=taxonomy), {}
+        )
+        is False
+    )
+    one_of = cond(ConditionField.TAGS, Operator.IN, [str(PAID), str(tags["insurance"].id)])
+    assert evaluate(all_(one_of), facts, {}) is True
+
+
+def test_conditions_on_the_groups_of_contact_and_type() -> None:
+    tags, taxonomy = _tagged()
+    facts = Facts.of(doc(contact_id=ACME, document_type_id=INVOICE), taxonomy=taxonomy)
+    other = Facts.of(doc(contact_id=BETA), taxonomy=taxonomy)
+
+    def truth(field: ConditionField, op: Operator, value: JsonValue, of: Facts) -> Truth:
+        return evaluate(all_(cond(field, op, value)), of, {})
+
+    group, kind = ConditionField.CONTACT_GROUP, ConditionField.DOCUMENT_TYPE_GROUP
+    insurer, bills = str(tags["insurer"].id), str(tags["bills"].id)
+    assert truth(group, Operator.CONTAINS, insurer, facts) is True  # a group below it
+    assert truth(group, Operator.CONTAINS, str(tags["health_insurer"].id), facts) is True
+    assert truth(group, Operator.IN, [bills, insurer], facts) is True
+    assert truth(group, Operator.CONTAINS, insurer, other) is False
+    assert truth(group, Operator.PRESENT, None, facts) is True
+    assert truth(group, Operator.MISSING, None, other) is True
+    assert truth(kind, Operator.CONTAINS, bills, facts) is True
+    assert truth(kind, Operator.PRESENT, None, other) is False
+
+
+def test_groups_of_an_unconfirmed_contact_are_unknown_under_distrust() -> None:
+    tags, taxonomy = _tagged()
+    document = doc(contact_id=ACME, document_type_id=INVOICE)
+    facts = Facts.of(document, unverified=frozenset({"contact"}), taxonomy=taxonomy)
+    in_group = all_(cond(ConditionField.CONTACT_GROUP, Operator.CONTAINS, str(tags["insurer"].id)))
+    of_type = all_(cond(ConditionField.DOCUMENT_TYPE_GROUP, Operator.PRESENT))
+    assert evaluate(in_group, facts, {}) is True
+    assert evaluate(in_group, facts, {}, distrust=True) is None
+    assert evaluate(of_type, facts, {}, distrust=True) is True  # the type is confirmed
+    filing = rule(SetSpace(SHARED), when=in_group)
+    (match,) = matches([filing], facts, {})
+    assert (match.trusted, match.distrusted) == (False, ("contact",))
+    result = plan([match], situation(document))
+    assert ("space", "refused") in notes(result)
+
+
+def test_an_unconfirmed_tag_below_the_wanted_one_is_unknown_under_distrust() -> None:
+    tags, taxonomy = _tagged()
+    facts = Facts.of(
+        doc(tag_ids={tags["dental"].id}),
+        unverified_tags=frozenset({tags["dental"].id}),
+        taxonomy=taxonomy,
+    )
+    wanted = all_(cond(ConditionField.TAGS, Operator.CONTAINS, str(tags["insurance"].id)))
+    assert evaluate(wanted, facts, {}, distrust=True) is None
+
+
+def test_rules_add_document_tags_only_and_leave_the_parent_of_a_child() -> None:
+    tags, taxonomy = _tagged()
+    insurance, health, dental = (tags[name].id for name in ("insurance", "health", "dental"))
+    existing = EXISTING | {tag.id for tag in tags.values()}
+    names: dict[object, str] = {**NAMES, **{tag.id: tag.name for tag in tags.values()}}
+    where = situation(doc(tag_ids={health}), existing=existing, names=names, taxonomy=taxonomy)
+    parent = rule(AddTags(frozenset({insurance})))
+    group = rule(AddTags(frozenset({tags["insurer"].id})))
+    result = run([parent, group], where)
+    assert result.changes.tag_ids is UNSET  # the document keeps Health: Insurance says less
+    assert ("tags", "skipped") in notes(result)
+    assert not result.effects
+    # A child set by a rule replaces its parent.
+    child = rule(AddTags(frozenset({dental, PAID})))
+    result = run([child], where)
+    assert result.changes.tag_ids == frozenset({dental, PAID})
+
+
+def test_templates_see_the_groups_of_contact_and_type() -> None:
+    tags, taxonomy = _tagged()
+    names: dict[object, str] = {**NAMES, **{tag.id: tag.name for tag in tags.values()}}
+    where = situation(doc(document_type_id=INVOICE), names=names, taxonomy=taxonomy)
+    title = SetTitle("{{ contact_groups | join: ', ' }} / {{ document_type_groups | join }}")
+    result = run([rule(SetContact(ACME), title)], where)
+    assert result.changes.title == "Health insurer / Bills"
+
+
+# --- topics -------------------------------------------------------------------------------------
+
+
+def _topics() -> tuple[dict[str, Tag], Taxonomy]:
+    """Health below Insurance, and Work; ACME enables Health and Work, BETA Work."""
+    insurance = Tag.create(name="Insurance", now=NOW, scope=TagScope.TOPIC)
+    health = Tag.create(name="Health", now=NOW, scope=TagScope.TOPIC, parent_id=insurance.id)
+    work = Tag.create(name="Work", now=NOW, scope=TagScope.TOPIC)
+    tags = {"insurance": insurance, "health": health, "work": work}
+    topics: dict[UUID, frozenset[TagId]] = {
+        ACME: frozenset({health.id, work.id}),
+        BETA: frozenset({work.id}),
+    }
+    return tags, Taxonomy(TagTree.of(tags.values()), topics=topics)
+
+
+def test_a_topic_condition_matches_the_topics_below_it_and_is_unknown_unconfirmed() -> None:
+    tags, taxonomy = _topics()
+    document = doc(contact_id=ACME, topic_id=tags["health"].id)
+    facts = Facts.of(document, taxonomy=taxonomy)
+
+    def truth(op: Operator, value: JsonValue, of: Facts = facts) -> Truth:
+        return evaluate(all_(cond(ConditionField.TOPIC, op, value)), of, {}, distrust=True)
+
+    insurance, health, work = (str(tags[name].id) for name in ("insurance", "health", "work"))
+    assert truth(Operator.IS, insurance) is True
+    assert truth(Operator.IS, health) is True
+    assert truth(Operator.IS, work) is False
+    assert truth(Operator.IN, [work, insurance]) is True
+    assert truth(Operator.PRESENT, None) is True
+    assert truth(Operator.MISSING, None, Facts.of(doc(), taxonomy=taxonomy)) is True
+    unconfirmed = Facts.of(document, unverified=frozenset({"topic"}), taxonomy=taxonomy)
+    assert truth(Operator.IS, health, unconfirmed) is None
+    filing = rule(SetSpace(SHARED), when=all_(cond(ConditionField.TOPIC, Operator.IS, health)))
+    (match,) = matches([filing], unconfirmed, {})
+    assert (match.trusted, match.distrusted) == (False, ("topic",))
+
+
+def test_a_rule_sets_a_topic_the_contact_enables() -> None:
+    tags, taxonomy = _topics()
+    health, work, insurance = tags["health"].id, tags["work"].id, tags["insurance"].id
+    existing = EXISTING | {tag.id for tag in tags.values()}
+    names: dict[object, str] = {**NAMES, **{tag.id: tag.name for tag in tags.values()}}
+
+    def where(document: Document, mode: Mode = Mode.INGEST, **fields: Any) -> Situation:
+        return situation(
+            document, mode, existing=existing, names=names, taxonomy=taxonomy, **fields
+        )
+
+    result = run([rule(SetTopic(health), SetTitle("{{ topic }}"))], where(doc(contact_id=ACME)))
+    assert (result.changes.topic_id, result.changes.title) == (health, "Health")
+    assert check(result, "topic").value == str(health)
+    # One the contact does not enable is skipped and noted, also without a contact.
+    for document in (doc(contact_id=ACME), doc()):
+        result = run([rule(SetTopic(insurance))], where(document))
+        assert result.changes.topic_id is UNSET
+        assert notes(result) == [("topic", "skipped")]
+    skipped = run([rule(SetTopic(insurance))], where(doc(contact_id=ACME)))
+    assert skipped.reports[0].notes[0].reason == (
+        "its contact does not enable the topic 'Insurance'"
+    )
+    # Global rules cannot set it.
+    with pytest.raises(ValidationError, match="set_topic"):
+        rule(SetTopic(work), scope=RuleScope.GLOBAL)
+    # The contact a rule sets decides; two rules with different topics conflict.
+    result = run([rule(SetContact(BETA), SetTopic(work))], where(doc(contact_id=ACME)))
+    assert (result.changes.contact_id, result.changes.topic_id) == (BETA, work)
+    result = run(
+        [rule(SetTopic(work), name="a"), rule(SetTopic(health), name="b")],
+        where(doc(contact_id=ACME)),
+    )
+    assert result.changes.topic_id is UNSET
+    assert check(result, "topic").outcome is Outcome.UNCERTAIN
+    assert (
+        check(result, "topic").reason == "rules set different values ('a': 'Work', 'b': 'Health')"
+    )
+    # A person's topic wins; the model's is not replaced silently.
+    person = run([rule(SetTopic(work))], where(doc(contact_id=ACME), locked=frozenset({"topic"})))
+    assert (person.changes.topic_id, notes(person)) == (UNSET, [("topic", "overruled")])
+    model = where(doc(contact_id=ACME, topic_id=health), model_values={"topic": str(health)})
+    result = run([rule(SetTopic(work))], model)
+    assert result.changes.topic_id is UNSET
+    assert check(result, "topic").outcome is Outcome.UNCERTAIN
+
+
+def test_a_contact_a_rule_sets_clears_a_topic_it_does_not_enable() -> None:
+    tags, taxonomy = _topics()
+    health, work = tags["health"].id, tags["work"].id
+    where = situation(
+        doc(contact_id=ACME, topic_id=health),
+        existing=EXISTING | {health, work},
+        taxonomy=taxonomy,
+    )
+    result = run([rule(SetContact(BETA))], where)
+    assert (result.changes.contact_id, result.changes.topic_id) == (BETA, None)
+    assert Effect("topic", str(health), None) in result.effects
+    kept = situation(doc(contact_id=ACME, topic_id=work), existing=EXISTING, taxonomy=taxonomy)
+    result = run([rule(SetContact(BETA))], kept)
+    assert (result.changes.contact_id, result.changes.topic_id) == (BETA, UNSET)
+
+
+def test_changed_fields_name_the_topic() -> None:
+    assert changed_fields(DocumentChanges(topic_id=None)) == {"topic"}

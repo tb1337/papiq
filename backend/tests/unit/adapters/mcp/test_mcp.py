@@ -22,6 +22,7 @@ from papiq.composition.container import build_memory_container, build_services
 from papiq.core.domain.documents import DocumentChanges
 from papiq.core.domain.fields import FieldType, Money
 from papiq.core.domain.ids import DocumentId, new_id
+from papiq.core.domain.master_data import TagScope
 from papiq.core.services.objects import text_key
 from tests import builders
 from tests.api import auth, serving
@@ -300,10 +301,20 @@ async def test_a_document_without_text_says_so(api: Api, scene: Scene) -> None:
 
 async def test_list_tags(api: Api, scene: Scene) -> None:
     admin = await api.admin()
-    for name in ("Zeta", "alpha"):
-        await api.services.master_data.create_tag(admin.id, name)
+    master = api.services.master_data
+    zeta = await master.create_tag(admin.id, "Zeta")
+    await master.create_tag(admin.id, "alpha")
+    await master.create_tag(admin.id, "Child", parent_id=zeta.id)
+    await master.create_tag(admin.id, "Insurer", scope=TagScope.CONTACT)
     tags = data(await call(api, scene.headers["read_token"], "list_tags"))["tags"]
-    assert [tag["name"] for tag in tags] == ["alpha", "Zeta"]
+    assert [(tag["name"], tag["scope"], tag["path"]) for tag in tags] == [
+        ("alpha", "document", ["alpha"]),
+        ("Zeta", "document", ["Zeta"]),
+        ("Child", "document", ["Zeta", "Child"]),
+        ("Insurer", "contact", ["Insurer"]),
+    ]
+    groups = data(await call(api, scene.headers["read_token"], "list_tags", scope="contact"))
+    assert [tag["name"] for tag in groups["tags"]] == ["Insurer"]
 
 
 # --- search -------------------------------------------------------------------------------------
@@ -330,14 +341,16 @@ async def test_search_finds_what_the_caller_may_read(api: Api, scene: Scene) -> 
     page = data(await call(api, scene.headers["reader"], "search", query="pdf"))
     item = page["items"][0]
     assert item["id"] == scene.green and item["access"] == "read"
-    assert set(item) >= {"title", "score", "snippet", "contact", "document_type", "tags"}
+    assert set(item) >= {"title", "score", "snippet", "contact", "document_type", "topic", "tags"}
     assert isinstance(item["snippet"], str)
 
 
 async def test_search_filters_by_name(api: Api, scene: Scene) -> None:
     admin = await api.admin()
     master = api.services.master_data
-    tag = await master.create_tag(admin.id, "Strom")
+    energy = await master.create_tag(admin.id, "Energie")
+    tag = await master.create_tag(admin.id, "Strom", parent_id=energy.id)
+    await master.create_tag(admin.id, "Gruppe", scope=TagScope.CONTACT)
 
     await api.services.documents.change_metadata(
         scene.owner.id,
@@ -348,10 +361,48 @@ async def test_search_filters_by_name(api: Api, scene: Scene) -> None:
     while await api.services.indexing.run_next_job():  # type: ignore[union-attr]
         pass
     assert await found(api, scene.headers["owner"], tags=["strom"]) == {scene.green}
+    # A tag finds the documents with a tag below it.
+    assert await found(api, scene.headers["owner"], tags=["Energie"]) == {scene.green}
     unknown = await call(api, scene.headers["owner"], "search", query="pdf", tags=["Nope"])
     assert "no tag named 'Nope'" in error(unknown)
+    # Groups are no document tags.
+    group = await call(api, scene.headers["owner"], "search", query="pdf", tags=["Gruppe"])
+    assert "no tag named 'Gruppe'" in error(group)
     unknown = await call(api, scene.headers["owner"], "search", query="pdf", contact="Nope")
     assert "no contact named 'Nope'" in error(unknown)
+
+
+async def test_search_filters_by_topics(api: Api, scene: Scene) -> None:
+    """Several topics: the documents with one of them, each with the topics below it."""
+    admin = await api.admin()
+    master = api.services.master_data
+    work = await master.create_tag(admin.id, "Arbeit", scope=TagScope.TOPIC)
+    insurance = await master.create_tag(admin.id, "Versicherung", scope=TagScope.TOPIC)
+    health = await master.create_tag(
+        admin.id, "Krankenversicherung", scope=TagScope.TOPIC, parent_id=insurance.id
+    )
+    nord = await master.create_contact(admin.id, "Nord", topic_ids=[work.id, health.id])
+    for which, topic in ((scene.green, work), (scene.yellow, health)):
+        await api.services.documents.change_metadata(
+            scene.owner.id,
+            DocumentId(UUID(which)),
+            DocumentChanges(contact_id=nord.id, topic_id=topic.id),
+        )
+    await api.services.indexing.reconcile()  # type: ignore[union-attr]
+    while await api.services.indexing.run_next_job():  # type: ignore[union-attr]
+        pass
+    owner = scene.headers["owner"]
+    assert await found(api, owner, topics=["arbeit"]) == {scene.green}
+    assert await found(api, owner, topics=["Versicherung"]) == {scene.yellow}
+    assert await found(api, owner, topics=["Arbeit", "Krankenversicherung"]) == {
+        scene.green,
+        scene.yellow,
+    }
+    page = data(await call(api, owner, "search", query="pdf", topics=["Arbeit"]))
+    assert page["items"][0]["topic"] == {"id": str(work.id), "name": "Arbeit"}
+    assert "no topic named 'Nope'" in error(
+        await call(api, owner, "search", query="pdf", topics=["Nope"])
+    )
 
 
 async def test_search_without_an_index_says_so() -> None:
@@ -425,6 +476,32 @@ async def test_update_metadata_changes_what_is_given(api: Api, scene: Scene) -> 
     assert rest["title"] == "Strom März" and rest["contact_id"] is None
 
 
+async def test_the_topic_is_read_and_set_by_its_name(api: Api, scene: Scene) -> None:
+    admin = await api.admin()
+    master = api.services.master_data
+    work = await master.create_tag(admin.id, "Arbeit", scope=TagScope.TOPIC)
+    other = await master.create_tag(admin.id, "Girokonto", scope=TagScope.TOPIC)
+    await master.create_contact(admin.id, "Nord", topic_ids=[work.id])
+    writer = scene.headers["writer"]
+    result = data(
+        await call(api, writer, "update_metadata", id=scene.green, contact="nord", topic="arbeit")
+    )
+    assert result["document"]["topic"] == {"id": str(work.id), "name": "Arbeit"}
+    document = data(await call(api, scene.headers["reader"], "get_document", id=scene.green))
+    assert document["topic"]["name"] == "Arbeit"
+    # Only one the contact enables; a tag is no topic; null removes it.
+    assert "does not enable" in error(
+        await call(api, writer, "update_metadata", id=scene.green, topic=other.name)
+    )
+    assert "no topic named" in error(
+        await call(api, writer, "update_metadata", id=scene.green, topic="Strom")
+    )
+    cleared = data(await call(api, writer, "update_metadata", id=scene.green, topic=None))
+    assert cleared["document"]["topic"] is None
+    topics = data(await call(api, writer, "list_tags", scope="topic"))["tags"]
+    assert [tag["path"] for tag in topics] == [["Arbeit"], ["Girokonto"]]
+
+
 async def test_update_metadata_needs_a_read_write_token_and_write_access(
     api: Api, scene: Scene
 ) -> None:
@@ -479,15 +556,15 @@ async def test_an_editor_whose_change_files_the_document_away_learns_nothing_mor
     admin, owner, editor = await api.admin(), await api.user(), await api.user()
     o = auth(owner)
     acme = await post(api, "/contacts", {"name": "ACME"}, auth(admin))
-    shared = await post(api, "/drawers", {"name": "Shared"}, o)
-    private = await post(api, "/drawers", {"name": "Private"}, o)
+    shared = await post(api, "/spaces", {"name": "Shared"}, o)
+    private = await post(api, "/spaces", {"name": "Private"}, o)
     response = await api.client.put(
-        f"{PREFIX}/drawers/{shared['id']}/shares/{editor.id}",
+        f"{PREFIX}/spaces/{shared['id']}/shares/{editor.id}",
         json={"level": "read_write"},
         headers=o,
     )
     assert response.status_code < 300, response.text
-    for name, triggers, condition, drawer in (
+    for name, triggers, condition, space in (
         ("Shared", ["ingest"], {"field": "channel", "op": "is", "value": "api"}, shared),
         ("Private", ["change"], {"field": "contact", "op": "is", "value": acme["id"]}, private),
     ):
@@ -498,7 +575,7 @@ async def test_an_editor_whose_change_files_the_document_away_learns_nothing_mor
                 "name": name,
                 "triggers": triggers,
                 "conditions": {"all": [condition]},
-                "actions": [{"type": "set_drawer", "drawer_id": drawer["id"]}],
+                "actions": [{"type": "set_space", "space_id": space["id"]}],
             },
             o,
         )
@@ -509,5 +586,5 @@ async def test_an_editor_whose_change_files_the_document_away_learns_nothing_mor
     assert data(result) == {"id": id, "access": None, "document": None, "rules": None}
     assert "not found" in error(await call(api, auth(editor), "get_document", id=id))
     owners = data(await call(api, o, "update_metadata", id=id, title="Seen by the owner"))
-    assert owners["document"]["drawer_id"] == private["id"]
+    assert owners["document"]["space_id"] == private["id"]
     assert [rule["name"] for rule in owners["rules"] or []] == []  # no change that triggers it

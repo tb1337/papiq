@@ -12,7 +12,7 @@ from papiq.core.domain.identifiers import (
     mine_identifiers,
     normalise_identifier,
 )
-from papiq.core.domain.ids import ContactId, new_id
+from papiq.core.domain.ids import ContactId, TagId, new_id
 from papiq.core.domain.master_data import Contact
 
 NOW = datetime(2026, 10, 13, tzinfo=UTC)
@@ -134,10 +134,10 @@ def test_training_learns_what_only_one_contacts_documents_carry() -> None:
     utility, bank = ContactId(new_id()), ContactId(new_id())
     learned = mine_identifiers(
         [
-            (utility, {(IBAN, THEIR_IBAN), (IBAN, OWN_IBAN)}),
-            (utility, {(IBAN, THEIR_IBAN), (IBAN, OWN_IBAN), (CUSTOMER, "4711")}),
-            (bank, {(IBAN, OWN_IBAN), (VAT, "DE123456789")}),
-            (bank, {(IBAN, OWN_IBAN)}),
+            (utility, None, {(IBAN, THEIR_IBAN), (IBAN, OWN_IBAN)}),
+            (utility, None, {(IBAN, THEIR_IBAN), (IBAN, OWN_IBAN), (CUSTOMER, "4711")}),
+            (bank, None, {(IBAN, OWN_IBAN), (VAT, "DE123456789")}),
+            (bank, None, {(IBAN, OWN_IBAN)}),
         ]
     )
     # The owner's IBAN stands at both; the customer number and the VAT number only once.
@@ -147,8 +147,33 @@ def test_training_learns_what_only_one_contacts_documents_carry() -> None:
 def test_a_document_without_contact_or_a_taken_value_keeps_it_from_being_learned() -> None:
     utility = ContactId(new_id())
     found = {(IBAN, THEIR_IBAN)}
-    assert mine_identifiers([(utility, found), (utility, found), (None, found)]) == {}
-    assert mine_identifiers([(utility, found), (utility, found)], taken=found) == {}
+    assert (
+        mine_identifiers([(utility, None, found), (utility, None, found), (None, None, found)])
+        == {}
+    )
+    assert mine_identifiers([(utility, None, found), (utility, None, found)], taken=found) == {}
+
+
+def test_a_learned_identifier_points_to_the_topic_all_its_documents_carry() -> None:
+    employer = ContactId(new_id())
+    work, health = TagId(new_id()), TagId(new_id())
+    number, policy, domain = (PERSONNEL, "4711"), (CUSTOMER, "KV-1"), (DOMAIN, "nord.example")
+    learned = mine_identifiers(
+        [
+            (employer, work, {number, domain}),
+            (employer, work, {number, domain}),
+            (employer, health, {policy, domain}),
+            (employer, health, {policy}),
+            (employer, None, {policy}),
+        ]
+    )
+    assert learned == {
+        employer: [
+            Identifier(CUSTOMER, "KV-1", IdentifierSource.LEARNED),  # one without a topic
+            Identifier(DOMAIN, "nord.example", IdentifierSource.LEARNED),  # two topics
+            Identifier(PERSONNEL, "4711", IdentifierSource.LEARNED, work),
+        ]
+    }
 
 
 def test_a_contact_keeps_entered_learned_and_rejected_identifiers_apart() -> None:

@@ -20,7 +20,7 @@ from papiq.core.domain.exchanges import RunExchange, exchanges_from_json
 from papiq.core.domain.fields import FieldDefinition, FieldType, Money
 from papiq.core.domain.identifiers import Identifier, IdentifierKind
 from papiq.core.domain.json_value import JsonObject, JsonValue
-from papiq.core.domain.master_data import Contact, DocumentType, Tag
+from papiq.core.domain.master_data import Assignment, Contact, DocumentType, Tag, TagScope
 from papiq.core.domain.pipeline import Lane, Node, NodeResult, NodeRun, Outcome, ProcessingStatus
 from papiq.core.domain.reading import PageReading, readings_to_json
 from papiq.core.domain.users import Role
@@ -128,6 +128,7 @@ def proposal(**changes: Any) -> JsonObject:
         "recipient": "Max Nord",
         "document_type": "Rechnung",
         "new_document_type": None,
+        "topic": None,
         "tags": ["Strom"],
         "new_tags": [],
         "document_date": {"value": "2026-03-31", "evidence": "Musterstadt, 31.03.2026"},
@@ -167,7 +168,7 @@ async def document_with(
     world: World, text: str = INVOICE, type: DocumentType | None = None
 ) -> Document:
     owner = await world.user()
-    document = builders.document(owner, await world.default_drawer(owner))
+    document = builders.document(owner, await world.default_space(owner))
     document.document_type_id = None if type is None else type.id
     async with world.uow() as uow:
         await uow.documents.add(document)
@@ -330,11 +331,11 @@ async def test_an_unfit_answer_is_asked_again(world: World) -> None:
 
 async def test_two_unfit_answers_fail_the_signal(world: World) -> None:
     await seed(world)
-    injected = proposal() | {"drawer": "Shared", "owner": "mallory"}
+    injected = proposal() | {"space": "Shared", "owner": "mallory"}
     result = await signal_step(world, model(injected)).run(await document_with(world))
     assert result.outcome is Outcome.FAILED
     assert result.reason == (
-        "the model's answer does not fit the schema: the answer: unexpected drawer, owner"
+        "the model's answer does not fit the schema: the answer: unexpected owner, space"
     )
     assert output(result)["attempts"] == 2
     assert len(output(result)["answers"]) == 2
@@ -500,7 +501,7 @@ async def test_a_verified_classification_is_applied(world: World) -> None:
         "signals": {"signal_facts": "facts", "signal_llm": "fake-llm 1"},
     }
     found = checks(result)
-    assert set(found) == {"contact", "document_type", "tags", "document_date"}
+    assert set(found) == {"contact", "document_type", "topic", "tags", "document_date"}
     (candidate, *_) = found["contact"].candidates
     assert [source.signal for source in candidate.sources] == ["signal_llm", "signal_facts"]
     assert candidate.sources[1].named_in_text is True
@@ -663,8 +664,25 @@ async def test_new_tags_are_only_proposed(world: World) -> None:
     tags = checks(result.result)["tags"]
     assert tags.ok
     assert tags.value == [str(seeded.tags["Strom"].id)]
-    assert tags.suggestion == ["Energie", "Abschlag"]
+    assert tags.suggestion is None  # the new ones stand in the proposal
+    assert tags.proposed == {"tags": ["Strom", "Energie", "Strom"], "new_tags": ["Abschlag"]}
     assert result.result.outcome is Outcome.OK
+    assert result.add_tags == frozenset({seeded.tags["Strom"].id})
+
+
+async def test_tags_set_by_hand_are_neither_listed_nor_set(world: World) -> None:
+    seeded = await seed(world)
+    paid = Tag.create(name="Bezahlt", now=NOW, assignment=Assignment.MANUAL)
+    group = Tag.create(name="Versorger", now=NOW, scope=TagScope.CONTACT)
+    async with world.uow() as uow:
+        await uow.tags.add(paid)
+        await uow.tags.add(group)
+        await uow.commit()
+    fake = model(proposal(tags=["Strom", "Bezahlt", "Versorger"]))
+    result = await judge(world, await document_with(world, INVOICE), fake)
+    assert "- Bezahlt" not in fake.requests[0].user and "- Versorger" not in fake.requests[0].user
+    assert "- Strom" in fake.requests[0].user
+    assert isinstance(result, MetadataResult)
     assert result.add_tags == frozenset({seeded.tags["Strom"].id})
 
 
@@ -1160,6 +1178,41 @@ async def test_extraction_prompt_names_type_and_fields(world: World) -> None:
     assert request.schema_name == "fields"
 
 
+async def set_by_hand(world: World, field: FieldDefinition) -> None:
+    async with world.uow() as uow:
+        stored = await uow.fields.get(field.id)
+        stored.assignment = Assignment.MANUAL
+        await uow.fields.update(stored)
+        await uow.commit()
+
+
+async def test_a_field_set_by_hand_is_never_asked_for(world: World) -> None:
+    """Issue #52: neither the signal nor the fields node asks the model for it, and the fields
+    node leaves its value as it is (whether a required one has one is the rules node's check)."""
+    seeded = await seed(world)
+    number, paid = seeded.fields["Rechnungsnummer"], seeded.fields["Bezahlt"]
+    await set_by_hand(world, number)
+    await set_by_hand(world, paid)
+    document = await document_with(world, type=seeded.types["Rechnung"])
+    fake = model(proposal())
+    await signal_step(world, fake).run(document)
+    (request,) = fake.requests
+    assert "Rechnungsnummer" not in request.user and "Bezahlt" not in request.user
+
+    given = extraction()["fields"]
+    assert isinstance(given, dict)
+    answer: JsonObject = {"fields": {"a1": given["a2"], "a2": given["a3"]}}  # Fällig, Betrag
+    fake = model(answer)
+    outcome = await fields_step(world, fake).run(document)
+    assert isinstance(outcome, MetadataResult)
+    (request,) = fake.requests
+    assert "Rechnungsnummer" not in request.user and "Bezahlt" not in request.user
+    assert outcome.result.outcome is Outcome.OK
+    check = field_check(seeded, outcome, "Rechnungsnummer")
+    assert check.ok and check.reason == "'Rechnungsnummer' is set by hand"
+    assert number.id not in outcome.changes.fields and paid.id not in outcome.changes.fields
+
+
 async def signalled(
     world: World, answer: JsonObject, type: DocumentType | None
 ) -> tuple[Document, NodeResult]:
@@ -1326,7 +1379,7 @@ async def test_a_verified_document_is_filed_green(world: World) -> None:
     proposed = next(entry for entry in log if entry.node is Node.SIGNAL_LLM)
     assert proposed.result.output["answer"] == proposal()
     judged = next(entry for entry in log if entry.node is Node.JUDGE)
-    assert len(checks(judged.result)) == 4
+    assert len(checks(judged.result)) == 5
     assert judged.result.input["signals"] == {
         "signal_classifier": "abstained",
         "signal_facts": "facts",

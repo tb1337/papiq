@@ -10,14 +10,15 @@ from papiq.core.domain.ids import (
     ContactId,
     DocumentId,
     DocumentTypeId,
-    DrawerId,
     FieldId,
     RuleId,
+    SpaceId,
     TagId,
     UserId,
     new_id,
 )
 from papiq.core.domain.json_value import JsonObject, JsonValue
+from papiq.core.domain.master_data import TagScope
 from papiq.core.domain.rules import (
     GLOBAL_ACTIONS,
     MAX_ACTIONS,
@@ -44,9 +45,10 @@ from papiq.core.domain.rules import (
     RuleVersion,
     SetContact,
     SetDocumentType,
-    SetDrawer,
     SetField,
+    SetSpace,
     SetTitle,
+    SetTopic,
     Trigger,
     action_from_json,
     check_fields,
@@ -66,7 +68,7 @@ OTHER_CONTACT = ContactId(new_id())
 TYPE = DocumentTypeId(new_id())
 TAG = TagId(new_id())
 OTHER_TAG = TagId(new_id())
-DRAWER = DrawerId(new_id())
+SPACE = SpaceId(new_id())
 FIELD = FieldId(new_id())
 ID = str(new_id())
 
@@ -142,7 +144,7 @@ def full_definition() -> RuleDefinition:
             ),
         ),
         actions=(
-            SetDrawer(DRAWER),
+            SetSpace(SPACE),
             SetContact(CONTACT),
             SetDocumentType(TYPE),
             SetTitle("{contact} {document_date}"),
@@ -193,7 +195,7 @@ def test_definition_json_shape() -> None:
     actions = data["actions"]
     assert isinstance(actions, list)
     assert [action["type"] for action in actions if isinstance(action, dict)] == [
-        "set_drawer",
+        "set_space",
         "set_contact",
         "set_document_type",
         "set_title",
@@ -494,7 +496,7 @@ def test_definition_needs_triggers_and_actions() -> None:
     "actions",
     [
         (SetContact(CONTACT), SetContact(OTHER_CONTACT)),
-        (SetDrawer(DRAWER), SetDrawer(DrawerId(new_id()))),
+        (SetSpace(SPACE), SetSpace(SpaceId(new_id()))),
         (SetTitle("a"), SetTitle("b")),
         (SetField(FIELD, "a"), SetField(FIELD, "b")),
     ],
@@ -566,7 +568,13 @@ def test_action_values() -> None:
 
 @pytest.mark.parametrize(
     "action",
-    [SetDrawer(DRAWER), SetContact(CONTACT), SetDocumentType(TYPE), SetTitle("{contact}")],
+    [
+        SetSpace(SPACE),
+        SetContact(CONTACT),
+        SetDocumentType(TYPE),
+        SetTopic(TAG),
+        SetTitle("{contact}"),
+    ],
 )
 def test_global_rules_cannot_change_who_sees_or_files(action: Action) -> None:
     with pytest.raises(ValidationError, match=f"a global rule cannot {action.type}"):
@@ -586,11 +594,11 @@ def test_global_actions() -> None:
 
 
 def test_global_rule_is_created_and_changed_with_global_actions_only() -> None:
-    with pytest.raises(ValidationError, match="a global rule cannot set_drawer"):
+    with pytest.raises(ValidationError, match="a global rule cannot set_space"):
         Rule.create(
             scope=RuleScope.GLOBAL,
             owner_id=None,
-            definition=definition(SetDrawer(DRAWER)),
+            definition=definition(SetSpace(SPACE)),
             by=ADMIN,
             now=NOW,
         )
@@ -756,9 +764,9 @@ def test_errors_of_stored_data_and_scope_name_the_place() -> None:
     fitting = definition(SetField(number.id, "seven"), AddTags(frozenset({TAG})))
     with pytest.raises(ValidationError, match=r"^actions\[0\]: .*does not accept"):
         check_fields(fitting, {number.id: number})
-    with pytest.raises(ValidationError, match=r"^actions\[1\]: a global rule cannot set_drawer"):
+    with pytest.raises(ValidationError, match=r"^actions\[1\]: a global rule cannot set_space"):
         check_scope(
-            definition(AddTags(frozenset({TAG})), SetDrawer(DrawerId(new_id()))),
+            definition(AddTags(frozenset({TAG})), SetSpace(SpaceId(new_id()))),
             RuleScope.GLOBAL,
         )
     with pytest.raises(ValidationError, match=r"^actions\[2\]: an action sets the same field"):
@@ -772,9 +780,10 @@ def test_references() -> None:
     in_condition = ContactId(new_id())
     type_in_condition = DocumentTypeId(new_id())
     tags = [TagId(new_id()) for _ in range(3)]
+    groups = [TagId(new_id()) for _ in range(2)]
     attr = FieldId(new_id())
     rule = definition(
-        SetDrawer(DRAWER),
+        SetSpace(SPACE),
         SetContact(CONTACT),
         SetDocumentType(TYPE),
         AddTags(frozenset({tags[2]})),
@@ -790,6 +799,12 @@ def test_references() -> None:
                 Condition(field=ConditionField.TAGS, op=Operator.IN, value=[str(tags[1])]),
                 mode="any",
             ),
+            Condition(
+                field=ConditionField.CONTACT_GROUP, op=Operator.CONTAINS, value=str(groups[0])
+            ),
+            Condition(
+                field=ConditionField.DOCUMENT_TYPE_GROUP, op=Operator.IN, value=[str(groups[1])]
+            ),
             Condition(field=ConditionField.FIELD, op=Operator.IS, value=ID, field_id=attr),
             # text values and other values that look like ids are no references
             Condition(field=ConditionField.TEXT, op=Operator.CONTAINS, value=str(OTHER_CONTACT)),
@@ -798,13 +813,24 @@ def test_references() -> None:
         ),
     )
 
-    assert rule.references() == References(
+    references = rule.references()
+    assert references == References(
         contacts=frozenset({in_condition, ContactId(UUID(ID)), CONTACT}),
         document_types=frozenset({type_in_condition, TYPE}),
-        tags=frozenset({*tags, OTHER_TAG}),
+        tags=frozenset({*tags, *groups, OTHER_TAG}),
         fields=frozenset({attr, FIELD}),
-        drawers=frozenset({DRAWER}),
+        spaces=frozenset({SPACE}),
+        tag_scopes=references.tag_scopes,
     )
+    # The scope each tag must have: groups in their conditions, document tags elsewhere.
+    assert dict(references.tag_scopes) == {
+        tags[0]: TagScope.DOCUMENT,
+        tags[1]: TagScope.DOCUMENT,
+        tags[2]: TagScope.DOCUMENT,
+        OTHER_TAG: TagScope.DOCUMENT,
+        groups[0]: TagScope.CONTACT,
+        groups[1]: TagScope.DOCUMENT_TYPE,
+    }
 
 
 def test_uses_text_and_patterns() -> None:
@@ -969,10 +995,10 @@ def test_application_progress() -> None:
 
     run.record(a, "applied")
     run.record(b, "unchanged")
-    run.record(c, "the drawer is read-only")
+    run.record(c, "the space is read-only")
 
     assert (run.position, run.applied, run.unchanged) == (3, 1, 1)
-    assert run.skipped == [(c, "the drawer is read-only")]
+    assert run.skipped == [(c, "the space is read-only")]
     assert (run.status, run.remaining) == (ApplicationStatus.RUNNING, (d,))
 
     run.record(d, "applied")
@@ -1009,3 +1035,25 @@ def test_a_period_starts_after_and_ends_before_a_date() -> None:
             field_rule(attr, Operator.GT, {"start": "2026-09-01", "end": "2026-09-30"}),
             {attr.id: attr},
         )
+
+
+def test_a_topic_condition_and_action() -> None:
+    topic, other = TagId(new_id()), TagId(new_id())
+    rule = definition(
+        SetTopic(topic),
+        conditions=group(
+            Condition(field=ConditionField.TOPIC, op=Operator.IN, value=[str(other)]),
+            Condition(field=ConditionField.TOPIC, op=Operator.MISSING),
+        ),
+    )
+    data = json.loads(json.dumps(definition_to_json(rule)))
+    assert data["actions"] == [{"type": "set_topic", "topic_id": str(topic)}]
+    assert definition_from_json(data) == rule
+    references = rule.references()
+    assert references.tags == {topic, other}
+    assert dict(references.tag_scopes) == {topic: TagScope.TOPIC, other: TagScope.TOPIC}
+    # A topic is one value: is, in, present, missing.
+    with pytest.raises(ValidationError, match="'contains' does not apply to topic"):
+        Condition(field=ConditionField.TOPIC, op=Operator.CONTAINS, value=str(topic))
+    with pytest.raises(ValidationError, match="the same field twice"):
+        definition(SetTopic(topic), SetTopic(other))

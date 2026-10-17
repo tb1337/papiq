@@ -4,14 +4,17 @@
 	import { BASE } from '#lib/base.ts';
 	import DocumentThumb from '#lib/components/DocumentThumb.svelte';
 	import LaneBadge from '#lib/components/LaneBadge.svelte';
+	import NamesLine from '#lib/components/NamesLine.svelte';
 	import ProcessingProgress from '#lib/components/ProcessingProgress.svelte';
+	import TagChips from '#lib/components/TagChips.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.ts';
 	import { formatDate } from '#lib/i18n.ts';
 	import type { Lookup } from '#lib/masterdata.svelte.ts';
 	import { session } from '#lib/session.svelte.ts';
 
-	// One document in a list: preview, title, contact, type, date, lane, for admins the owner of
-	// another user's document; `children` adds a line.
+	// One document in a list: preview, title, contact (with its logo or initials) and type
+	// (with its icon) each with its shown groups, date, its shown tags, lane, for admins the
+	// owner of another user's document; `children` adds a line.
 	let {
 		document,
 		lookup,
@@ -24,14 +27,9 @@
 		children?: Snippet;
 	} = $props();
 
-	const line = $derived(
-		[
-			lookup?.contacts.find((entry) => entry.id === document.contact_id)?.name,
-			lookup?.documentTypes.find((entry) => entry.id === document.document_type_id)?.name,
-			formatDate(document.document_date ?? document.created_at)
-		]
-			.filter(Boolean)
-			.join(' · ')
+	const contact = $derived(lookup?.contacts.find((entry) => entry.id === document.contact_id));
+	const kind = $derived(
+		lookup?.documentTypes.find((entry) => entry.id === document.document_type_id)
 	);
 	const owner = $derived(
 		session.isAdmin && document.owner_id !== session.user?.id
@@ -50,7 +48,16 @@
 			<span class="truncate font-medium">{document.title}</span>
 			{#if owner}<Badge variant="outline" class="shrink-0">{owner}</Badge>{/if}
 		</span>
-		<span class="truncate text-sm text-muted-foreground">{line}</span>
+		<NamesLine
+			parts={[
+				{ name: contact?.name, groupIds: contact?.group_ids, avatar: contact },
+				{ name: kind?.name, groupIds: kind?.group_ids, icon: kind?.icon }
+			]}
+			date={formatDate(document.document_date ?? document.created_at)}
+			tags={lookup?.tags ?? []}
+			class="text-sm text-muted-foreground"
+		/>
+		<TagChips {document} {lookup} />
 		{#if document.processing.status === 'processing'}
 			<ProcessingProgress processing={document.processing} compact class="mt-1 max-w-48" />
 		{/if}

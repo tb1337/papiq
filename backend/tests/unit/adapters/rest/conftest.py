@@ -48,8 +48,9 @@ def make_app(
     context = ApiContext(
         auth=services.auth,
         users=services.users,
-        drawers=services.drawers,
+        spaces=services.spaces,
         master_data=services.master_data,
+        logos=services.logos,
         oidc=services.oidc,
         search=services.search,
         indexing=services.indexing,
@@ -93,11 +94,11 @@ class Api:
     clock: ManualClock
 
     async def user(self, name: str | None = None, role: Role = Role.USER) -> User:
-        """A user with default drawer, password `PASSWORD` and an API token (`auth`)."""
+        """A user with default space, password `PASSWORD` and an API token (`auth`)."""
         user = builders.user(name, role=role)
         async with self.container.unit_of_work() as uow:
             await uow.users.add(user)
-            await uow.drawers.add(builders.default_drawer(user))
+            await uow.spaces.add(builders.default_space(user))
             await uow.credentials.add(
                 Credential(
                     user_id=user.id,

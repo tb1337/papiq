@@ -41,12 +41,12 @@ from papiq.core.services.rules.running import (
     apply_plan,
     checked_rules,
     corrected_fields,
-    drawer_choice,
     field_patterns,
     person_record,
     prepare,
     provenance,
     run_rules,
+    space_choice,
 )
 
 
@@ -79,9 +79,9 @@ class ChangeRules:
         """Outside a transaction: the text and its patterns, if a rule needs them."""
         return await prepare(self._store, self._matcher, rules, document, max_text=self._max_text)
 
-    def drawer_chosen(self, document: Document, *, actor: User, now: datetime) -> NodeRun:
-        """The log entry of a person moving the document: rules leave the drawer then."""
-        return drawer_choice(
+    def space_chosen(self, document: Document, *, actor: User, now: datetime) -> NodeRun:
+        """The log entry of a person moving the document: rules leave the space then."""
+        return space_choice(
             document,
             node=Node.APPLY_RULES,
             actor=actor.id,
@@ -105,13 +105,14 @@ class ChangeRules:
     ) -> RuleRun | None:
         """After the person's change is applied to `document`: run the rules, apply their
         change and (with `log`) write the log entry. Returns the run, if rules were
-        evaluated."""
+        evaluated. `changes`: the person's change as given, before `checked_changes` (a topic
+        it clears because the new contact does not enable it is no decision of theirs)."""
         changed = changed_fields(changes)
         record = person_record(
             changed=changed,
             tags_before=before.tag_ids,
             tags_after=document.tag_ids,
-            corrected=corrected_fields(before, document),
+            corrected=corrected_fields(before, document, decided=changed),
         )
         input: dict[str, JsonValue] = {
             "trigger": Trigger.CHANGE.value,

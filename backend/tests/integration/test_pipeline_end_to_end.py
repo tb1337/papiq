@@ -58,7 +58,7 @@ async def test_scan_and_photo_are_processed(
     owner = builders.user()
     async with container.unit_of_work() as uow:
         await uow.users.add(owner)
-        await uow.drawers.add(builders.default_drawer(owner))
+        await uow.spaces.add(builders.default_space(owner))
         await uow.commit()
 
     document = await services.pipeline.receive(

@@ -46,7 +46,7 @@ async def test_the_fixed_answers_give_the_expected_lanes(tmp_path: Path) -> None
 
     text = report.read_text(encoding="utf-8")
     assert "| False green | **0** | **0** |" in text
-    assert "the trained one took over 55 documents of the training corpus first" in text
+    assert "the trained one took over 57 documents of the training corpus first" in text
     assert "## Lanes (trained)" in text
     assert "## Instructions in the document text (cold)" in text
 
@@ -63,7 +63,7 @@ async def test_instructions_in_the_text_change_only_checked_fields(tmp_path: Pat
         assert result.violations == ()
     refused, obeyed = injections
     assert refused.lane is Lane.RED  # fields outside the schema
-    assert "unexpected drawer" in refused.reasons[next(iter(refused.reasons))]
+    assert "unexpected owner, share_with, space" in refused.reasons[next(iter(refused.reasons))]
     assert obeyed.document_date is None  # not backed by the text
     assert "Betrag" not in obeyed.fields  # invented
 
@@ -171,10 +171,55 @@ async def test_the_trained_run_learns_from_the_corpus() -> None:
     # Entered by hand, it stays so.
     insurer = contacts["Hanse Versicherung AG"]
     assert any(item.source is IdentifierSource.MANUAL for item in insurer.identifiers)
+    # The health insurer's letters all carry its topic: the domain learned points to it.
+    (domain,) = [
+        item
+        for item in contacts["Gesundkasse BKK"].identifiers
+        if item.kind is IdentifierKind.EMAIL_DOMAIN
+    ]
+    assert domain.source is IdentifierSource.LEARNED and domain.topic_id is not None
     (logo,) = [result for result in results if result.case.name == "31-absender-nur-kennung"]
     assert logo.lane is Lane.GREEN
     (best, *_) = logo.checks["contact"].candidates
     assert any(source.identifiers for source in best.sources)
+
+
+async def test_the_topic_is_set_by_an_identifier_and_a_signal_and_never_waits(
+    tmp_path: Path,
+) -> None:
+    """The insurance group is employer and insurer: its personnel number and its policy number
+    point to two topics. Each with the model sets the topic; both leave it empty with both as
+    candidates; under a contact only suggested the topic is only suggested."""
+    evaluation = await run_evaluation(
+        Settings.model_construct(), cases=SET, fake=True, output=tmp_path / "r.md"
+    )
+    by_case = {
+        (result.run, result.case.name): result
+        for result in evaluation.results
+        if result.case.name[:2] in {"39", "40", "41", "42"}
+    }
+    for run in Run:
+        pay, policy, both, logo = (
+            by_case[(run, name)]
+            for name in (
+                "39-lohnabrechnung-versicherung",
+                "40-krankenversicherung-versicherungsschein",
+                "41-kennungen-zweier-themen",
+                "42-gelber-kontakt-thema",
+            )
+        )
+        assert (pay.lane, pay.topic) == (Lane.GREEN, "Arbeit")
+        assert (policy.lane, policy.topic) == (Lane.GREEN, "Krankenversicherung")
+        check = both.checks["topic"]
+        assert (both.lane, both.topic, check.value, check.suggestion) == (
+            Lane.GREEN,
+            None,
+            None,
+            None,
+        )
+        assert {"Arbeit", "Krankenversicherung"} <= {item.label for item in check.candidates}
+        assert (logo.lane, logo.topic) == (Lane.YELLOW, None)
+        assert logo.proposed["topic"] == "Krankenversicherung"
 
 
 async def test_a_field_s_description_reaches_the_model() -> None:

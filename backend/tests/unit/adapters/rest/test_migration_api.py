@@ -1,5 +1,5 @@
 """What a migration needs from the API: uploading for another owner with the metadata of the
-source system, drawers and users created by an admin's token, the original's hash."""
+source system, spaces and users created by an admin's token, the original's hash."""
 
 import hashlib
 import json
@@ -102,9 +102,9 @@ async def test_an_admin_uploads_for_another_owner_with_the_metadata(api: Api) ->
         data["amount"]["id"]: {"amount": "84.20", "currency": "EUR"},
         data["note"]["id"]: "paid by transfer",
     }
-    drawers = (await api.client.get(f"{PREFIX}/drawers", headers=auth(owner))).json()
-    default = next(item for item in drawers if item["is_default"])
-    assert document["drawer_id"] == default["id"]
+    spaces = (await api.client.get(f"{PREFIX}/spaces", headers=auth(owner))).json()
+    default = next(item for item in spaces if item["is_default"])
+    assert document["space_id"] == default["id"]
 
     log = (await api.client.get(f"{DOCUMENTS}/{document['id']}/log", headers=auth(owner))).json()
     receive = log[0]
@@ -178,21 +178,21 @@ async def test_the_original_hash_is_in_the_details(api: Api) -> None:
     assert document["sha256"] == hashlib.sha256((SAMPLES / "scan.pdf").read_bytes()).hexdigest()
 
 
-async def test_the_owner_needs_write_access_to_the_drawer(api: Api) -> None:
+async def test_the_owner_needs_write_access_to_the_space(api: Api) -> None:
     admin, owner, other = await api.admin(), await api.user(), await api.user()
-    theirs = await post(api, "/drawers", {"name": "Work"}, auth(other))
+    theirs = await post(api, "/spaces", {"name": "Work"}, auth(other))
     response = await upload(
-        api, auth(admin), owner=str(owner.id), drawer_id=theirs["id"], channel="migration"
+        api, auth(admin), owner=str(owner.id), space_id=theirs["id"], channel="migration"
     )
     assert response.status_code in (403, 404)
-    mine = await post(api, "/drawers", {"name": "Work", "owner_id": str(owner.id)}, auth(admin))
+    mine = await post(api, "/spaces", {"name": "Work", "owner_id": str(owner.id)}, auth(admin))
     assert mine["owner_id"] == str(owner.id)
     response = await upload(
-        api, auth(admin), owner=str(owner.id), drawer_id=mine["id"], channel="migration"
+        api, auth(admin), owner=str(owner.id), space_id=mine["id"], channel="migration"
     )
     assert response.status_code == 202, response.text
     document = (await api.client.get(response.json()["status_url"], headers=auth(owner))).json()
-    assert document["drawer_id"] == mine["id"]
+    assert document["space_id"] == mine["id"]
 
 
 async def test_the_duplicate_check_is_the_owners(api: Api) -> None:
@@ -328,38 +328,38 @@ async def test_reprocessing_applies_the_metadata_again(api: Api) -> None:
     assert document["lane"] == "green"
 
 
-# --- drawers and users ------------------------------------------------------------------------
+# --- spaces and users ------------------------------------------------------------------------
 
 
-async def test_drawers_for_another_owner(api: Api) -> None:
+async def test_spaces_for_another_owner(api: Api) -> None:
     admin, owner, other = await api.admin(), await api.user(), await api.user()
     created = await api.client.post(
-        f"{PREFIX}/drawers", json={"name": "Shared", "owner_id": str(owner.id)}, headers=auth(admin)
+        f"{PREFIX}/spaces", json={"name": "Shared", "owner_id": str(owner.id)}, headers=auth(admin)
     )
     assert created.status_code == 201
     assert created.json()["owner_id"] == str(owner.id)
     # The name is unique per owner, not across owners.
     again = await api.client.post(
-        f"{PREFIX}/drawers", json={"name": "shared", "owner_id": str(owner.id)}, headers=auth(admin)
+        f"{PREFIX}/spaces", json={"name": "shared", "owner_id": str(owner.id)}, headers=auth(admin)
     )
     assert again.status_code == 409
-    own = await api.client.post(f"{PREFIX}/drawers", json={"name": "Shared"}, headers=auth(admin))
+    own = await api.client.post(f"{PREFIX}/spaces", json={"name": "Shared"}, headers=auth(admin))
     assert own.status_code == 201
     # Others may not, naming themselves is no change.
     refused = await api.client.post(
-        f"{PREFIX}/drawers", json={"name": "X", "owner_id": str(owner.id)}, headers=auth(other)
+        f"{PREFIX}/spaces", json={"name": "X", "owner_id": str(owner.id)}, headers=auth(other)
     )
     assert refused.status_code == 403
     mine = await api.client.post(
-        f"{PREFIX}/drawers", json={"name": "X", "owner_id": str(other.id)}, headers=auth(other)
+        f"{PREFIX}/spaces", json={"name": "X", "owner_id": str(other.id)}, headers=auth(other)
     )
     assert mine.status_code == 201
     unknown = await api.client.post(
-        f"{PREFIX}/drawers", json={"name": "Y", "owner_id": str(UUID(int=4))}, headers=auth(admin)
+        f"{PREFIX}/spaces", json={"name": "Y", "owner_id": str(UUID(int=4))}, headers=auth(admin)
     )
     assert unknown.status_code == 404
     shared = await api.client.put(
-        f"{PREFIX}/drawers/{created.json()['id']}/shares/{other.id}",
+        f"{PREFIX}/spaces/{created.json()['id']}/shares/{other.id}",
         json={"level": "read"},
         headers=auth(admin),
     )
@@ -399,9 +399,9 @@ async def test_an_admin_token_creates_users_without_password(api: Api) -> None:
 async def test_rules_run_and_trust_the_imported_values(api: Api) -> None:
     admin, owner, reader = await api.admin(), await api.user(), await api.user()
     data = await master_data(api, admin)
-    shared = await post(api, "/drawers", {"name": "Shared"}, auth(owner))
+    shared = await post(api, "/spaces", {"name": "Shared"}, auth(owner))
     await api.client.put(
-        f"{PREFIX}/drawers/{shared['id']}/shares/{reader.id}",
+        f"{PREFIX}/spaces/{shared['id']}/shares/{reader.id}",
         json={"level": "read"},
         headers=auth(owner),
     )
@@ -416,7 +416,7 @@ async def test_rules_run_and_trust_the_imported_values(api: Api) -> None:
                     {"field": "contact", "op": "is", "value": data["contact"]["id"]},
                 ]
             },
-            "actions": [{"type": "set_drawer", "drawer_id": shared["id"]}],
+            "actions": [{"type": "set_space", "space_id": shared["id"]}],
         },
         auth(owner),
     )
@@ -426,4 +426,4 @@ async def test_rules_run_and_trust_the_imported_values(api: Api) -> None:
     await api.drain()
     document = (await api.client.get(response.json()["status_url"], headers=auth(owner))).json()
     # Taken over from the source system, not guessed by a model: the rule files it for sharing.
-    assert (document["lane"], document["drawer_id"]) == ("green", shared["id"])
+    assert (document["lane"], document["space_id"]) == ("green", shared["id"])

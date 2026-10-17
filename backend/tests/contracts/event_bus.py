@@ -17,7 +17,7 @@ from papiq.core.domain.events import (
     NodeDeferred,
     NodeStarted,
 )
-from papiq.core.domain.ids import DocumentId, DrawerId, UserId, new_id
+from papiq.core.domain.ids import DocumentId, SpaceId, UserId, new_id
 from papiq.core.domain.pipeline import Lane, Node, Outcome
 from papiq.core.ports import Clock, DeliveryRetry, EventBus, UnitOfWorkFactory
 from papiq.core.ports.event_bus import DEFAULT_DELIVERY_RETRY
@@ -102,7 +102,7 @@ class EventBusContract:
             ),
             LaneChanged(document_id=document, occurred_at=NOW, old=None, new=Lane.YELLOW),
             LaneChanged(document_id=document, occurred_at=NOW, old=Lane.RED, new=None),
-            DocumentFiled(document_id=document, occurred_at=NOW, drawer_id=DrawerId(new_id())),
+            DocumentFiled(document_id=document, occurred_at=NOW, space_id=SpaceId(new_id())),
             DocumentUpdated(document_id=document, occurred_at=NOW, fields=("title", "fields")),
             DocumentDeleted(document_id=document, occurred_at=NOW),
             DocumentDeleted(

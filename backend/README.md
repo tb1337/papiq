@@ -5,7 +5,7 @@ Python package `papiq`, structured as ports and adapters.
 ```
 src/papiq/
   core/            domain core, framework-free
-    domain/        entities and value objects (document, drawer, contact, ...)
+    domain/        entities and value objects (document, space, contact, ...)
     ports/         interfaces the core needs (Python protocols)
     services/      use cases: ingest pipeline, rules, permissions
   adapters/
@@ -28,8 +28,8 @@ pattern matcher (`regex`, a search with a time limit) and the template renderer 
 
 ## Core
 
-- `core/domain`: users, drawers and shares, master data (contacts, document types, tags),
-  field definitions and values, the document aggregate with the pipeline state machine and
+- `core/domain`: users, spaces and shares, master data (contacts, document types, tags with
+  their scopes and trees, `tag_tree.py`), field definitions and values, the document aggregate with the pipeline state machine and
   lanes, domain events, jobs and the permission rules. IDs are UUIDv7, timestamps are UTC.
 - `core/ports`: repositories, processing log, outbox and job queue share one `UnitOfWork`, so
   a state change, its events and follow-up jobs are committed together (transactional outbox).
@@ -38,7 +38,7 @@ pattern matcher (`regex`, a search with a time limit) and the template renderer 
   Further ports: `ObjectStore`, `Clock`, `Ocr`, `DocumentParser`, `PreviewRenderer`,
   `PasswordHasher`, `SecretCipher`, `Totp`, `OidcProvider`, `LanguageModel`, `Embeddings`,
   `SearchIndex`, `PatternMatcher`, `WebhookSender`.
-- `core/services`: use cases (users, drawers, master data, documents, pipeline, inbox,
+- `core/services`: use cases (users, spaces, master data, documents, pipeline, inbox,
   classification, rules, indexing, search, webhooks, maintenance). Each runs in one unit of work and checks the caller's rights.
 
 `papiq.composition.container.build_memory_container()` wires all designed ports to their
@@ -82,7 +82,7 @@ whether it is active. A deactivated user has no rights and cannot authenticate.
   deactivated.
 - Accounts: admins create users (optionally with a password), change roles, reset passwords,
   deactivate, turn TOTP off and remove links to identity providers. Deleting a user needs that
-  they own no documents and their drawers are empty; it removes their drawers, the shares to
+  they own no documents and their spaces are empty; it removes their spaces, the shares to
   them and their sign-in data. The last active admin cannot be demoted, deactivated or deleted.
 - The first admin: `PAPIQ_ADMIN_USERNAME` and `PAPIQ_ADMIN_PASSWORD[_FILE]` create an admin at
   API start while there is no admin at all. Afterwards they are ignored; they never change an
@@ -175,8 +175,8 @@ jobs of the old run are recognised as stale.
 | Signals (`signal_llm`, `signal_classifier`, `signal_neighbours`, `signal_facts`) | `content.txt`, master data, the classifier's model, the search index; `signal_facts` also the archive PDF | proposals in the log; `signal_facts` also `documents/<id>/codes.json` (the codes on the pages) | OK, also when abstaining (`abstained` names why); only `signal_llm` fails, after two unfit answers |
 | Judge (`JudgeNode`) | the signals' entries in the log, `content.txt` | contact, document type, tags, document date (applied if green) | see Understanding |
 | Fields (`FieldsNode`) | `content.txt`, the fields of the type and the global ones | field values and the title (applied if checked) | see Understanding |
-| Apply rules (`ApplyRulesNode`) | `content.txt` (only if a rule looks at the text), the rules | drawer, contact, type, title, tags, fields | uncertain on conflicts, refused actions and forced reviews; see Rules |
-| File (`FileNode`) | the drawer | - | uncertain if the owner may no longer file into the drawer (field `drawer`) |
+| Apply rules (`ApplyRulesNode`) | `content.txt` (only if a rule looks at the text), the rules | space, contact, type, title, tags, fields | uncertain on conflicts, refused actions and forced reviews; see Rules |
+| File (`FileNode`) | the space | - | uncertain if the owner may no longer file into the space (field `space`) |
 
 - A node that raises is retried (`PAPIQ_NODE_MAX_ATTEMPTS`, delay `PAPIQ_NODE_RETRY_DELAY`,
   doubling); it waits meanwhile (`document.node_deferred`); after the last attempt the
@@ -284,33 +284,106 @@ jobs of the old run are recognised as stale.
   in its owner's inbox; `document.filed` comes only when it is green. Confirming it (see the
   inbox below) lets processing continue up to filing.
 - Known gap: an original is stored before its document is created; if creating fails (e.g.
-  the drawer's rights changed meanwhile), the object stays without a document. Removing such
+  the space's rights changed meanwhile), the object stays without a document. Removing such
   objects is left to a later cleanup of the object store.
+
+## Tags
+
+A tag has a scope (`TagScope`, fixed when it is made): `document` (a tag of documents, as before
+0.3), `contact` (a contact group, "insurer"), `document_type` (a type group, "invoice" over
+"medical bill") or `topic` (what a document is about with its contact, see Topics). Names are
+unique per scope: a contact group may be named like a document tag.
+Tags nest under a tag of the same scope (`parent_id`), at most five levels, without cycles
+(`TagTree.check_parent`). Only the tag set is stored; its ancestors are derived (`TagTree`).
+
+- **Documents** carry document tags only. A child and its parent set together leave the child
+  (`TagTree.normalise`); a parent may be set alone. A document is found by a tag and by each of
+  its ancestors.
+- **Groups.** A contact and a document type are in any number of groups of their scope
+  (`group_ids`); their documents inherit them with their ancestors. Groups are not stored at the
+  document and not removed there.
+- **Assignment.** A document tag is `auto` (the classification proposes and sets it) or `manual`
+  (only a person or a rule sets it: statuses such as "to pay"); groups are always `manual`.
+- **Shown.** Whether documents show a tag in their chips (default: on for document tags, off for
+  groups); filters, search, rules and templates see it either way.
+- **Filters** on a tag match the documents with it or a tag below it; on a group, those whose
+  contact (type) is in it or a group below it. The core widens each tag or group by its
+  descendants and hands the repository and the index sets ("one of these", all sets together,
+  `DocumentFilter`), so no adapter walks a tree.
+- **Counts** (`GET /tags?document_counts=true`): a document tag counts each document once that
+  carries it or a tag below it; a group the documents whose contact (type) is in it or a group
+  below it. A contact group and a topic also count their contacts (`contact_count`: in it or a
+  group below it, enabling it or a topic below it), a type group its document types
+  (`document_type_count`), each once.
+- **Deleting** a tag works only without tags below it and while nothing uses it: no document,
+  contact or type, and no rule (`409`, naming the rules; admins see all of them).
+- **Renaming** a tag, nesting it elsewhere and changing the groups of a contact or type refresh
+  the search index of the documents concerned (`search.refresh`).
+- **Moving** a document tag or a group under another parent queues `tags.normalise`: what
+  carries the tag (or one below it) and one now above it keeps only the one below, as if set
+  anew (`master_data.normalise_tagged`). Documents are changed 200 per step, each an update
+  of its own (`document.updated`, which refreshes its search entry), without touching lane or
+  confirmation; a step holds the lock of the tag tree, reads the tree as it is then and queues
+  the next step in the same commit (so a lease covers one step, and a tag moved back meanwhile
+  is left alone). For a group the contacts or types (the index holds their groups with
+  ancestors, which stay the same). A topic needs none: a document carries one, and a contact
+  may enable a topic and one below it.
+
+## Topics
+
+A topic is a tag of scope `topic` (a global catalogue, nested like the other tags): what a
+document is about with its contact, "Arbeit" or "Versicherung › Krankenversicherung" at an
+insurance group that is employer and insurer at once.
+
+- **A contact enables topics** (`Contact.topic_ids`, table `contact_topics`; admins, at most
+  100). A topic and one below it may both be enabled. Disabling one is refused (`409`, naming
+  it) while documents of that contact carry it; identifiers that point to it lose their topic.
+- **An identifier** of a contact may point to one topic the contact enables
+  (`contact_identifiers.topic_id`, checked by the contact). Found in a document, it is hard
+  evidence for the pair of contact and topic. Training learns an identifier's topic only if
+  all confirmed documents it stands in carry the same one.
+- **A document carries one topic at most** (`documents.topic_id`), one its contact enables
+  (`_access.checked_changes`). Another contact keeps it if it enables it, else it is cleared;
+  without a contact there is no topic (`422`). An admin who gives a topic the contact does not
+  enable enables it there in the same transaction; anyone else gets `422`. A topic cleared
+  that way is no decision of the person's: change rules may set another one. A rule that sets
+  another contact clears a topic it does not enable too, unless a person chose the topic: then
+  the rule's contact is overruled.
+- **Assignment.** An `auto` topic is proposed and set by the classification, a `manual` one
+  only by a person or a rule. Topics are shown at the document by default (a square chip).
+- **Filters, counts and deleting** work as for document tags: a topic finds the documents with
+  it or one below it, counts each document once, and is deleted only without topics below it
+  and while no document, contact, identifier or rule uses it (`409`). `topic_id` repeats in the
+  list and the search: as a document has one topic, several mean one of them, each with the
+  topics below it.
 
 ## Understanding
 
-Four signals propose, the judge decides contact, document type, tags and document date, the
-fields node reads the fields of the decided type and the title (`core/services/classification`,
-the rules in `core/domain/verdict.py`).
+Four signals propose, the judge decides contact, topic, document type, tags and document date,
+the fields node reads the fields of the decided type and the title
+(`core/services/classification`, the rules in `core/domain/verdict.py`).
 
 - **`signal_llm`**: one request to an OpenAI-compatible chat completions endpoint
-  (`adapters/outbound/openai_compat`, `PAPIQ_LLM_*`, prompt `propose-2`) for sender and recipient,
-  type, tags, date, a title, the language, and the values of the fields of the type it chooses
+  (`adapters/outbound/openai_compat`, `PAPIQ_LLM_*`, prompt `propose-3`) for sender and recipient,
+  the topic (one of the automatic topics the listed contacts enable, or none; the prompt lists
+  them at each of the at most 20 preselected contacts), type, tags (the automatic document
+  tags), date, a title, the language, and the values of the fields of the type it chooses
   and of the global ones, each with the quoted passage. The answer must follow a JSON schema
   (`response_format` `json_schema`, or `json_object` for providers without schema support); an
   answer that does not fit is asked for once more, then the signal fails (red). Without a
   configured model it abstains, and the owner classifies.
 - **`signal_classifier`**: TF-IDF of words and word pairs and a logistic regression per target
-  (contact, type, each tag), trained on the confirmed documents (`PAPIQ_CLASSIFIER`, see
-  Classifier). It abstains without a trained model.
+  (contact, topic, type, each automatic document tag), trained on the confirmed documents
+  (`PAPIQ_CLASSIFIER`, see Classifier). It abstains without a trained model.
 - **`signal_neighbours`**: the `PAPIQ_NEIGHBOURS` most similar confirmed documents the owner may
-  read, by the vector of the start of the text against the search index; their contact, type
-  and tags come from the database. It abstains without embeddings or index.
+  read, by the vector of the start of the text against the search index; their contact, topic,
+  type and automatic document tags come from the database. It abstains without embeddings or
+  index.
 - **`signal_facts`**: names and aliases of contacts standing whole in the text, identifiers of
-  contacts (IBAN, VAT ID, customer number, personnel number, mail domain), unknown IBANs and
-  VAT IDs. A personnel number stands after its label (`Personalnummer`, `Pers.-Nr.`,
-  `Mitarbeiternummer`, `Employee ID`, ...) and is kept without leading zeros. It also
-  reads the bar and QR codes on the archive's pages, once (`documents/<id>/codes.json`; the
+  contacts (IBAN, VAT ID, customer number, personnel number, mail domain) with the topic they
+  point to, unknown IBANs and VAT IDs. A personnel number stands after its label
+  (`Personalnummer`, `Pers.-Nr.`, `Mitarbeiternummer`, `Employee ID`, ...) and is kept
+  without leading zeros. It also reads the bar and QR codes on the archive's pages, once (`documents/<id>/codes.json`; the
   OCR node deletes it with a new archive, a reprocessing from the judge takes it): an
   identifier in a code counts as one in the text, the payee of a GiroCode as a name in the
   text, which proposes nothing alone. Reading the codes may fail; the signal warns and goes on
@@ -329,8 +402,9 @@ sources. The judge's rule:
 | Field | Green (no contradiction) | Otherwise |
 | --- | --- | --- |
 | Contact | hard evidence (its identifier, or its name or alias in the text) and a signal names it; or the model's sender matches it from `PAPIQ_CONTACT_SUGGEST_THRESHOLD` on and the classifier or the neighbours name it. Never the model's recipient | yellow with ranked candidates; an identifier alone is a suggestion; an unknown sender a new contact (an admin creates it) |
+| Topic (an automatic one the decided contact enables) | the contact is green, no signal or identifier names another topic, and an identifier of the pair stands in the text and a signal names it, or two signals name it | a suggestion, always under a contact that is only suggested; signals or identifiers naming different topics leave it empty with all candidates; a topic never makes a document yellow, and another contact clears one it does not enable |
 | Document type | two signals name it, or only the model and no other signal covers it (the classifier was not trained on it, no confirmed document carries it) | yellow; a type outside the list is proposed as new |
-| Tags | set as a type is green | a suggestion; tags never make a document yellow |
+| Tags (automatic document tags; one set by hand is never proposed) | set as a type is green, without the parent of a tag set | a suggestion (ids); tags never make a document yellow |
 | Document date | a valid date that appears in the text, in a quoted passage that shows it (`31.03.2026`, `31.3.26`, `2026-03-31`, `31. März 2026`, `March 31, 2026`, ...) | suggested |
 
 Without the model's proposal the judge is uncertain; it fails (red) only if the model answered
@@ -346,6 +420,7 @@ own switch:
 | --- | --- | --- |
 | Required field | its value is found and passes | yellow |
 | Optional field | no value is fine (left empty); a value given must pass | yellow |
+| Set by hand (`assignment: manual`) | never asked of the model; its value stays as the document has it; required, it needs a value a person or a rule set (checked by `apply_rules`, after the rules; confirming without a value is no decision) | yellow until a person enters it |
 | Amounts, numbers | read as written (`2.111,68 €`, `1,234.56`, `-12,50`; an ambiguous one as the text shows it, else in the document's language) and found in the text; the currency shown as code, sign or word, or, where the text shows none at all (a pay slip's bare numbers), `PAPIQ_DEFAULT_CURRENCY` | |
 | Dates | as the document date; a date field must differ from the document date | the date is suggested |
 | Periods | read as written (`September 2026`, `09/2026`, `KW 38/2026`, `Q3 2026`, `2025`, `01.09.–30.09.2026`, `1. bis 30. September 2026`, a date as that day) or as `{start, end}`; plausible as a date; the quoted passage shows it as written or by its first and last day; of a value, the reading no other one holds counts (two are none) | without a year (it takes the document date's), or a single day equal to the document date: suggested |
@@ -376,7 +451,7 @@ candidates and the raw answer is in the processing log (`fields`, `answer`), so 
 traceable after a correction; the rules read them with `core.services.inbox.field_checks`.
 
 The document text is sent between markers derived from its hash, and the model is told to treat
-it as data. It can only answer with the fixed schema: there is no field for drawers, owners,
+it as data. It can only answer with the fixed schema: there is no field for spaces, owners,
 shares or actions, and additional fields make the answer unfit. Long documents are shortened to
 `PAPIQ_LLM_INPUT_BUDGET` characters, a run of spaces counted once (the columns of the text as it
 is set cost a model little; beginning and end kept, the middle left out); with many
@@ -397,8 +472,11 @@ with `OLLAMA_CONTEXT_LENGTH=8192` or more. Local models on a CPU are slow:
 
 **Classifier.** One model for all users (`core/services/classifier.py`,
 `adapters/outbound/sklearn`). Training examples are the documents whose metadata a person set or
-confirmed (`confirmed_at`: confirming in the inbox, changing contact, type, tags, date or fields,
-taking a document over); green documents do not train. A recurring job (`classifier.check`,
+confirmed (`confirmed_at`: confirming in the inbox, changing contact, type, topic, tags, date or
+fields, taking a document over); green documents do not train. A change that only adds or
+removes tags set by hand (statuses such as "to pay") confirms nothing: they say nothing about
+contact and type (`documents.confirms`); with an automatic tag or any other confirming value
+it confirms. A recurring job (`classifier.check`,
 every ten minutes) queues the training (`classifier.train`) once `PAPIQ_CLASSIFIER_MIN_EXAMPLES`
 documents are confirmed and no model exists, or `PAPIQ_CLASSIFIER_RETRAIN_AFTER` were confirmed
 since the last one; `python -m papiq.composition train` and `POST /classifier/train` train at
@@ -432,6 +510,29 @@ alone, so a new scikit-learn version cannot break it. `GET /classifier` tells it
    for them. Run it once `reparse` is through, which changes the text the identifiers are read
    from.
 
+**After the update to 0.3.** Revisions 0024 to 0028 run at start; then four things:
+
+1. "Drawer" is "space" everywhere, a break of the API: `/api/v1/spaces`, `space_id` (documents,
+   upload, move, confirm, filters), the rule action `set_space`, the template variable
+   `{{ space }}`. Revision 0024 rewrites what is stored (rule actions, the variable in rule
+   templates and title patterns, open `document.filed` events, the processing log); a template
+   that already uses `space` for something else stops it, and says which (rename it there
+   first). A client that still sends `drawer_id` on upload files into the default space.
+2. The worker's reconciliation at its start writes every entry in the index's layout 5 (the
+   space, tags with their ancestors, the groups of contact and type, the topic), with the
+   vectors it has: no embedding calls and no `reindex`. Until it is through, the search of
+   other users misses documents shared with them.
+3. Tags and fields from before are automatic document tags at the top level, shown on the
+   document, and automatic fields. Mark status tags such as "to pay" "by hand only": the
+   classification then never proposes them, and changing them alone confirms no document. Nest
+   tags, put contacts and types into groups, enable topics at contacts and give identifiers
+   their topic; the training learns topics (of documents and of learned identifiers) with its
+   next run (`train` trains at once).
+4. Logos of contacts come by upload. Fetching them from the contacts' websites is off: with
+   `PAPIQ_LOGO_FETCH=true` a contact without a logo that gets a domain has it fetched, and
+   `python -m papiq.composition fetch-logos` fetches them for the contacts from before
+   (outgoing HTTPS to their domains only).
+
 **Evaluation.** `python -m papiq.composition evaluate [--fake]` runs the synthetic documents in
 `evaluation/` cold and trained and writes a report; see [evaluation/README.md](evaluation/README.md).
 
@@ -454,7 +555,7 @@ version; deleting is a soft delete.
              {"field": "text", "op": "matches", "value": "Kd\\.?-Nr"}], "not": true}
   ]},
   "actions": [
-    {"type": "set_drawer", "drawer_id": "<drawer id>"},
+    {"type": "set_space", "space_id": "<space id>"},
     {"type": "add_tags", "tag_ids": ["<tag id>"]},
     {"type": "set_title", "template": "{{ contact }} {{ document_date | date: '%Y-%m' }}"}
   ]
@@ -462,7 +563,7 @@ version; deleting is a soft delete.
 ```
 
 - **Scope.** A user rule (any user) acts on its owner's documents with all actions and files
-  only into drawers its owner may write to. A global rule (admins) acts on every document, but
+  only into spaces its owner may write to. A global rule (admins) acts on every document, but
   only with `add_tags`, `remove_tags`, `set_field` and `force_review`: nothing that changes
   who sees a document. Everyone reads the global rules; user rules are read by their owner and
   admins (`all_users=true`).
@@ -474,7 +575,9 @@ version; deleting is a soft delete.
   | Field | Operators |
   | --- | --- |
   | `contact`, `document_type` | `is`, `in`, `present`, `missing` |
-  | `tags` | `contains` (has this tag), `in` (has one of), `present`, `missing` |
+  | `topic` | `is`, `in`, `present`, `missing`; a topic matches the topics below it |
+  | `tags` | `contains` (has this tag), `in` (has one of), `present`, `missing`; a tag matches the tags below it |
+  | `contact_group`, `document_type_group` | as `tags`, over the groups of the document's contact (type) with their ancestors |
   | `channel` (Eingangskanal: `web`, `api`, `migration`) | `is`, `in` |
   | `text` | `contains` (normalised like the classification checks), `matches` (regular expression) |
   | `document_date` | `is`, `gt`, `lt`, `present`, `missing` |
@@ -485,12 +588,18 @@ version; deleting is a soft delete.
   pattern that times out does not match and is logged. All patterns of one run on one
   document get two seconds together, a preview page twenty; the patterns left do not match. The text is the parsed text without
   markup, at most `PAPIQ_RULES_MAX_TEXT` characters; it is loaded only if a rule looks at it.
-- **Actions.** `set_drawer`, `set_contact`, `set_document_type`, `set_title`, `add_tags`,
-  `remove_tags`, `set_field`, `force_review` (with a reason).
+- **Actions.** `set_space`, `set_contact`, `set_topic`, `set_document_type`, `set_title`,
+  `add_tags`, `remove_tags`, `set_field`, `force_review` (with a reason). `set_topic` is for
+  user rules only; it is skipped (and noted) if the contact the document ends up with does not
+  enable the topic. `add_tags` and `remove_tags` take document tags (also those set by hand);
+  a tag above one the document keeps or gets is not added, a parent gives way to a child
+  added. Saving a rule checks the scope of every tag it names (`422`).
 - **Templates.** A title, the value of a text field and a review's reason are Liquid templates
   (`python-liquid`, `adapters/outbound/liquid`): `{{ contact }}`, `{% if field.la_brutto %}`,
-  filters with `|`. They see `title`, `filename`, `original_filename`, `contact`,
-  `document_type`, `document_date`, `added`, `tags`, `drawer`, `owner`, `channel`, `pages` and
+  filters with `|`. They see `title`, `filename`, `original_filename`, `contact`, `topic`,
+  `document_type`, `document_date`, `added`, `tags` (those set), `contact_groups` and
+  `document_type_groups` (the groups the contact and the type are in, by name, sorted), `space`,
+  `owner`, `channel`, `pages` and
   `field.<key>` (`FieldOut.key`, from the name: `LA_Brutto` is `la_brutto`; an amount has
   `.amount` and `.currency`, a period `.start` and `.end`), as the rules leave the document. A
   period writes itself in ISO 8601 by what it is (`Period.notation`): `2026-09`, `2026-W38`,
@@ -508,21 +617,26 @@ version; deleting is a soft delete.
   document the caller may read, and gives that document's values as a template writes them
   (`values`, for the template editor's list).
 - **Evaluation.** All conditions see the state before any rule acts; a rule's action never makes
-  another rule match in the same run. Contact, type and tags the model set and no person
-  confirmed are distrusted: a rule that matches only because of them does not file into a
-  drawer that others see (shared or another user's); it is reported instead. Retroactively
+  another rule match in the same run. Contact, topic, type and tags the model set and no
+  person confirmed are distrusted, and so are the groups of such a contact or type: a rule that
+  matches only because of them does not file into a space that others see (shared or another
+  user's); it is reported instead. Retroactively
   such a move is a conflict: it acts only where the person accepts it.
 - **Combining.** A field set by one rule, or by several to the same value, is set. Different
   values are a conflict and nothing is set; priority never decides. A value a person decided
   in the current processing run is never replaced (the rule is logged as overruled): in the
-  inbox, by a change, or the drawer chosen on upload or by moving the document; a value the model set and no person
+  inbox, by a change, or the space chosen on upload or by moving the document; a value the model set and no person
   confirmed is not replaced either (conflict). Tags of all rules are combined; added by one and
-  removed by another is a conflict.
+  removed by another is a conflict. Reasons and notes name contacts, types, topics, spaces,
+  tags and fields by their names and a field's value as written ("rules set different values
+  ('Nord, Arbeit': 'Nord Versicherung', 'Süd': 'Süd AG')", "'Betrag': …", `12.50 EUR`,
+  `2026-Q3`); the ids stay in the structured output (values, suggestions, effects), and only
+  something that no longer exists is named by its id.
 - **On arrival** conflicts, refused actions and forced reviews make `apply_rules` uncertain: the
   document waits in the inbox. Confirming it there (`POST /documents/{id}/confirm`, optionally
-  with `drawer_id`) decides the open fields and continues to filing; a forced review the owner
-  saw counts as answered. Filing checks once more that the owner may file into the drawer; if
-  not, confirming needs a `drawer_id` (`422` with `open_fields: ["drawer"]`).
+  with `space_id`) decides the open fields and continues to filing; a forced review the owner
+  saw counts as answered. Filing checks once more that the owner may file into the space; if
+  not, confirming needs a `space_id` (`422` with `open_fields: ["space"]`).
 - **On a change** (`PATCH /documents/{id}`) rules are edge-triggered: a rule acts only if it
   holds after the change and did not hold before. Fields the person set in this change, or
   decided before in this processing run, are not touched. Nothing turns yellow: what cannot be applied is only reported, in the `rules`
@@ -536,14 +650,15 @@ version; deleting is a soft delete.
   job; conflicts only where accepted (`accept_conflicts`), forced reviews do not act. A user rule
   is applied by its owner to their documents, a global rule by anyone to the documents they may
   write to; rights are checked again per document. Progress: `GET /rule-applications/{id}`.
-- **References.** Contacts, types, tags, fields and drawers a rule names must exist (`404`),
-  drawers must be writable for the owner (`403`). Deleting one of them, or removing a choice a
-  rule uses, disables the rules that use it with a reason; enabling checks again. Deleting a user
+- **References.** Contacts, types, tags, fields and spaces a rule names must exist (`404`),
+  spaces must be writable for the owner (`403`). Deleting one of them, or removing a choice a
+  rule uses, disables the rules that use it with a reason; enabling checks again. A tag a rule
+  uses is not deleted (`409`). Deleting a user
   removes their rules.
 - **Log.** Every run is a processing log entry of node `apply_rules` with the rules and versions
   checked, matches, effects and notes. `model_version`: `rules` (the pipeline node),
   `rules:change` (after a change; it also records what the person changed), `rules:apply`
-  (retroactive), `person` (a confirmation), `person:drawer` (a drawer chosen on upload or by
+  (retroactive), `person` (a confirmation), `person:space` (a space chosen on upload or by
   moving). Later runs read from the log which values a person
   decided and which the model set.
 
@@ -561,8 +676,8 @@ meaning took part.
   (`search.index`) and queues one job per change; it writes the document and reads it back, up to
   three rounds, so a change made meanwhile is not lost. A failed job repeats after 30 s,
   doubling up to an hour, ten times; the last attempt writes the words without vectors. Renaming
-  a contact, a type or a tag queues the documents that carry it: the index holds names for the
-  search by words. A reconciliation compares the index with the database and queues what is
+  a contact, a type or a tag, nesting a tag elsewhere and changing the groups of a contact or
+  type queue the documents concerned: the index holds names for the search by words. A reconciliation compares the index with the database and queues what is
   missing, stale or gone: every `PAPIQ_SEARCH_RECONCILE_INTERVAL` and at every start of a worker.
   If the embedding endpoint is down, the document is written at once with the vectors it has
   and the job repeats for the new ones. If Meilisearch loses its data, the adapter sets the
@@ -570,9 +685,13 @@ meaning took part.
   for the next reconciliation.
 - **Layout of an entry.** Each entry carries the layout it was written in (`LAYOUT` in
   `core/domain/search.py`). Layout 2 adds the ids of the fields with a value (`field_ids`), the
-  title's sort key and periods in ISO 8601 beside the German words (`2026-W38` and `KW 38 2026`).
-  The reconciliation writes older entries again and keeps their vectors, since the embedded text
-  does not change: no embedding calls.
+  title's sort key and periods in ISO 8601 beside the German words (`2026-W38` and `KW 38 2026`);
+  layout 3 the space instead of the drawer; layout 4 the tags with their ancestors and the groups
+  of contact and type with theirs (`contact_group_ids`, `document_type_group_ids` filterable,
+  their names searchable); layout 5 the topic with its ancestors (`topic_ids` filterable,
+  `topics` searchable, the topic's path in the header of the first section's embedding). The
+  reconciliation writes older entries again and keeps their vectors, since the embedded text
+  does not change (no document had a topic before): no embedding calls.
 - **Sorting.** `sort` comes first among Meilisearch's ranking rules, so relevance breaks ties,
   also with vectors; document date, arrival and the title's sort key are sortable. Without
   `sort` (or with `relevance`), the hits come by relevance.
@@ -581,13 +700,14 @@ meaning took part.
   index keeps serving, swaps it in and reconciles what changed meanwhile. The index holds no
   information that is not in the database.
 - **Rights.** The index query contains the rights (own documents in any lane; green documents of
-  drawers the caller owns or that are shared with them). Every hit is checked against the
+  spaces the caller owns or that are shared with them). Every hit is checked against the
   database once more and the filter applied again, so a withdrawn share ends the search for that
   document at once, before the index has changed; a page can therefore hold fewer items than
   `limit`. Documents still in processing are in the index, for their owner only.
 - **Sections.** The text (at most `PAPIQ_SEARCH_MAX_TEXT` characters) is cut into sections of
   about `PAPIQ_SEARCH_CHUNK_SIZE` characters, at most `PAPIQ_SEARCH_MAX_CHUNKS`; each gets a
-  vector, and the first one starts with title, contact, type and tags. `PAPIQ_SEARCH_MAX_CHUNKS=1`
+  vector, and the first one starts with title, contact, type and the tags set (not their
+  ancestors: nesting a tag elsewhere costs no embedding). `PAPIQ_SEARCH_MAX_CHUNKS=1`
   gives one vector per document. A vector is made again only when model or section texts change.
 - **Embeddings.** The query is embedded at request time (`PAPIQ_SEARCH_EMBED_TIMEOUT`); if the
   endpoint is down or slow, the search falls back to words (`semantic: false`).
@@ -608,6 +728,53 @@ meaning took part.
 [--models a,b] [--ratios 0,0.5,1]` indexes the documents of the evaluation set with each model in
 a temporary Meilisearch index and runs the queries of `evaluation/search/queries.json`; see
 [evaluation/README.md](evaluation/README.md).
+
+## Icons, colours and logos
+
+- **Icons.** Tags of every scope and document types carry the name of a Lucide icon
+  (`heart-pulse`: lower-case letters and digits in words joined by hyphens, at most 64
+  characters; `appearance.checked_icon`). Only the form is checked: the web UI brings the icons
+  in its own build and shows a stand-in for a name it does not know.
+- **Colours.** A tag carries one of the twelve colours of the palette (`gray`, `red`, `orange`,
+  `amber`, `lime`, `green`, `teal`, `sky`, `blue`, `violet`, `fuchsia`, `pink`; the web UI tunes
+  each for light and dark) or an own one as `#rrggbb` (stored in lower case).
+- **Logos.** A contact shows its logo, else its initials. The file is a WebP of at most 128 px
+  at `contacts/<id>/logo.webp` (`objects.logo_key`); the contact keeps where it came from
+  (`uploaded` or `fetched`), the domain of a fetched one and when it was stored
+  (`Contact.logo`), and the domains whose fetch found none (`logo_failure`). It goes with its
+  contact. File and contact change under one lock per contact (`logos.logo_lock`), the
+  contact's row before the file: another change of the contact meanwhile fails the version
+  check before the file is replaced, and the step starts again (three times).
+  - *Upload* (admins): a PNG, JPEG or WebP image of at most 1 MiB, recognised by content; SVG is
+    refused (`415`: it can carry scripts). The port `ImageNormaliser` (Pillow,
+    `adapters/outbound/pillow`) reads PNG, JPEG, WebP and ICO only, checks the size before it
+    decodes (at most 4096 × 4096 pixels; of an ICO every picture by its own header) and writes
+    a WebP keeping transparency. An uploaded logo is never replaced by a fetched one.
+  - *Fetch* (`PAPIQ_LOGO_FETCH=true`; off by default, Papiq then never asks the web on its own):
+    the worker's job `contacts.logo` asks the contact's own website for its icon, the port
+    `LogoFetcher` (`adapters/outbound/logos`, httpx2). It is queued when a contact without a
+    logo, or with a fetched one, gets a domain among its identifiers (entered by hand, learned
+    by training, attached from a document; a logo found there replaces the fetched one, none
+    found leaves it), by an admin (`POST /contacts/{id}/logo/fetch`; all its domains in turn,
+    also one that failed; may replace a fetched logo) and for the contacts without a logo with
+    `python -m papiq.composition fetch-logos`. A job that runs while `PAPIQ_LOGO_FETCH` is off
+    (switched off after it was queued) ends at once with a note, without waiting or retries;
+    the button answers `503` then. It reads the page of the domain (or of `www.`),
+    the apple-touch-icon, `<link rel="icon">` with sizes and the web app manifest (with the
+    standard library's `html.parser`), and `/favicon.ico`, and takes the largest raster icon of
+    at least 64 px (at most four tried). The domains whose fetch finds none are noted and
+    tried again only on request; a new domain is tried at once. No logo service of a third party is
+    asked: it would learn whom one deals with.
+  - *Protection against SSRF.* The domains come from documents. Every request and every
+    redirect resolves the name and goes on only if every address it has is public (Python's
+    `is_global`, and not shared 100.64.0.0/10, unique local, site-local, with a zone,
+    IPv4-compatible, 6to4 or Teredo; a mapped or NAT64 IPv4 address counts as that address),
+    then connects to the address it checked with the name as `Host` and for TLS (SNI and the
+    certificate), so that a second answer of the name server cannot lead elsewhere (DNS
+    rebinding). HTTPS on port 443 only, at most three redirects (each checked again), at most
+    1 MB and 10 s per request (30 s per fetch), only the content types asked for, no encoding
+    but gzip (decoded within the limit), no cookies, no proxies or `.netrc` from the
+    environment (`trust_env=False`).
 
 ## REST API
 
@@ -642,17 +809,20 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
 | `GET /auth/oidc`, `/auth/oidc/login`, `/auth/oidc/callback`; `POST/DELETE /auth/oidc/link` | OpenID Connect |
 | `GET /users`, `GET/PATCH/DELETE /users/{id}` | Accounts: list (others see active users' names), role and state, delete (admins) |
 | `POST /users`, `POST /users/{id}/password`, `DELETE /users/{id}/totp`, `DELETE /users/{id}/oidc` | Create with password, reset password, turn TOTP off, remove links (admins, session only, not the own account) |
-| `/contacts`, `/document-types`, `/tags`, `/fields` (`GET`, `POST`, `GET/PATCH/DELETE /{id}`) | Master data: read by all, changed by admins, deleted only when unused. Fields: name, description, choices and scope change, the data type does not; removing a used choice or narrowing the scope past documents with values is `409`. The lists take `document_counts=true` (and `all_users` for admins): each item with `document_count`, the documents in the caller's reach that have it (a field: a value for it), counted in one query |
+| `/contacts`, `/document-types`, `/tags`, `/fields` (`GET`, `POST`, `GET/PATCH/DELETE /{id}`) | Master data: read by all, changed by admins, deleted only when unused. Contacts and types take `group_ids`, contacts `topic_ids` (the topics they enable) and identifiers with an optional `topic_id`. Fields: name, description, choices and scope change, the data type does not; removing a used choice or narrowing the scope past documents with values is `409`. The lists take `document_counts=true` (and `all_users` for admins): each item with `document_count`, the documents in the caller's reach that have it (a field: a value for it; a tag: see Tags), counted in one query (tags in a few: the parents' counts and the groups' come apart) |
+| `GET /tags` | The tags in the order of their trees (each after its parent, siblings by name; document tags, contact groups, type groups, topics), or of one `scope`; each with `scope`, `parent_id`, `path` (the names from the top), `assignment`, `shown`, `icon`, `color`. `POST` takes `scope` (default `document`), `parent_id`, `assignment` and `shown` (by scope unless given), `icon` and `color`; `PATCH` name, parent (`null`: the top), assignment, `shown`, `icon` and `color` (`null` removes them), never the scope. Document types take an `icon` too |
+| `PUT/DELETE /contacts/{id}/logo`, `GET /contacts/{id}/logo` | A contact's logo (see Icons, colours and logos): upload (multipart `file`, admins; `413` above 1 MiB, `415` for another kind than PNG, JPEG or WebP, `422` if it cannot be read), remove (admins), read (everyone; WebP with `Cache-Control: private, max-age=86400`, the only answer of the API a browser may keep: `ContactOut.logo.url` carries the version). `ContactOut` has `logo` (source, domain, time, URL) and `logo_failure` (the domains whose fetch found none, the time of the last) |
+| `POST /contacts/{id}/logo/fetch` | Fetch the logo from the contact's website (admins, `202`); `503` without `PAPIQ_LOGO_FETCH`, `409` with an uploaded logo, `422` without a domain |
 | `PUT /document-types/{id}/fields` | The fields of a document type, each required or optional, set from the type in one transaction (admins); answers its fields. A global field is `422`; taking off a field that has values on its documents or that the type's title pattern uses is `409` |
-| `POST /contacts/{id}/identifiers` | Attach one identifier to a contact, entered by hand (admins); the others stay; `409` if another contact has it by hand. `PATCH` replaces the whole list |
-| `GET/POST /drawers`, `GET/PATCH/DELETE /drawers/{id}`, `PUT/DELETE /drawers/{id}/shares/{user_id}` | Drawers and shares (owner) |
+| `POST /contacts/{id}/identifiers` | Attach one identifier to a contact, entered by hand (admins), optionally with a `topic_id` the contact enables; the others stay; `409` if another contact has it by hand. `PATCH` replaces the whole list |
+| `GET/POST /spaces`, `GET/PATCH/DELETE /spaces/{id}`, `PUT/DELETE /spaces/{id}/shares/{user_id}` | Spaces and shares (owner) |
 | `GET /documents/search` | Search: `q`, the filters of `GET /documents`, `sort` (`relevance`, the default, or a key of `GET /documents`; relevance breaks ties), `limit`, `offset`, `semantic_ratio`; hits with snippet, `estimated_total`, `next_offset`, `semantic` |
 | `POST /search/reindex` | Rebuild the search index in the background (admins); `202` |
-| `GET /documents` | Readable documents; `sort`: `-created_at` (the default, newest first), `created_at`, `document_date`, `-document_date`, `title`, `-title` (without case and accents), documents without a date last either way; filters `contact_id`, `document_type_id`, `tag_id`, `drawer_id`, `lane`, `field_id` (a value for the field), `all_users` (admins); `limit`, `cursor` (the last document's id; its sort value is looked up, `422` if it is gone) |
-| `POST /documents` | Upload (multipart: `file`, optional `drawer_id`, optional `channel=migration`; otherwise the channel is `web` with a session, `api` with a token); `202` with `id`, `status_url` |
-| `GET/PATCH/DELETE /documents/{id}` | Metadata and state with the caller's access, `channel`; change (write access; the answer has the change rules' `rules` report for the owner); delete (owner or admin) |
+| `GET /documents` | Readable documents; `sort`: `-created_at` (the default, newest first), `created_at`, `document_date`, `-document_date`, `title`, `-title` (without case and accents), documents without a date last either way; filters `contact_id`, `document_type_id`, `tag_id` (with the tags below it), `contact_group_id` and `document_type_group_id` (the document's contact or type in the group or one below it; these three repeat, all must match), `topic_id` (the topic or one below it; repeats, one of them must match), `space_id`, `lane`, `field_id` (a value for the field), `all_users` (admins); `limit`, `cursor` (the last document's id; its sort value is looked up, `422` if it is gone) |
+| `POST /documents` | Upload (multipart: `file`, optional `space_id`, optional `channel=migration`; otherwise the channel is `web` with a session, `api` with a token); `202` with `id`, `status_url` |
+| `GET/PATCH/DELETE /documents/{id}` | Metadata and state with the caller's access, `channel`, `topic_id` (see Topics); change (write access; the answer has the change rules' `rules` report for the owner); delete (owner or admin) |
 | `POST /documents/{id}/dry-run` | A change as with `PATCH`, with the change rules, nothing stored: the result and the differences |
-| `POST /documents/{id}/move` | Into another drawer (owner, or an admin without read access) |
+| `POST /documents/{id}/move` | Into another space (owner, or an admin without read access) |
 | `GET /documents/{id}/original`, `/archive`, `/preview`, `/pages/{number}` | Files (read access); pages from 1 to `page_count` |
 | `GET /documents/{id}/text` | The text as it is set (plain text, pages apart by form feeds) in pieces: `offset`, `limit`; `409` while not parsed |
 | `GET /documents/{id}/files` | The files as stored (read access): when the document was added and changed, its original's name and type, and for the original and the archive (null while there is none) size, SHA-256 and metadata: a PDF's version, PDF/A level, pages, document information and XMP; an image's format, size, resolution and EXIF |
@@ -662,11 +832,11 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
 | `POST /documents/{id}/reprocess` | `{"from_node": "ocr"}`: process again from a node, with every node after it (owner or admin) |
 | `POST /documents/{id}/vision` | Process again from OCR with the vision language model reading every page (owner or admin); `409` without a model |
 | `GET /documents/{id}/reading` | How the archive's text was read: by the vision model or not, each recognised page, the advice to read with the model (owner or admin) |
-| `GET /pipeline` | The graph: every node and what it needs, in graph order; the vision model, if one is configured |
+| `GET /pipeline` | The graph: every node and what it needs, in graph order; the vision model, if one is configured; whether logos are fetched (`logo_fetch`) |
 | `POST /pipeline/reparse` | Read the text of every document again in the background (admins, after the update to 0.2); `202` with `queued` |
 | `GET /inbox` | The caller's yellow and red documents, newest first, with their open nodes and fields; `limit`, `cursor` |
 | `GET /documents/{id}/review` | What the model proposed and how each field was checked (owner or admin) |
-| `POST /documents/{id}/confirm` | Decide the open fields (`changes` as with `PATCH`, `accept_suggestions`, `drawer_id`), then continue from `resume_at` (`apply_rules`, or `fields` after a type change) up to filing (owner or admin); undecided fields: `422` with `open_fields` |
+| `POST /documents/{id}/confirm` | Decide the open fields (`changes` as with `PATCH`, `accept_suggestions`, `space_id`), then continue from `resume_at` (`apply_rules`, or `fields` after a type change) up to filing (owner or admin); undecided fields: `422` with `open_fields` |
 | `GET/POST /rules`, `GET/PUT/PATCH/DELETE /rules/{id}`, `GET /rules/{id}/versions`, `/versions/{number}` | Rules: list (`scope`, `include_disabled`, `all_users` for admins), create, change (new version), enable or disable, delete; see Rules |
 | `POST /rules/{id}/apply/preview`, `POST /rules/{id}/apply`, `GET /rule-applications/{id}` | Apply a rule to existing documents: preview, start (`202`), progress |
 | `GET /events` | Server-sent events of the documents the caller may read, for admins also `classifier.trained`; `?document_id=` |
@@ -679,14 +849,18 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
   content (PDF, JPEG, PNG, TIFF; otherwise `415`). A file the owner already has: `409` with
   `existing_document_id`.
 - Errors are problem details (RFC 9457, `application/problem+json`) and documented per endpoint.
-- Documents and drawers the caller may not see are `404` with the same answer as missing ones;
+  Filing into a space without write access (upload, move, confirm, a rule that sets the space)
+  is `403` with `space_id`, the space that was refused.
+- Documents and spaces the caller may not see are `404` with the same answer as missing ones;
   lists, filters and pages only ever contain readable documents (the repository query follows
   the permission rule, and the service checks every result again). Yellow, red and unfinished
   documents are the owner's only.
 - Every answer below `/auth` carries `Cache-Control: no-store` (CSRF tokens, TOTP secrets,
   recovery codes, API tokens), also errors and redirects. The OpenAPI document, the docs and
-  `/health` stay public.
-- Request bodies other than uploads are bounded by `PAPIQ_REQUEST_MAX_SIZE`, by
+  `/health` stay public. Every other answer of the API is `no-store` too, but for a contact's
+  logo (`GET /contacts/{id}/logo`, successful answers only), which keeps its own
+  `private, max-age=86400`: its URL changes with the logo, so lists need not load it again.
+- Request bodies other than uploads (documents, logos) are bounded by `PAPIQ_REQUEST_MAX_SIZE`, by
   `Content-Length` before anything is read and by the bytes received otherwise (`413`);
   FastAPI would otherwise read a JSON body of any size into memory.
 - Downloads go through a temporary file and carry `X-Content-Type-Options: nosniff`,
@@ -727,6 +901,13 @@ The session cookie is `__Host-papiq_session`: HTTP-only, `Secure`, `SameSite=Lax
   document's files.
 - Rule applications (`rules.apply`) run 25 documents per job, then queue the next job, so
   pipeline nodes do not wait behind them.
+- After a tag moved, `tags.normalise` leaves what carries it and a tag now above it the one
+  below (after rule applications; see Tags); a row changed meanwhile fails the version check,
+  and the job runs again (five tries, waiting from a minute, doubling).
+- With `PAPIQ_LOGO_FETCH`, the job `contacts.logo` fetches the logo of a contact (after rule
+  applications, before training; see Icons, colours and logos). It asks the network outside
+  any transaction and is repeated only for other errors than the website's (three tries).
+  Without it, a job queued before ends at once (failed, with the note that fetching is off).
 - `PAPIQ_WEBHOOK_CONCURRENCY` further loops deliver webhooks (see Webhooks); a receiver that
   does not answer holds up deliveries, never the pipeline.
 - SIGTERM or SIGINT: no new jobs; running jobs may finish within
@@ -849,11 +1030,11 @@ as in REST: `read` may use every tool but `update_metadata`.
 
 | Tool | Does |
 | --- | --- |
-| `search` | `query`, `limit` (1 to 25), `offset`, optional `contact`, `document_type`, `tags` (names): hits with `id`, `title`, `score`, `snippet` (plain text), contact, type, tags, date, lane, `access`; `next_offset`, `semantic` |
-| `get_document` | `id`: metadata with contact, type, tags and fields by name, lane and processing status |
+| `search` | `query`, `limit` (1 to 25), `offset`, optional `contact`, `document_type`, `tags` (names of document tags, all of them; a tag finds the documents with a tag below it too), `topics` (names of topics, one of them; a topic finds those with a topic below it too): hits with `id`, `title`, `score`, `snippet` (plain text), contact, type, topic, tags, date, lane, `access`; `next_offset`, `semantic` |
+| `get_document` | `id`: metadata with contact, topic, type, tags and fields by name, lane and processing status |
 | `get_text` | `id`, `offset`, `limit` (characters, at most `PAPIQ_MCP_TEXT_MAX`, 20,000): a piece of the document's text as it is set, `next_offset` to continue. The text is content from outside; the tool description tells clients not to follow instructions in it |
-| `update_metadata` | `id` and any of `title`, `contact`, `document_type` (name; `null` removes), `tags` (the complete list, replaces), `document_date` (`null` removes), `fields` (field name to value; `null` removes). Needs a `read_write` token and write access; the owner's change rules run as for `PATCH /documents/{id}` and the result shows them. If the rules filed the document where the caller can no longer read it, the result has only `id` and `access: null` |
-| `list_tags` | All tags, to name them in the other tools |
+| `update_metadata` | `id` and any of `title`, `contact`, `topic`, `document_type` (name; `null` removes; a topic the contact enables), `tags` (names of document tags, the complete list, replaces), `document_date` (`null` removes), `fields` (field name to value; `null` removes). Needs a `read_write` token and write access; the owner's change rules run as for `PATCH /documents/{id}` and the result shows them. If the rules filed the document where the caller can no longer read it, the result has only `id` and `access: null` |
+| `list_tags` | The tags with `scope` and `path`, in the order of their trees, optionally of one `scope`; document tags name the tags of the other tools, topics the `topic` of `update_metadata` |
 
 Names are matched regardless of case; an unknown name is an error, nothing is created. A
 document the caller may not read is "not found", with the same text as a missing one.
@@ -995,6 +1176,7 @@ Durations are seconds (`30`, `1.5`) or ISO 8601 (`PT1H`, `P7D`).
 | `PAPIQ_CLASSIFIER_RETRAIN_AFTER` | both | `25` | Documents confirmed since the last model before it is trained again |
 | `PAPIQ_CLASSIFIER_THRESHOLD` | Worker | `0.8` | A prediction this sure names its contact, type or tag |
 | `PAPIQ_NEIGHBOURS` | Worker | `5` | Similar confirmed documents that vote on a new one (needs the search index with embeddings); `0` turns them off |
+| `PAPIQ_LOGO_FETCH` | both | `false` | Fetch the logos of contacts from their own websites (worker; the API offers the button): HTTPS to public addresses only, see Logos. Off, Papiq never asks the web on its own |
 | `PAPIQ_RULES_PATTERN_TIMEOUT` | both | `0.2` | Seconds a regular expression of a rule may run per text or value (worker: rules; API: previews) |
 | `PAPIQ_RULES_MAX_TEXT` | both | `200000` | Characters of text rules look at (1,000 to 10,000,000) |
 | `PAPIQ_RULES_APPLY_MAX_DOCUMENTS` | both | `1000` | Documents per retroactive rule application (1 to 100,000) |

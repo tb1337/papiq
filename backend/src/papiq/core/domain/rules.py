@@ -4,13 +4,14 @@ A rule has a scope, triggers, a tree of conditions and actions:
 
 - Scope: a global rule is made by an admin and acts on every document, but only on tags,
   fields and reviews (nothing that changes who sees a document). A user rule is made by any
-  user and acts on that user's own documents with all actions; it files only into drawers its
+  user and acts on that user's own documents with all actions; it files only into spaces its
   owner may write to.
 - Triggers: a document arriving (`ingest`, the pipeline node `apply_rules`) and a document being
   changed by a person (`change`).
 - Conditions: groups of `all` (and) or `any` (or), each may be negated; a condition is field,
   operator and value.
-- Actions: set drawer, contact, type, title or a field, add or remove tags, force a review.
+- Actions: set space, contact, type, topic, title or a field, add or remove tags, force a
+  review.
 
 The definition (name, priority, triggers, conditions, actions) is versioned: every change makes
 a new version; old versions stay readable so the processing log can refer to them. Enabling and
@@ -37,16 +38,16 @@ from papiq.core.domain.ids import (
     ContactId,
     DocumentId,
     DocumentTypeId,
-    DrawerId,
     FieldId,
     RuleApplicationId,
     RuleId,
+    SpaceId,
     TagId,
     UserId,
     new_id,
 )
 from papiq.core.domain.json_value import JsonObject, JsonValue
-from papiq.core.domain.master_data import DocumentType
+from papiq.core.domain.master_data import DocumentType, TagScope
 from papiq.core.domain.validation import require_name, require_utc
 
 DEFAULT_PRIORITY = 100
@@ -73,7 +74,10 @@ class Trigger(StrEnum):
 
 class ConditionField(StrEnum):
     CONTACT = "contact"
+    CONTACT_GROUP = "contact_group"  # the groups of the document's contact
     DOCUMENT_TYPE = "document_type"
+    DOCUMENT_TYPE_GROUP = "document_type_group"  # the groups of the document's type
+    TOPIC = "topic"  # the document's topic: a topic given matches the ones below it too
     TAGS = "tags"
     CHANNEL = "channel"
     TEXT = "text"
@@ -82,9 +86,9 @@ class ConditionField(StrEnum):
 
 
 class Operator(StrEnum):
-    IS = "is"
-    IN = "in"  # is one of; for tags: has one of
-    CONTAINS = "contains"  # for tags: has this tag
+    IS = "is"  # for a topic: it, or one below it
+    IN = "in"  # is one of; for tags, groups and topics: has one of (or one below it)
+    CONTAINS = "contains"  # for tags and groups: has this one (or one below it)
     MATCHES = "matches"  # regular expression
     GT = "gt"  # for a period: starts after the date
     LT = "lt"  # for a period: ends before the date
@@ -96,19 +100,28 @@ class Operator(StrEnum):
 type GroupMode = Literal["all", "any"]
 
 _REFERENCE_OPERATORS = frozenset({Operator.IS, Operator.IN, Operator.PRESENT, Operator.MISSING})
+_TAG_OPERATORS = frozenset({Operator.CONTAINS, Operator.IN, Operator.PRESENT, Operator.MISSING})
 _FIELD_OPERATORS: dict[ConditionField, frozenset[Operator]] = {
     ConditionField.CONTACT: _REFERENCE_OPERATORS,
+    ConditionField.CONTACT_GROUP: _TAG_OPERATORS,
     ConditionField.DOCUMENT_TYPE: _REFERENCE_OPERATORS,
-    ConditionField.TAGS: frozenset(
-        {Operator.CONTAINS, Operator.IN, Operator.PRESENT, Operator.MISSING}
-    ),
+    ConditionField.DOCUMENT_TYPE_GROUP: _TAG_OPERATORS,
+    ConditionField.TOPIC: _REFERENCE_OPERATORS,
+    ConditionField.TAGS: _TAG_OPERATORS,
     ConditionField.CHANNEL: frozenset({Operator.IS, Operator.IN}),
     ConditionField.TEXT: frozenset({Operator.CONTAINS, Operator.MATCHES}),
     ConditionField.DOCUMENT_DATE: frozenset(
         {Operator.IS, Operator.GT, Operator.LT, Operator.PRESENT, Operator.MISSING}
     ),
 }
-_ID_FIELDS = frozenset({ConditionField.CONTACT, ConditionField.DOCUMENT_TYPE, ConditionField.TAGS})
+TAG_FIELDS: dict[ConditionField, TagScope] = {
+    ConditionField.TAGS: TagScope.DOCUMENT,
+    ConditionField.CONTACT_GROUP: TagScope.CONTACT,
+    ConditionField.DOCUMENT_TYPE_GROUP: TagScope.DOCUMENT_TYPE,
+    ConditionField.TOPIC: TagScope.TOPIC,
+}
+"""The conditions on tags (a topic is one), and the scope of the tags each names."""
+_ID_FIELDS = frozenset({ConditionField.CONTACT, ConditionField.DOCUMENT_TYPE, *TAG_FIELDS})
 _ORDERED = frozenset({Operator.IS, Operator.GT, Operator.LT, Operator.PRESENT, Operator.MISSING})
 FIELD_TYPE_OPERATORS: dict[FieldType, frozenset[Operator]] = {
     FieldType.TEXT: frozenset(
@@ -194,7 +207,7 @@ class Condition:
 
     def _check_value(self, value: JsonValue) -> None:
         match self.field:
-            case ConditionField.CONTACT | ConditionField.DOCUMENT_TYPE | ConditionField.TAGS:
+            case id_field if id_field in _ID_FIELDS:
                 _uuid(value, self.field.value)
             case ConditionField.CHANNEL:
                 if not isinstance(value, str) or value not in {
@@ -256,9 +269,9 @@ class Group:
 
 
 @dataclass(frozen=True)
-class SetDrawer:
-    drawer_id: DrawerId
-    type: Literal["set_drawer"] = "set_drawer"
+class SetSpace:
+    space_id: SpaceId
+    type: Literal["set_space"] = "set_space"
 
 
 @dataclass(frozen=True)
@@ -271,6 +284,14 @@ class SetContact:
 class SetDocumentType:
     document_type_id: DocumentTypeId
     type: Literal["set_document_type"] = "set_document_type"
+
+
+@dataclass(frozen=True)
+class SetTopic:
+    """The topic, if the document's contact (as the rules leave it) enables it."""
+
+    topic_id: TagId
+    type: Literal["set_topic"] = "set_topic"
 
 
 @dataclass(frozen=True)
@@ -331,9 +352,10 @@ class ForceReview:
 
 
 type Action = (
-    SetDrawer
+    SetSpace
     | SetContact
     | SetDocumentType
+    | SetTopic
     | SetTitle
     | AddTags
     | RemoveTags
@@ -350,13 +372,15 @@ GLOBAL_ACTIONS: tuple[type, ...] = (AddTags, RemoveTags, SetField, ForceReview)
 
 @dataclass(frozen=True)
 class References:
-    """What a definition refers to; the caller checks that it exists."""
+    """What a definition refers to; the caller checks that it exists. `tags`: of every scope
+    (groups in the conditions on them too); `tag_scopes` the scope each must have."""
 
     contacts: frozenset[ContactId] = frozenset()
     document_types: frozenset[DocumentTypeId] = frozenset()
     tags: frozenset[TagId] = frozenset()
     fields: frozenset[FieldId] = frozenset()
-    drawers: frozenset[DrawerId] = frozenset()
+    spaces: frozenset[SpaceId] = frozenset()
+    tag_scopes: tuple[tuple[TagId, TagScope], ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -408,28 +432,35 @@ class RuleDefinition:
         types: set[DocumentTypeId] = set()
         tags: set[TagId] = set()
         fields: set[FieldId] = set()
-        drawers: set[DrawerId] = set()
+        spaces: set[SpaceId] = set()
+        scopes: dict[tuple[TagId, TagScope], None] = {}
         for condition in self.conditions.conditions():
             match condition.field:
                 case ConditionField.CONTACT:
                     contacts.update(ContactId(id) for id in _ids(condition))
                 case ConditionField.DOCUMENT_TYPE:
                     types.update(DocumentTypeId(id) for id in _ids(condition))
-                case ConditionField.TAGS:
-                    tags.update(TagId(id) for id in _ids(condition))
+                case tag_field if tag_field in TAG_FIELDS:
+                    named = [TagId(id) for id in _ids(condition)]
+                    tags.update(named)
+                    scopes.update(((id, TAG_FIELDS[tag_field]), None) for id in named)
                 case ConditionField.FIELD:
                     assert condition.field_id is not None
                     fields.add(condition.field_id)
         for action in self.actions:
             match action:
-                case SetDrawer(drawer_id=drawer):
-                    drawers.add(drawer)
+                case SetSpace(space_id=space):
+                    spaces.add(space)
                 case SetContact(contact_id=contact):
                     contacts.add(contact)
                 case SetDocumentType(document_type_id=document_type):
                     types.add(document_type)
+                case SetTopic(topic_id=topic):
+                    tags.add(topic)
+                    scopes[(topic, TagScope.TOPIC)] = None
                 case AddTags(tag_ids=ids) | RemoveTags(tag_ids=ids):
                     tags.update(ids)
+                    scopes.update(((id, TagScope.DOCUMENT), None) for id in sorted(ids))
                 case SetField(field_id=field):
                     fields.add(field)
         return References(
@@ -437,7 +468,8 @@ class RuleDefinition:
             frozenset(types),
             frozenset(tags),
             frozenset(fields),
-            frozenset(drawers),
+            frozenset(spaces),
+            tuple(scopes),
         )
 
     @property
@@ -817,12 +849,14 @@ def condition_to_json(condition: Condition) -> JsonObject:
 
 def action_to_json(action: Action) -> JsonObject:
     match action:
-        case SetDrawer(drawer_id=drawer):
-            return {"type": action.type, "drawer_id": str(drawer)}
+        case SetSpace(space_id=space):
+            return {"type": action.type, "space_id": str(space)}
         case SetContact(contact_id=contact):
             return {"type": action.type, "contact_id": str(contact)}
         case SetDocumentType(document_type_id=document_type):
             return {"type": action.type, "document_type_id": str(document_type)}
+        case SetTopic(topic_id=topic):
+            return {"type": action.type, "topic_id": str(topic)}
         case SetTitle(template=template):
             return {"type": action.type, "template": template}
         case AddTags(tag_ids=tags) | RemoveTags(tag_ids=tags):
@@ -910,9 +944,9 @@ def action_from_json(data: JsonValue, where: str = "action") -> Action:
     kind = object_.get("type")
     try:
         match kind:
-            case "set_drawer":
-                _only(object_, {"type", "drawer_id"}, where)
-                return SetDrawer(DrawerId(_uuid(object_.get("drawer_id"), "drawer_id")))
+            case "set_space":
+                _only(object_, {"type", "space_id"}, where)
+                return SetSpace(SpaceId(_uuid(object_.get("space_id"), "space_id")))
             case "set_contact":
                 _only(object_, {"type", "contact_id"}, where)
                 return SetContact(ContactId(_uuid(object_.get("contact_id"), "contact_id")))
@@ -921,6 +955,9 @@ def action_from_json(data: JsonValue, where: str = "action") -> Action:
                 return SetDocumentType(
                     DocumentTypeId(_uuid(object_.get("document_type_id"), "document_type_id"))
                 )
+            case "set_topic":
+                _only(object_, {"type", "topic_id"}, where)
+                return SetTopic(TagId(_uuid(object_.get("topic_id"), "topic_id")))
             case "set_title":
                 _only(object_, {"type", "template"}, where)
                 template = object_.get("template")

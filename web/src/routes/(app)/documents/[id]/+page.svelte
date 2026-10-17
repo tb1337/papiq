@@ -323,6 +323,7 @@
 								{editable}
 								next={inbox?.next ?? null}
 								onsaved={(updated) => (document = updated)}
+								onenabled={() => loadLookup().then((value) => (lookup = value), reportError)}
 								onconfirmed={confirmed}
 								onmarks={(next) => (marks = next)}
 								factCounts={facts ? factCounts(facts) : null}
@@ -342,6 +343,7 @@
 				vision={reading?.vision ?? false}
 				{facts}
 				{lookup}
+				topicId={document.topic_id}
 				admin={session.isAdmin}
 				onshowcode={showCode}
 				onfactschanged={reloadFacts}

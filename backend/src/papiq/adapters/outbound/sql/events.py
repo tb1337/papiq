@@ -16,7 +16,7 @@ from papiq.core.domain.events import (
     NodeDeferred,
     NodeStarted,
 )
-from papiq.core.domain.ids import DocumentId, DrawerId, EventId, UserId
+from papiq.core.domain.ids import DocumentId, EventId, SpaceId, UserId
 from papiq.core.domain.json_value import JsonObject
 from papiq.core.domain.pipeline import Lane, Node, Outcome
 
@@ -58,7 +58,7 @@ def encode(event: DomainEvent) -> JsonObject:
                 "new": None if event.new is None else event.new.value,
             }
         case DocumentFiled():
-            return {"document_id": str(event.document_id), "drawer_id": str(event.drawer_id)}
+            return {"document_id": str(event.document_id), "space_id": str(event.space_id)}
         case DocumentUpdated():
             return {"document_id": str(event.document_id), "fields": list(event.fields)}
         case ClassifierTrained():
@@ -104,7 +104,7 @@ def decode(type: str, id: UUID, occurred_at: datetime, payload: dict[str, Any]) 
         case LaneChanged.type:
             return LaneChanged(**common, old=_lane(payload["old"]), new=_lane(payload["new"]))
         case DocumentFiled.type:
-            return DocumentFiled(**common, drawer_id=DrawerId(UUID(payload["drawer_id"])))
+            return DocumentFiled(**common, space_id=SpaceId(UUID(payload["space_id"])))
         case DocumentUpdated.type:
             return DocumentUpdated(**common, fields=tuple(payload["fields"]))
     raise ValueError(f"unknown event type {type!r}")

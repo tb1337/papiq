@@ -8,8 +8,10 @@
 	import { page } from '$app/state';
 	import { BASE } from '#lib/base.ts';
 	import HeaderSearch from '#lib/components/HeaderSearch.svelte';
+	import LanguageChoices from '#lib/components/LanguageChoices.svelte';
 	import LanguageMenu from '#lib/components/LanguageMenu.svelte';
 	import Logo from '#lib/components/Logo.svelte';
+	import ThemeChoices from '#lib/components/ThemeChoices.svelte';
 	import ThemeMenu from '#lib/components/ThemeMenu.svelte';
 	import { buttonVariants } from '#lib/components/ui/button/index.ts';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.ts';
@@ -19,6 +21,7 @@
 	import { inbox } from '#lib/inbox.svelte.ts';
 	import { m } from '#lib/paraglide/messages.js';
 	import { canListAllUsers } from '#lib/permissions.ts';
+	import { phone } from '#lib/phone.svelte.ts';
 	import { scope } from '#lib/scope.svelte.ts';
 	import { href, isCurrent, SETTINGS, visibleSections, type Section } from '#lib/sections.ts';
 	import { session } from '#lib/session.svelte.ts';
@@ -91,7 +94,9 @@
 	width on it fills the window, and only its own areas scroll. -->
 <div class="flex min-h-screen flex-col lg:has-[[data-wide]]:h-dvh">
 	<header class="sticky top-0 z-40 border-b bg-card">
-		<div class="flex h-16 items-center gap-4 px-4 sm:px-8 lg:gap-7">
+		<!-- Narrower gaps on a phone, and a little narrower below 380 pixels, so that the menu, the
+		     wordmark and the buttons fit beside each other down to 360. -->
+		<div class="flex h-16 items-center gap-2 px-4 max-[380px]:px-3 sm:gap-4 sm:px-8 lg:gap-7">
 			<Sheet.Root bind:open={menuOpen}>
 				<Sheet.Trigger
 					class={cn(
@@ -141,7 +146,7 @@
 				{/if}
 			</nav>
 
-			<div class="ml-auto flex items-center gap-2">
+			<div class="ml-auto flex items-center gap-1.5 max-[380px]:gap-1 sm:gap-2">
 				<!-- The field where there is room: instead of the menu from md, beside it from xl
 				     (the admin's menu from xl, the field beside it from 2xl). -->
 				<HeaderSearch
@@ -161,8 +166,11 @@
 				>
 					<SearchIcon aria-hidden="true" />
 				</a>
-				<LanguageMenu />
-				<ThemeMenu />
+				<!-- On a phone, language and theme are in the account menu: the header has no room. -->
+				{#if !phone.current}
+					<LanguageMenu />
+					<ThemeMenu />
+				{/if}
 				<DropdownMenu.Root>
 					<DropdownMenu.Trigger
 						class={cn(
@@ -204,6 +212,12 @@
 									<span class="text-xs text-muted-foreground">{m.all_users_hint()}</span>
 								</span>
 							</DropdownMenu.CheckboxItem>
+							<DropdownMenu.Separator />
+						{/if}
+						{#if phone.current}
+							<LanguageChoices />
+							<DropdownMenu.Separator />
+							<ThemeChoices />
 							<DropdownMenu.Separator />
 						{/if}
 						<DropdownMenu.Item onSelect={() => goto(href(SETTINGS))}>

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,7 +14,7 @@ type Document = components['schemas']['DocumentDetails'];
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
 
 const OWNER = '0199a6c4-0000-7000-8000-000000000001';
-const DRAWER = '0199a6c4-0000-7000-8000-0000000000d1';
+const SPACE = '0199a6c4-0000-7000-8000-0000000000d1';
 const CONTACT = '0199a6c4-0000-7000-8000-0000000000c1';
 const BANK = '0199a6c4-0000-7000-8000-0000000000c2';
 const SIMILAR = '0199a6c4-0000-7000-8000-0000000000a1';
@@ -49,7 +49,7 @@ const lookup = {
 			choices: []
 		}
 	],
-	drawers: [{ id: DRAWER, name: 'Haushalt', owner_id: OWNER, access: 'read_write' }],
+	spaces: [{ id: SPACE, name: 'Haushalt', owner_id: OWNER, access: 'read_write' }],
 	users: []
 } as unknown as Lookup;
 
@@ -59,7 +59,7 @@ function documentOf(status: string, lane: string | null = 'yellow'): Document {
 		id: 'doc-1',
 		title: 'Stromrechnung März 2026',
 		owner_id: OWNER,
-		drawer_id: DRAWER,
+		space_id: SPACE,
 		access: 'read_write',
 		contact_id: null,
 		document_type_id: INVOICE,
@@ -162,6 +162,8 @@ beforeEach(() => {
 afterEach(() => {
 	session.clear();
 	vi.unstubAllGlobals();
+	// A dialog makes the page unclickable until it has closed; the next test must not wait.
+	globalThis.document.body.style.pointerEvents = '';
 });
 
 describe('DocumentForm', () => {
@@ -397,7 +399,7 @@ describe('DocumentForm', () => {
 		expect((button as HTMLButtonElement).disabled).toBe(false);
 	});
 
-	it('confirms a filed document that waits for its drawer, with the drawer to file into', async () => {
+	it('confirms a filed document that waits for its space, with the space to file into', async () => {
 		fetchMock.mockResolvedValue(
 			new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
 		);
@@ -407,14 +409,14 @@ describe('DocumentForm', () => {
 				{
 					node: 'file',
 					outcome: 'uncertain',
-					reason: 'drawer',
-					fields: [check('drawer', { outcome: 'uncertain', reason: 'no write access' })]
+					reason: 'space',
+					fields: [check('space', { outcome: 'uncertain', reason: 'no write access' })]
 				}
 			],
 			nodes: []
 		} as unknown as Review;
 		render(DocumentForm, props({ document: documentOf('completed'), review: waiting, next: null }));
-		expect(screen.getByLabelText(m.field_drawer(), { selector: 'select' })).toBeTruthy();
+		expect(screen.getByLabelText(m.field_space(), { selector: 'select' })).toBeTruthy();
 		await userEvent.click(screen.getByRole('button', { name: m.review_confirm() }));
 		expect(await fetchMock.mock.calls[0][0].json()).toEqual({
 			changes: {},
@@ -468,6 +470,335 @@ describe('DocumentForm', () => {
 			changes: { document_type_id: OTHER },
 			accept_suggestions: false,
 			resume_at: 'fields'
+		});
+	});
+
+	it('keeps a value entered by hand when the type is corrected', async () => {
+		fetchMock.mockResolvedValue(
+			new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+		);
+		const OTHER = '0199a6c4-0000-7000-8000-0000000000e2';
+		const ASN = '0199a6c4-0000-7000-8000-0000000000f9';
+		const asn = {
+			id: ASN,
+			name: 'Ablagenummer',
+			data_type: 'text',
+			document_type_ids: null,
+			required: true,
+			required_document_type_ids: [],
+			choices: [],
+			assignment: 'manual'
+		};
+		const typed = {
+			document: {},
+			open: [
+				{
+					node: 'apply_rules',
+					outcome: 'uncertain',
+					reason: 'set by hand',
+					fields: [check(`field:${ASN}`, { outcome: 'uncertain', reason: 'set by hand' })]
+				}
+			],
+			nodes: []
+		} as unknown as Review;
+		const withOther = {
+			...lookup,
+			documentTypes: [...lookup.documentTypes, named(OTHER, 'Vertrag')],
+			fields: [...lookup.fields, asn]
+		} as unknown as Lookup;
+		render(DocumentForm, props({ review: typed, lookup: withOther, next: null }));
+		expect(screen.getByText(m.review_by_hand())).toBeTruthy();
+		await userEvent.type(document.getElementById(`field-${ASN}`) as HTMLInputElement, 'A-17');
+		await userEvent.selectOptions(
+			screen.getByLabelText(m.field_document_type(), { selector: 'select' }),
+			OTHER
+		);
+		await userEvent.click(screen.getByRole('button', { name: m.review_confirm() }));
+		const sent = await fetchMock.mock.calls[0][0].json();
+		expect(sent.changes.fields).toEqual({ [ASN]: 'A-17' });
+		expect(sent.resume_at).toBe('fields');
+	});
+});
+
+describe('the topic', () => {
+	const WORK = '0199a6c4-0000-7000-8000-0000000000b1';
+	const HEALTH = '0199a6c4-0000-7000-8000-0000000000b2';
+	const topic = (id: string, name: string) => ({
+		id,
+		name,
+		path: [name],
+		parent_id: null,
+		scope: 'topic',
+		assignment: 'auto',
+		shown: true,
+		created_at: '2026-10-17T12:00:00Z'
+	});
+	const topics = {
+		...lookup,
+		contacts: [
+			{ ...named(CONTACT, 'Stadtwerke Musterstadt'), topic_ids: [WORK, HEALTH] },
+			{ ...named(BANK, 'Beispielbank'), topic_ids: [WORK] }
+		],
+		tags: [topic(WORK, 'Arbeit'), topic(HEALTH, 'Krankenversicherung')]
+	} as unknown as Lookup;
+	const filed = {
+		...documentOf('completed', 'green'),
+		contact_id: CONTACT,
+		topic_id: HEALTH
+	} as Document;
+	const select = (label: string) =>
+		screen.getByLabelText(label, { selector: 'select' }) as HTMLSelectElement;
+	// The topic is a search in a popover: its button carries the chosen topic.
+	const topicField = () =>
+		screen.getByLabelText(m.field_topic(), { selector: 'button' }) as HTMLButtonElement;
+	const topicValue = () => topicField().dataset.value;
+	// The popover is placed by measuring, which jsdom does not: its options are found as elements.
+	const options = () => [...globalThis.document.querySelectorAll<HTMLElement>('[role="option"]')];
+	const chooseTopic = async (name: string) => {
+		await userEvent.click(topicField());
+		await waitFor(() => expect(options().length).toBeGreaterThan(0));
+		await userEvent.click(options().find((option) => option.textContent?.trim() === name)!);
+	};
+	// A closed dialog gives the page its pointer back a moment later.
+	const closed = () =>
+		waitFor(() => {
+			expect(screen.queryByRole('dialog')).toBeNull();
+			expect(globalThis.document.body.style.pointerEvents).not.toBe('none');
+		});
+	const topicChoices = async () => {
+		await userEvent.click(topicField());
+		await waitFor(() => expect(options().length).toBeGreaterThan(0));
+		const names = options().map((option) => option.textContent?.trim());
+		await userEvent.keyboard('{Escape}');
+		await waitFor(() => expect(options()).toEqual([]));
+		return names;
+	};
+
+	it('offers the contact’s topics and leaves one the next contact does not have', async () => {
+		fetchMock.mockResolvedValue(
+			new Response('{"changed": [], "rules": null, "visibility": null, "document": null}', {
+				status: 200,
+				headers: { 'content-type': 'application/json' }
+			})
+		);
+		render(DocumentForm, props({ document: filed, lookup: topics, review: null }));
+		expect(topicValue()).toBe(HEALTH);
+		expect(await topicChoices()).toEqual([m.topic_none(), 'Arbeit', 'Krankenversicherung']);
+		await userEvent.selectOptions(select(m.field_contact()), BANK);
+		expect(topicValue()).toBe('');
+		await chooseTopic('Arbeit');
+		await userEvent.click(screen.getByRole('button', { name: m.edit_review() }));
+		// Another topic chosen with another contact is sent with it.
+		expect(await fetchMock.mock.calls[0][0].json()).toEqual({ contact_id: BANK, topic_id: WORK });
+		await userEvent.click(await screen.findByRole('button', { name: m.cancel() }));
+		await closed();
+		await userEvent.selectOptions(select(m.field_contact()), BANK);
+		expect(await topicChoices()).toEqual([m.topic_none(), 'Arbeit']);
+		await userEvent.selectOptions(select(m.field_contact()), '');
+		expect(topicField().disabled).toBe(true);
+		expect(topicField().textContent?.trim()).toBe(m.topic_no_contact());
+	});
+
+	it('lets an admin choose any topic, which saving enables at the contact', async () => {
+		session.start({
+			user: { id: OWNER, username: 'admin', role: 'admin' },
+			method: 'password',
+			expires_at: '2026-10-09T12:00:00Z',
+			csrf_token: 'token'
+		});
+		fetchMock.mockResolvedValue(
+			new Response('{"changed": [], "rules": null, "visibility": null, "document": null}', {
+				status: 200,
+				headers: { 'content-type': 'application/json' }
+			})
+		);
+		const bank = { ...filed, contact_id: BANK, topic_id: null } as Document;
+		render(DocumentForm, props({ document: bank, lookup: topics, review: null }));
+		expect(await topicChoices()).toEqual([m.topic_none(), 'Arbeit', 'Krankenversicherung']);
+		await chooseTopic('Krankenversicherung');
+		expect(screen.getByText(m.topic_enables_hint())).toBeTruthy();
+		await userEvent.click(screen.getByRole('button', { name: m.edit_review() }));
+		const sent = await fetchMock.mock.calls[0][0].json();
+		expect(sent).toEqual({ topic_id: HEALTH });
+		await userEvent.click(await screen.findByRole('button', { name: m.cancel() }));
+		await closed();
+	});
+
+	it('shows a topic Papiq only suggests as a card; a click takes it', async () => {
+		const suggested = {
+			document: {},
+			open: [],
+			nodes: [
+				{
+					node: 'judge',
+					run: 1,
+					outcome: 'ok',
+					reason: null,
+					model_version: 'qwen3:8b',
+					truncated: false,
+					fields: [
+						check('topic', {
+							reason: 'only one signal names it',
+							suggestion: WORK,
+							candidates: [
+								{
+									value: WORK,
+									label: 'Arbeit',
+									contradicted: false,
+									sources: [{ signal: 'signal_llm', names: true }]
+								}
+							]
+						})
+					]
+				}
+			]
+		} as unknown as Review;
+		const empty = { ...filed, topic_id: null } as Document;
+		render(DocumentForm, props({ document: empty, lookup: topics, review: suggested }));
+		const card = screen.getByRole('group', { name: m.field_topic() });
+		expect(within(card).getByText('only one signal names it')).toBeTruthy();
+		await userEvent.click(
+			within(card).getByRole('button', { name: m.candidate_pick({ name: 'Arbeit' }) })
+		);
+		expect(topicValue()).toBe(WORK);
+		// Taken, it is no suggestion any more.
+		expect(
+			within(screen.getByRole('group', { name: m.field_topic() })).queryByText(
+				'only one signal names it'
+			)
+		).toBeNull();
+	});
+
+	const json = (body: unknown) =>
+		new Response(JSON.stringify(body), {
+			status: 200,
+			headers: { 'content-type': 'application/json' }
+		});
+	const PREVIEW = { changed: [], rules: null, visibility: null, document: null };
+	// The dry run of the form's change: what it sends; the dialog is closed again.
+	const sentPatch = async () => {
+		const calls = fetchMock.mock.calls.length;
+		await userEvent.click(screen.getByRole('button', { name: m.edit_review() }));
+		const body = await fetchMock.mock.calls[calls][0].json();
+		await userEvent.click(await screen.findByRole('button', { name: m.cancel() }));
+		await closed();
+		return body;
+	};
+
+	it('leaves a topic the next contact does not enable to the API to clear', async () => {
+		fetchMock.mockImplementation(async () => json(PREVIEW));
+		render(DocumentForm, props({ document: filed, lookup: topics, review: null }));
+		await userEvent.selectOptions(select(m.field_contact()), BANK);
+		expect(topicValue()).toBe('');
+		// Cleared by the contact, not by the person: no decision on the topic is sent.
+		expect(await sentPatch()).toEqual({ contact_id: BANK });
+	});
+
+	it('keeps a topic the next contact enables, unless the person clears it', async () => {
+		fetchMock.mockImplementation(async () => json(PREVIEW));
+		const working = { ...filed, topic_id: WORK } as Document;
+		render(DocumentForm, props({ document: working, lookup: topics, review: null }));
+		await userEvent.selectOptions(select(m.field_contact()), BANK);
+		expect(topicValue()).toBe(WORK);
+		expect(await sentPatch()).toEqual({ contact_id: BANK });
+		await chooseTopic(m.topic_none());
+		expect(await sentPatch()).toEqual({ contact_id: BANK, topic_id: null });
+	});
+
+	it('sends the topic an admin chooses again for the next contact, and reloads the master data', async () => {
+		session.start({
+			user: { id: OWNER, username: 'admin', role: 'admin' },
+			method: 'password',
+			expires_at: '2026-10-09T12:00:00Z',
+			csrf_token: 'token'
+		});
+		fetchMock.mockImplementation(async (request) =>
+			json(request.method === 'PATCH' ? { ...filed, contact_id: BANK } : PREVIEW)
+		);
+		const onenabled = vi.fn();
+		const onsaved = vi.fn();
+		render(
+			DocumentForm,
+			props({ document: filed, lookup: topics, review: null, onenabled, onsaved })
+		);
+		await userEvent.selectOptions(select(m.field_contact()), BANK);
+		await chooseTopic('Krankenversicherung');
+		await userEvent.click(screen.getByRole('button', { name: m.edit_review() }));
+		expect(await fetchMock.mock.calls[0][0].json()).toEqual({ contact_id: BANK, topic_id: HEALTH });
+		await userEvent.click(await screen.findByRole('button', { name: m.edit_save() }));
+		expect(fetchMock.mock.calls[1][0].method).toBe('PATCH');
+		expect(onsaved).toHaveBeenCalled();
+		expect(onenabled).toHaveBeenCalledOnce();
+	});
+
+	it('lets an admin create a topic named as searched; saving enables it at the contact', async () => {
+		session.start({
+			user: { id: OWNER, username: 'admin', role: 'admin' },
+			method: 'password',
+			expires_at: '2026-10-09T12:00:00Z',
+			csrf_token: 'token'
+		});
+		const DENTAL = '0199a6c4-0000-7000-8000-0000000000b9';
+		fetchMock.mockImplementation(async (request) => {
+			if (request.method === 'POST' && new URL(request.url).pathname === '/api/v1/tags') {
+				const body = await request.clone().json();
+				return json({ ...topic(DENTAL, body.name), scope: body.scope });
+			}
+			return json(PREVIEW);
+		});
+		const bank = { ...filed, contact_id: BANK, topic_id: null } as Document;
+		render(DocumentForm, props({ document: bank, lookup: topics, review: null }));
+		await userEvent.click(topicField());
+		await userEvent.type(await screen.findByLabelText(m.picker_search_create()), 'Zahnzusatz');
+		await userEvent.click(screen.getByText(m.tag_create_quick({ name: 'Zahnzusatz' })));
+		await waitFor(() => expect(topicValue()).toBe(DENTAL));
+		const created = fetchMock.mock.calls[0][0];
+		expect(await created.json()).toEqual({ name: 'Zahnzusatz', scope: 'topic' });
+		expect(topicField().textContent?.trim()).toBe('Zahnzusatz');
+		expect(screen.getByText(m.topic_enables_hint())).toBeTruthy();
+		expect(await sentPatch()).toEqual({ topic_id: DENTAL });
+	});
+
+	it('offers others no topic to create', async () => {
+		render(DocumentForm, props({ document: filed, lookup: topics, review: null }));
+		await userEvent.click(topicField());
+		await userEvent.type(await screen.findByLabelText(m.assignment_search()), 'Zahnzusatz');
+		expect(screen.queryByText(m.tag_create_quick({ name: 'Zahnzusatz' }))).toBeNull();
+	});
+
+	it('confirms a topic the rules left open, also as none', async () => {
+		fetchMock.mockImplementation(async () => json({}));
+		const conflict = {
+			document: {},
+			open: [
+				{
+					node: 'apply_rules',
+					outcome: 'uncertain',
+					reason: 'topic',
+					fields: [
+						check('topic', {
+							outcome: 'uncertain',
+							confidence: 0,
+							reason: 'rules set different values',
+							suggestion: WORK
+						})
+					]
+				}
+			],
+			nodes: []
+		} as unknown as Review;
+		const waiting = { ...documentOf('review'), contact_id: CONTACT, topic_id: null } as Document;
+		render(DocumentForm, props({ document: waiting, lookup: topics, review: conflict }));
+		const card = screen.getByRole('group', { name: m.field_topic() });
+		expect(within(card).getByText('rules set different values')).toBeTruthy();
+		expect(within(card).queryByText(m.source_none())).toBeNull();
+		expect(topicValue()).toBe(WORK);
+		await chooseTopic(m.topic_none());
+		await userEvent.click(screen.getByRole('button', { name: m.review_confirm() }));
+		expect(await fetchMock.mock.calls[0][0].json()).toEqual({
+			changes: { topic_id: null },
+			accept_suggestions: false,
+			resume_at: 'apply_rules'
 		});
 	});
 });

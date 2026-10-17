@@ -7,7 +7,6 @@ import pytest
 
 from papiq.adapters.outbound.memory import MemoryObjectStore
 from papiq.core.domain.documents import Document, DocumentChanges, Sha256
-from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import (
     DuplicateDocumentError,
     InvalidTransitionError,
@@ -37,6 +36,7 @@ from papiq.core.domain.pipeline import (
     Outcome,
     ProcessingStatus,
 )
+from papiq.core.domain.spaces import ShareLevel
 from papiq.core.domain.users import Role, User
 from papiq.core.services.objects import original_key
 from papiq.core.services.pipeline import (
@@ -86,7 +86,7 @@ async def test_receive_stores_original_document_events_and_job(world: World) -> 
     document = await world.pipeline().receive(owner.id, incoming(PDF), filename="invoice.pdf")
     assert document.sha256 == Sha256.of(PDF)
     assert await world.object_store.get(original_key(document.sha256)) == PDF
-    assert document.drawer_id == (await world.default_drawer(owner)).id
+    assert document.space_id == (await world.default_space(owner)).id
     assert document.processing.due() == (Node.OCR, Node.PAGES)
     assert document.lane is None
 
@@ -415,10 +415,10 @@ async def test_reprocess_from_a_step(world: World) -> None:
 async def test_retry_and_reprocess_are_for_the_owner(world: World) -> None:
     owner = await world.user()
     writer = await world.user()
-    shared = await world.drawers.create(owner.id, "Shared")
-    await world.drawers.share(owner.id, shared.id, writer.id, ShareLevel.READ_WRITE)
+    shared = await world.spaces.create(owner.id, "Shared")
+    await world.spaces.share(owner.id, shared.id, writer.id, ShareLevel.READ_WRITE)
     document = await world.pipeline().receive(
-        owner.id, incoming(PDF), filename="a.pdf", drawer=shared.id
+        owner.id, incoming(PDF), filename="a.pdf", space=shared.id
     )
     await world.drain()
     with pytest.raises(PermissionDeniedError):
@@ -441,25 +441,25 @@ async def test_duplicates_are_rejected_per_owner(world: World) -> None:
     assert copy.owner_id == other.id
 
 
-async def test_receive_into_a_drawer_needs_write_access(world: World) -> None:
+async def test_receive_into_a_space_needs_write_access(world: World) -> None:
     owner, writer, reader = await world.user(), await world.user(), await world.user()
-    shared = await world.drawers.create(owner.id, "Shared")
-    await world.drawers.share(owner.id, shared.id, writer.id, ShareLevel.READ_WRITE)
-    await world.drawers.share(owner.id, shared.id, reader.id, ShareLevel.READ)
+    shared = await world.spaces.create(owner.id, "Shared")
+    await world.spaces.share(owner.id, shared.id, writer.id, ShareLevel.READ_WRITE)
+    await world.spaces.share(owner.id, shared.id, reader.id, ShareLevel.READ)
     document = await world.pipeline().receive(
-        writer.id, incoming(PDF), filename="a.pdf", drawer=shared.id
+        writer.id, incoming(PDF), filename="a.pdf", space=shared.id
     )
-    assert (document.owner_id, document.drawer_id) == (writer.id, shared.id)
+    assert (document.owner_id, document.space_id) == (writer.id, shared.id)
     with pytest.raises(PermissionDeniedError):
         await world.pipeline().receive(
-            reader.id, incoming(b"%PDF-1.7 other"), filename="b.pdf", drawer=shared.id
+            reader.id, incoming(b"%PDF-1.7 other"), filename="b.pdf", space=shared.id
         )
     with pytest.raises(NotFoundError):
         await world.pipeline().receive(
             reader.id,
             incoming(b"%PDF-1.7 other"),
             filename="b.pdf",
-            drawer=(await world.default_drawer(owner)).id,
+            space=(await world.default_space(owner)).id,
         )
 
 

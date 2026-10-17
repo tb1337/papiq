@@ -1,13 +1,16 @@
 """The pipeline nodes `apply_rules` and `file`."""
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from datetime import datetime
 
-from papiq.core.domain.classification import FieldCheck
+from papiq.core.domain.classification import FieldCheck, field_key
 from papiq.core.domain.documents import Document
+from papiq.core.domain.fields import FieldDefinition
+from papiq.core.domain.ids import FieldId
 from papiq.core.domain.json_value import JsonValue
 from papiq.core.domain.pipeline import RULES, NodeResult, Outcome
-from papiq.core.domain.rule_engine import DRAWER, Mode
+from papiq.core.domain.rule_engine import SPACE, Mode
 from papiq.core.domain.rules import Trigger
 from papiq.core.ports import (
     ObjectStore,
@@ -34,7 +37,8 @@ class ApplyRulesNode:
     The text is loaded and its patterns run here, outside any transaction; the rules are
     evaluated and applied when the result is stored, on the state that is stored. Conflicts,
     refused actions and forced reviews make the node uncertain: the document waits in the
-    inbox before it is filed."""
+    inbox before it is filed. So does a required field set by hand that has no value after the
+    rules (issue #52)."""
 
     def __init__(
         self,
@@ -74,10 +78,11 @@ class RulesResult:
             "trigger": Trigger.INGEST.value,
             "rules": checked_rules(rules),
         }
-        if not rules:
-            return NodeResult(outcome=Outcome.OK, model_version=RULES, input=input)
-        origin = provenance(await uow.processing_log.list_for(document.id), document)
         definitions = {item.id: item for item in await uow.fields.list_all()}
+        if not rules:
+            ok = NodeResult(outcome=Outcome.OK, model_version=RULES, input=input)
+            return _waiting_for_hand(document, definitions, ok)
+        origin = provenance(await uow.processing_log.list_for(document.id), document)
         run = await run_rules(
             uow,
             self.matcher,
@@ -95,20 +100,51 @@ class RulesResult:
         problem = apply_plan(document, run.plan, definitions, now)
         reasons = run.plan.reasons + ([problem] if problem else [])
         if reasons:
-            return NodeResult(
+            result = NodeResult(
                 outcome=Outcome.UNCERTAIN,
                 reason="; ".join(reasons),
                 model_version=RULES,
                 input=input,
                 output=output,
             )
-        return NodeResult(outcome=Outcome.OK, model_version=RULES, input=input, output=output)
+        else:
+            result = NodeResult(outcome=Outcome.OK, model_version=RULES, input=input, output=output)
+        return _waiting_for_hand(document, definitions, result)
+
+
+def _waiting_for_hand(
+    document: Document, definitions: Mapping[FieldId, FieldDefinition], result: NodeResult
+) -> NodeResult:
+    """`result`, uncertain with a check for each required field set by hand that neither a
+    person nor a rule has given a value: the person enters it in the inbox."""
+    waiting = [
+        FieldCheck(
+            field=field_key(definition.id),
+            outcome=Outcome.UNCERTAIN,
+            confidence=0,
+            reason=f"'{definition.name}' is set by hand and has no value yet",
+        )
+        for definition in sorted(definitions.values(), key=lambda item: item.name)
+        if not definition.is_read
+        and definition.applies_to(document.document_type_id)
+        and definition.is_required_for(document.document_type_id)
+        and definition.id not in document.fields
+    ]
+    if not waiting:
+        return result
+    checks = result.output.get("fields")
+    output = {
+        **result.output,
+        "fields": [*(checks if isinstance(checks, list) else []), *(c.to_json() for c in waiting)],
+    }
+    reasons = [*([result.reason] if result.reason else []), *(c.reason or "" for c in waiting)]
+    return replace(result, outcome=Outcome.UNCERTAIN, reason="; ".join(reasons), output=output)
 
 
 class FileNode:
-    """Files the document into its drawer. The owner must still be allowed to write to it (a
+    """Files the document into its space. The owner must still be allowed to write to it (a
     share can be withdrawn while the document is processed), unless an active admin put the
-    document there; otherwise the node is uncertain and the owner chooses another drawer in the
+    document there; otherwise the node is uncertain and the owner chooses another space in the
     inbox."""
 
     async def run(self, document: Document) -> "FileResult":
@@ -118,10 +154,10 @@ class FileNode:
 @dataclass(frozen=True)
 class FileResult:
     async def apply(self, uow: UnitOfWork, document: Document, now: datetime) -> NodeResult:
-        drawer = await uow.drawers.get(document.drawer_id)
-        if not await may_file(uow, document, drawer):
-            reason = f"the owner may not file into drawer '{drawer.name}' (any more)"
-            check = FieldCheck(field=DRAWER, outcome=Outcome.UNCERTAIN, confidence=0, reason=reason)
+        space = await uow.spaces.get(document.space_id)
+        if not await may_file(uow, document, space):
+            reason = f"the owner may not file into space '{space.name}' (any more)"
+            check = FieldCheck(field=SPACE, outcome=Outcome.UNCERTAIN, confidence=0, reason=reason)
             return NodeResult(
                 outcome=Outcome.UNCERTAIN, reason=reason, output={"fields": [check.to_json()]}
             )

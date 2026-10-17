@@ -6,7 +6,7 @@ from typing import NewType
 from uuid import UUID
 
 UserId = NewType("UserId", UUID)
-DrawerId = NewType("DrawerId", UUID)
+SpaceId = NewType("SpaceId", UUID)
 DocumentId = NewType("DocumentId", UUID)
 ContactId = NewType("ContactId", UUID)
 ClassifierModelId = NewType("ClassifierModelId", UUID)

@@ -61,8 +61,9 @@ def build_app(
     context = ApiContext(
         auth=services.auth,
         users=services.users,
-        drawers=services.drawers,
+        spaces=services.spaces,
         master_data=services.master_data,
+        logos=services.logos,
         oidc=services.oidc,
         search=services.search,
         indexing=services.indexing,

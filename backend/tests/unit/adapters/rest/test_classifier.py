@@ -45,13 +45,13 @@ async def test_without_a_classifier_the_endpoints_answer_503(api: Api) -> None:
 async def test_the_status_of_a_trained_model(api: Api) -> None:
     admin, owner = await api.admin(), await api.user()
     async with api.container.unit_of_work() as uow:
-        drawer = await uow.drawers.get_default(owner.id)
+        space = await uow.spaces.get_default(owner.id)
         contacts = [Contact.create(name=name, now=builders.NOW) for name in ("Bank", "Werk")]
         for contact in contacts:
             await uow.contacts.add(contact)
         for number in range(4):
             contact = contacts[number % 2]
-            document = builders.processed(owner, drawer, content=str(number))
+            document = builders.processed(owner, space, content=str(number))
             document.apply_changes(DocumentChanges(contact_id=contact.id), {}, builders.NOW)
             document.mark_confirmed(builders.NOW)
             await uow.documents.add(document)

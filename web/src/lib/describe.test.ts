@@ -7,7 +7,7 @@ const lookup = {
 	documentTypes: [],
 	tags: [{ id: 't1', name: 'Tax', created_at: '' }],
 	fields: [{ id: 'a1', name: 'Due', data_type: 'date' }],
-	drawers: [],
+	spaces: [],
 	users: [{ id: 'u1', username: 'alice' }]
 } as unknown as Lookup;
 

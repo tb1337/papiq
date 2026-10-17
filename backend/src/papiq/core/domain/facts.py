@@ -4,8 +4,8 @@ the codes on its pages, each with where it stands in the text.
 The facts signal reports them for the judge (`signal_facts`); a person sees them beside the
 text. A name counts whole (`names.mentions`); in a code only the payee of a GiroCode is a name.
 A found identifier is matched with the contacts' (`identifiers.matches`): one that counts
-(entered or learned) is evidence for its contact; a rejected one is known, but neither evidence
-nor unknown.
+(entered or learned) is evidence for its contact, and for its topic if it points to one; a
+rejected one is known, but neither evidence nor unknown.
 
 Where it stands: character spans of the text (`spans`), found with the written forms a value
 has (an IBAN in groups of four, a customer number with dashes, a name with any spaces and
@@ -19,7 +19,7 @@ from itertools import islice
 
 from papiq.core.domain.codes import Code, code_identifiers, giro_code
 from papiq.core.domain.identifiers import IdentifierKind, identifiers_in, matches
-from papiq.core.domain.ids import ContactId
+from papiq.core.domain.ids import ContactId, TagId
 from papiq.core.domain.master_data import Contact
 from papiq.core.domain.names import mentions, name_key
 
@@ -57,6 +57,7 @@ class FoundIdentifier:
     in_text: bool
     in_code: bool
     spans: tuple[Span, ...] = ()
+    topic_id: TagId | None = None  # the contact's topic it points to, if any
 
     @property
     def key(self) -> Key:
@@ -99,13 +100,16 @@ def facts_in(
     for code in codes:
         in_codes |= code_identifiers(code)
     owners: dict[Key, ContactId] = {}
+    topics: dict[Key, TagId | None] = {}
     rejected: set[Key] = set()
     for contact in contacts:
         for identifier in contact.identifiers:
             for key in in_text | in_codes:
                 if matches(identifier, key):
                     if identifier.counts:
-                        owners.setdefault(key, contact.id)
+                        if key not in owners:
+                            owners[key] = contact.id
+                            topics[key] = identifier.topic_id
                     else:
                         rejected.add(key)
     found = [
@@ -116,6 +120,7 @@ def facts_in(
             in_text=(kind, value) in in_text,
             in_code=(kind, value) in in_codes,
             spans=identifier_spans(text, kind, value) if places else (),
+            topic_id=topics.get((kind, value)),
         )
         for kind, value in sorted(in_text | in_codes, key=lambda key: (key[0].value, key[1]))
         if (kind, value) in owners or (kind, value) not in rejected

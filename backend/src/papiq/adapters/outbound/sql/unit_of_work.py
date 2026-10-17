@@ -23,7 +23,6 @@ from papiq.adapters.outbound.sql import events, tables
 from papiq.adapters.outbound.sql.classifier_models import SqlClassifierModelRepository
 from papiq.adapters.outbound.sql.database import Database
 from papiq.adapters.outbound.sql.documents import SqlDocumentRepository, SqlProcessingLog
-from papiq.adapters.outbound.sql.drawers import SqlDrawerRepository
 from papiq.adapters.outbound.sql.identifiers import SqlDocumentIdentifierRepository
 from papiq.adapters.outbound.sql.identity import (
     SqlApiTokenRepository,
@@ -40,6 +39,7 @@ from papiq.adapters.outbound.sql.master_data import (
     SqlTagRepository,
 )
 from papiq.adapters.outbound.sql.rules import SqlRuleApplicationRepository, SqlRuleRepository
+from papiq.adapters.outbound.sql.spaces import SqlSpaceRepository
 from papiq.adapters.outbound.sql.transaction import Transaction
 from papiq.adapters.outbound.sql.users import SqlUserRepository
 from papiq.adapters.outbound.sql.webhooks import SqlWebhookRepository
@@ -89,7 +89,7 @@ class SqlUnitOfWork:
         self._tx = Transaction(database)
         self._locked = False
         self.users = SqlUserRepository(self._tx)
-        self.drawers = SqlDrawerRepository(self._tx)
+        self.spaces = SqlSpaceRepository(self._tx)
         self.contacts = SqlContactRepository(self._tx)
         self.document_types = SqlDocumentTypeRepository(self._tx)
         self.tags = SqlTagRepository(self._tx)

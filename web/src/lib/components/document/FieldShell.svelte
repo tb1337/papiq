@@ -1,8 +1,11 @@
 <script lang="ts">
+	import Lightbulb from '@lucide/svelte/icons/lightbulb';
 	import SearchX from '@lucide/svelte/icons/search-x';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import type { Snippet } from 'svelte';
 	import { chosen } from '#lib/candidates.ts';
+	import type { Candidate } from '#lib/candidates.ts';
+	import ContactAvatar from '#lib/components/ContactAvatar.svelte';
 	import CandidateList from '#lib/components/document/CandidateList.svelte';
 	import SourceChip from '#lib/components/document/SourceChip.svelte';
 	import SourcesInfo from '#lib/components/document/SourcesInfo.svelte';
@@ -10,12 +13,15 @@
 	import { byPage, provenance, type FieldEvidence, type Place } from '#lib/document-view.ts';
 	import type { Lookup } from '#lib/masterdata.svelte.ts';
 	import { m } from '#lib/paraglide/messages.js';
+	import TypeIcon from '#lib/components/TypeIcon.svelte';
 	import { cn } from '#lib/utils.ts';
 
 	// One field of the document with what backs it. A field that waits for a decision is a
 	// card with the confidence, reason and quote, and what the signals proposed (a click takes
-	// one); any other is a label and the input, with the page of its quote and where its value
-	// comes from. Hovering or focusing it marks the quote in the viewer.
+	// one); one Papiq only suggests without making anyone wait (`advice`, the topic) is a calm
+	// card with the reason and the candidates; any other is a label and the input, with the
+	// page of its quote and where its value comes from. Hovering or focusing it marks the quote
+	// in the viewer.
 	let {
 		key,
 		label,
@@ -23,9 +29,12 @@
 		evidence,
 		lookup,
 		review = false,
+		advice = false,
+		quoted = true,
 		applies = true,
 		active = false,
 		required = false,
+		byHand = false,
 		hint = null,
 		onfocus,
 		onjump,
@@ -39,11 +48,17 @@
 		lookup: Lookup;
 		/** The document is being reviewed: open fields are cards. */
 		review?: boolean;
+		/** A suggestion that waits for nobody: a calm card with the candidates. */
+		advice?: boolean;
+		/** Whether a quote could back it; one never quoted (the topic) tells no missing one. */
+		quoted?: boolean;
 		/** The checked value is still the field's (its quote's places still apply). */
 		applies?: boolean;
 		active?: boolean;
 		/** The field must have a value (a required field of the document's type). */
 		required?: boolean;
+		/** Set by hand only: never read from the document, so it has no quote. */
+		byHand?: boolean;
 		/** What belongs in the field (its description), under its name. */
 		hint?: string | null;
 		onfocus: (key: string | null) => void;
@@ -55,6 +70,7 @@
 
 	const check = $derived(evidence?.check);
 	const card = $derived(review && evidence?.open === true);
+	const calm = $derived(!card && advice && evidence !== undefined);
 	const kind = $derived(check ? provenance(check) : null);
 	// One chip per page; beyond `CHIPS` pages the rest behind "+N".
 	const CHIPS = 6;
@@ -67,6 +83,17 @@
 	const sources = $derived(check && applies ? chosen(check) : []);
 	const pick = $derived(onpick ? (value: unknown) => onpick(key, value) : undefined);
 </script>
+
+<!-- Before a proposed contact its logo or initials, before a proposed type its icon. -->
+{#snippet lead(candidate: Candidate)}
+	{#if key === 'contact'}
+		{@const found = lookup.contacts.find((entry) => entry.id === candidate.value)}
+		{#if found}<ContactAvatar contact={found} size="xs" />{/if}
+	{:else if key === 'document_type'}
+		{@const found = lookup.documentTypes.find((entry) => entry.id === candidate.value)}
+		<TypeIcon icon={found?.icon} class="size-3.5 text-muted-foreground" />
+	{/if}
+{/snippet}
 
 {#snippet labelText()}
 	{label}{#if required}<span class="text-destructive" aria-hidden="true">&nbsp;*</span><span
@@ -102,11 +129,22 @@
 	class={cn(
 		card
 			? 'my-1 flex flex-col gap-2.5 rounded-2xl border border-lane-yellow-foreground/25 bg-lane-yellow/25 p-3.5 transition-shadow'
-			: '-mx-2.5 flex flex-col gap-1.5 rounded-xl px-2.5 py-2 transition-colors',
-		active && (card ? 'ring-2 ring-primary' : 'bg-panel')
+			: calm
+				? 'my-1 flex flex-col gap-2.5 rounded-2xl border bg-card p-3.5 transition-shadow'
+				: '-mx-2.5 flex flex-col gap-1.5 rounded-xl px-2.5 py-2 transition-colors',
+		active && (card || calm ? 'ring-2 ring-primary' : 'bg-panel')
 	)}
 >
-	{#if card && check}
+	{#if calm && check}
+		<div class="flex items-center gap-2">
+			<Lightbulb class="size-4 shrink-0 text-brand" aria-hidden="true" strokeWidth={2.2} />
+			<label id={labelId} for={inputId} class="font-semibold">{@render labelText()}</label>
+		</div>
+		{#if check.reason}<p class="text-sm">{check.reason}</p>{/if}
+		{#if check.candidates?.length}
+			<CandidateList candidates={check.candidates} onpick={pick} {lead} />
+		{/if}
+	{:else if card && check}
 		<div class="flex items-center gap-2">
 			<TriangleAlert
 				class="size-4 shrink-0 text-lane-yellow-foreground"
@@ -117,7 +155,7 @@
 		</div>
 		{#if check.reason}<p class="text-sm">{check.reason}</p>{/if}
 		{#if check.candidates?.length}
-			<CandidateList candidates={check.candidates} onpick={pick} />
+			<CandidateList candidates={check.candidates} onpick={pick} {lead} />
 		{/if}
 		{#if check.new_name}
 			<p class="text-sm">
@@ -130,7 +168,11 @@
 				{describeValue(check.proposed, lookup)}
 			</p>
 		{/if}
-		{#if kind === 'none'}
+		{#if byHand}
+			<p class="text-sm text-muted-foreground">{m.review_by_hand()}</p>
+		{:else if !quoted}
+			<!-- Never quoted (the topic): no missing quote to tell. -->
+		{:else if kind === 'none'}
 			<p
 				class="flex items-center gap-2 rounded-lg bg-muted px-2.5 py-2 text-sm text-muted-foreground"
 			>
@@ -167,7 +209,7 @@
 				{/if}
 				{#if places.length > 0}
 					{@render chips()}
-				{:else if kind === 'none'}
+				{:else if kind === 'none' && quoted}
 					<span class="text-xs text-muted-foreground">{m.source_without()}</span>
 				{/if}
 			</span>

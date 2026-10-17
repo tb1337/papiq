@@ -3,7 +3,6 @@ references go away."""
 
 import pytest
 
-from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import (
     ConflictError,
     NotFoundError,
@@ -11,7 +10,7 @@ from papiq.core.domain.errors import (
     ValidationError,
 )
 from papiq.core.domain.fields import FieldType
-from papiq.core.domain.ids import ContactId, DrawerId, new_id
+from papiq.core.domain.ids import ContactId, SpaceId, new_id
 from papiq.core.domain.rules import (
     AddTags,
     ForceReview,
@@ -19,10 +18,11 @@ from papiq.core.domain.rules import (
     RuleScope,
     SetContact,
     SetDocumentType,
-    SetDrawer,
     SetField,
+    SetSpace,
     SetTitle,
 )
+from papiq.core.domain.spaces import ShareLevel
 from tests.unit.services.conftest import World
 from tests.unit.services.rules_support import channel_api, definition, rule_world
 
@@ -84,31 +84,31 @@ async def test_user_rules_are_their_owners_and_global_rules_the_admins(world: Wo
 async def test_rules_refer_only_to_what_exists_and_file_where_the_owner_may(world: World) -> None:
     r = await rule_world(world)
     owner, other = await world.user(), await world.user()
-    foreign = await world.drawers.create(other.id, "Office")
+    foreign = await world.spaces.create(other.id, "Office")
 
-    async def files_into(drawer: DrawerId) -> Rule:
+    async def files_into(space: SpaceId) -> Rule:
         return await r.rules.create(
-            owner.id, RuleScope.USER, definition("File", channel_api(), SetDrawer(drawer))
+            owner.id, RuleScope.USER, definition("File", channel_api(), SetSpace(space))
         )
 
     with pytest.raises(NotFoundError):
         await files_into(foreign.id)  # not shared: does not exist for the owner
     with pytest.raises(NotFoundError):
-        await files_into(DrawerId(new_id()))
-    await world.drawers.share(other.id, foreign.id, owner.id, ShareLevel.READ)
+        await files_into(SpaceId(new_id()))
+    await world.spaces.share(other.id, foreign.id, owner.id, ShareLevel.READ)
     with pytest.raises(PermissionDeniedError):
         await files_into(foreign.id)
-    await world.drawers.share(other.id, foreign.id, owner.id, ShareLevel.READ_WRITE)
-    rule = await r.user_rule(owner, definition("File", channel_api(), SetDrawer(foreign.id)))
+    await world.spaces.share(other.id, foreign.id, owner.id, ShareLevel.READ_WRITE)
+    rule = await r.user_rule(owner, definition("File", channel_api(), SetSpace(foreign.id)))
 
     # Changing and enabling check again.
-    await world.drawers.share(other.id, foreign.id, owner.id, ShareLevel.READ)
+    await world.spaces.share(other.id, foreign.id, owner.id, ShareLevel.READ)
     await r.rules.set_enabled(owner.id, rule.id, False)
     with pytest.raises(PermissionDeniedError):
         await r.rules.set_enabled(owner.id, rule.id, True)
     with pytest.raises(PermissionDeniedError):
         await r.rules.change(
-            owner.id, rule.id, definition("File again", channel_api(), SetDrawer(foreign.id))
+            owner.id, rule.id, definition("File again", channel_api(), SetSpace(foreign.id))
         )
     assert (await r.rules.get(owner.id, rule.id)).current.number == 1
 
@@ -143,20 +143,21 @@ async def test_a_deleted_rule_never_runs_and_its_versions_stay_readable(world: W
     assert entry.result.input["rules"] == []
 
 
-async def test_deleting_master_data_and_drawers_disables_the_rules_that_use_them(
+async def test_deleting_master_data_and_spaces_disables_the_rules_that_use_them(
     world: World,
 ) -> None:
+    """Tags are the exception: a tag a rule uses is not deleted (an admin sees every rule)."""
     r = await rule_world(world)
     owner, sharer = await world.user(), await world.user()
     contact = await r.contact("ACME")
     kind = await world.master_data.create_document_type(r.admin.id, "Invoice")
     tag = await r.tag("tax")
-    drawer = await world.drawers.create(sharer.id, "Shared")
-    await world.drawers.share(sharer.id, drawer.id, owner.id, ShareLevel.READ_WRITE)
+    space = await world.spaces.create(sharer.id, "Shared")
+    await world.spaces.share(sharer.id, space.id, owner.id, ShareLevel.READ_WRITE)
     by_contact = await r.user_rule(owner, definition("C", channel_api(), SetContact(contact.id)))
     by_type = await r.user_rule(owner, definition("T", channel_api(), SetDocumentType(kind.id)))
     by_tag = await r.global_rule(definition("G", channel_api(), AddTags(frozenset({tag.id}))))
-    by_drawer = await r.user_rule(owner, definition("D", channel_api(), SetDrawer(drawer.id)))
+    by_space = await r.user_rule(owner, definition("D", channel_api(), SetSpace(space.id)))
     note = await world.master_data.create_field(r.admin.id, "Note", FieldType.TEXT)
     by_field = await r.user_rule(
         owner, definition("A", channel_api(), SetField(note.id, "from a rule"))
@@ -165,15 +166,16 @@ async def test_deleting_master_data_and_drawers_disables_the_rules_that_use_them
 
     await world.master_data.delete_contact(r.admin.id, contact.id)
     await world.master_data.delete_document_type(r.admin.id, kind.id)
-    await world.master_data.delete_tag(r.admin.id, tag.id)
-    await world.drawers.delete(sharer.id, drawer.id)
+    with pytest.raises(ConflictError, match="rules 'G'"):
+        await world.master_data.delete_tag(r.admin.id, tag.id)
+    assert (await r.rules.get(r.admin.id, by_tag.id)).enabled
+    await world.spaces.delete(sharer.id, space.id)
     await world.master_data.delete_field(r.admin.id, note.id)
 
     expected = {
         by_contact.id: "contact 'ACME' was deleted",
         by_type.id: "document type 'Invoice' was deleted",
-        by_tag.id: "tag 'tax' was deleted",
-        by_drawer.id: "drawer 'Shared' was deleted",
+        by_space.id: "space 'Shared' was deleted",
         by_field.id: "field 'Note' was deleted",
     }
     for id, reason in expected.items():
@@ -211,10 +213,10 @@ async def test_removing_a_choice_a_rule_uses_disables_the_rule(world: World) -> 
 async def test_deleting_a_user_removes_their_rules(world: World) -> None:
     r = await rule_world(world)
     leaving, staying = await world.user(), await world.user()
-    drawer = await world.drawers.create(leaving.id, "Shared")
-    await world.drawers.share(leaving.id, drawer.id, staying.id, ShareLevel.READ_WRITE)
+    space = await world.spaces.create(leaving.id, "Shared")
+    await world.spaces.share(leaving.id, space.id, staying.id, ShareLevel.READ_WRITE)
     gone = await r.user_rule(leaving, definition("Mine", channel_api(), SetTitle("Scan")))
-    files = await r.user_rule(staying, definition("File", channel_api(), SetDrawer(drawer.id)))
+    files = await r.user_rule(staying, definition("File", channel_api(), SetSpace(space.id)))
 
     await world.users.delete_user(r.admin.id, leaving.id)
 
@@ -222,7 +224,7 @@ async def test_deleting_a_user_removes_their_rules(world: World) -> None:
         await r.rules.get(r.admin.id, gone.id)
     assert [rule.id for rule in await r.rules.list(r.admin.id, all_users=True)] == [files.id]
     rule = await r.rules.get(staying.id, files.id)
-    assert (rule.enabled, rule.disabled_reason) == (False, "drawer 'Shared' was deleted")
+    assert (rule.enabled, rule.disabled_reason) == (False, "space 'Shared' was deleted")
 
 
 @pytest.mark.parametrize(

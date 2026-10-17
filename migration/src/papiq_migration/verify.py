@@ -15,10 +15,10 @@ from papiq_migration.config import Config, public
 from papiq_migration.mapping import (
     ASN_SPEC,
     NOTES_SPEC,
-    drawer_name,
     field_key,
     field_spec,
     norm,
+    space_name,
 )
 from papiq_migration.migrate import Progress
 from papiq_migration.paperless import Paperless
@@ -33,7 +33,7 @@ _PATHS = {
     "document_type": "/document-types",
     "tag": "/tags",
     "field": "/fields",
-    "drawer": "/drawers",
+    "space": "/spaces",
 }
 # What every Paperless object kind is counted as in the state.
 _ACCOUNTED = (
@@ -170,6 +170,9 @@ async def verify(
                     deviation("field", entry["source_id"], "options missing", missing)
 
     types = {field_id: found["data_type"] for field_id, found in by_id["field"].items()}
+    # Papiq nests tags and keeps a child set with its parent as the child alone: tags compare
+    # with the tags above them.
+    parents = {tag_id: found.get("parent_id") for tag_id, found in by_id["tag"].items()}
     users = {int(user["id"]): user for user in snapshot.users}
     expected: dict[int, Prepared] = {
         int(document["id"]): prepare(
@@ -177,26 +180,26 @@ async def verify(
         )
         for document in snapshot.documents
     }
-    # Drawers: each one needed exists with the shares it should have.
+    # Spaces: each one needed exists with the shares it should have.
     needed: dict[str, Prepared] = {}
     for item in expected.values():
-        key = item.drawer_key()
+        key = item.space_key()
         if key is not None and item.skip is None:
             needed.setdefault(key, item)
-    defaults = {d["owner_id"]: d["id"] for d in listed["drawer"] if d.get("is_default")}
-    drawer_ids: dict[str, str] = {}
+    defaults = {d["owner_id"]: d["id"] for d in listed["space"] if d.get("is_default")}
+    space_ids: dict[str, str] = {}
     for key, item in needed.items():
         objects_checked += 1
-        known = state.object("drawer", key)
-        found = by_id["drawer"].get(known[0] or "") if known else None
+        known = state.object("space", key)
+        found = by_id["space"].get(known[0] or "") if known else None
         if found is None:
-            deviation("drawer", drawer_name(item.shares), "missing in Papiq")
+            deviation("space", space_name(item.shares), "missing in Papiq")
             continue
-        drawer_ids[key] = found["id"]
+        space_ids[key] = found["id"]
         have = {share["user_id"]: share["level"] for share in found.get("shares") or []}
         want = {ids.usernames[norm(name)]: level for name, level in item.shares}
         if have != want or found["owner_id"] != item.owner:
-            deviation("drawer", found["name"], "owner or shares differ", want, have)
+            deviation("space", found["name"], "owner or shares differ", want, have)
 
     # --- documents -----------------------------------------------------------------------------
     papiq_documents: dict[str, dict[str, Any]] = {}
@@ -234,11 +237,12 @@ async def verify(
         applied = _compare(
             item,
             actual,
-            drawer_ids.get(key) if (key := item.drawer_key()) else defaults.get(item.owner),
+            space_ids.get(key) if (key := item.space_key()) else defaults.get(item.owner),
             deviation,
             originals[document_id],
             row.sha256,
             types,
+            parents,
         )
         if actual.get("lane") != row.lane and row.status == "done":
             deviation(
@@ -282,14 +286,26 @@ async def verify(
     }
 
 
+def _with_ancestors(ids: list[str], parents: dict[str, str | None]) -> set[str]:
+    """The tags and the tags above them."""
+    found: set[str] = set()
+    for id in ids:
+        current: str | None = id
+        while current is not None and current not in found:
+            found.add(current)
+            current = parents.get(current)
+    return found
+
+
 def _compare(
     item: Prepared,
     actual: dict[str, Any],
-    drawer_id: str | None,
+    space_id: str | None,
     deviation: Any,
     original: dict[str, Any],
     state_sha: str | None,
     types: dict[str, str],
+    parents: dict[str, str | None],
 ) -> bool:
     """Compare a document with what it should be; False if its pipeline stopped before the
     metadata was applied (then there is nothing to compare: the document is a finding)."""
@@ -304,8 +320,9 @@ def _compare(
         for field in ("contact_id", "document_type_id"):
             if (actual.get(field) or None) != (meta[field] or None):
                 deviation("document", id, f"{field} differs", meta[field], actual.get(field))
-        if sorted(actual.get("tag_ids") or []) != sorted(meta["tag_ids"]):
-            deviation("document", id, "tags differ", meta["tag_ids"], actual.get("tag_ids"))
+        have = actual.get("tag_ids") or []
+        if _with_ancestors(have, parents) != _with_ancestors(meta["tag_ids"], parents):
+            deviation("document", id, "tags differ", meta["tag_ids"], have)
         if actual.get("document_date") != meta["document_date"]:
             deviation(
                 "document",
@@ -330,8 +347,8 @@ def _compare(
             item.owner_name or "executing admin",
             actual["owner_id"],
         )
-    if drawer_id is not None and actual["drawer_id"] != drawer_id:
-        deviation("document", id, "drawer differs", drawer_id, actual["drawer_id"])
+    if space_id is not None and actual["space_id"] != space_id:
+        deviation("document", id, "space differs", space_id, actual["space_id"])
     if actual.get("channel") != "migration" and state_sha is not None:
         deviation(
             "document",

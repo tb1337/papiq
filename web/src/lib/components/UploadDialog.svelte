@@ -9,36 +9,36 @@
 	import * as Dialog from '#lib/components/ui/dialog/index.ts';
 	import * as Field from '#lib/components/ui/field/index.ts';
 	import { Progress } from '#lib/components/ui/progress/index.ts';
-	import { writableDrawers } from '#lib/permissions.ts';
+	import { writableSpaces } from '#lib/permissions.ts';
 	import { NODE_LABELS } from '#lib/node-labels.ts';
 	import { m } from '#lib/paraglide/messages.js';
 	import { progress } from '#lib/pipeline.ts';
 	import { session } from '#lib/session.svelte.ts';
 	import { uploads } from '#lib/upload.svelte.ts';
-	import { drawerLabel, type Drawer, type UserName } from '#lib/masterdata.svelte.ts';
+	import { spaceLabel, type Space, type UserName } from '#lib/masterdata.svelte.ts';
 	import { cn } from '#lib/utils.ts';
 
 	let {
 		open = $bindable(false),
-		drawers,
+		spaces,
 		users
-	}: { open?: boolean; drawers: readonly Drawer[]; users: readonly UserName[] } = $props();
+	}: { open?: boolean; spaces: readonly Space[]; users: readonly UserName[] } = $props();
 
-	// Uploads go into the caller's own drawers or those shared for writing, any for admins;
+	// Uploads go into the caller's own spaces or those shared for writing, any for admins;
 	// empty = default.
 	const choices = $derived([
-		{ value: '', label: m.upload_default_drawer() },
-		...writableDrawers(drawers, session.user).map((drawer) => ({
-			value: drawer.id,
-			label: drawerLabel(drawer, users, session.user?.id)
+		{ value: '', label: m.upload_default_space() },
+		...writableSpaces(spaces, session.user).map((space) => ({
+			value: space.id,
+			label: spaceLabel(space, users, session.user?.id)
 		}))
 	]);
-	let drawerId = $state('');
+	let spaceId = $state('');
 	let over = $state(false);
 	let input = $state<HTMLInputElement | null>(null);
 
 	function take(list: FileList | null) {
-		if (list && list.length > 0) uploads.add([...list], drawerId || null);
+		if (list && list.length > 0) uploads.add([...list], spaceId || null);
 		if (input) input.value = '';
 	}
 
@@ -57,8 +57,8 @@
 		</Dialog.Header>
 
 		<Field.Field>
-			<Field.Label for="upload-drawer">{m.upload_drawer()}</Field.Label>
-			<NativeSelect id="upload-drawer" bind:value={drawerId} options={choices} />
+			<Field.Label for="upload-space">{m.upload_space()}</Field.Label>
+			<NativeSelect id="upload-space" bind:value={spaceId} options={choices} />
 		</Field.Field>
 
 		<div

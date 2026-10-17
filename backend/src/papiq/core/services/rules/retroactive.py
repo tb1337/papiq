@@ -410,8 +410,8 @@ async def _candidate(uow: UnitOfWork, user: User, rule: Rule, document: Document
         return False
     if rule.scope is RuleScope.USER and document.owner_id != rule.owner_id:
         return False
-    drawer = await uow.drawers.get(document.drawer_id)
-    return can_write_document(user, document, drawer)
+    space = await uow.spaces.get(document.space_id)
+    return can_write_document(user, document, space)
 
 
 async def _enqueue(uow: UnitOfWork, id: RuleApplicationId, now: datetime) -> None:

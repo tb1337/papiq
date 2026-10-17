@@ -7,16 +7,17 @@
 	import ValueInput from '#lib/components/rules/ValueInput.svelte';
 	import TemplateInput from '#lib/components/templates/TemplateInput.svelte';
 	import { Button } from '#lib/components/ui/button/index.ts';
-	import type { Drawer, Lookup } from '#lib/masterdata.svelte.ts';
+	import type { Space, Lookup } from '#lib/masterdata.svelte.ts';
 	import { m } from '#lib/paraglide/messages.js';
 	import { ACTION_LABELS } from '#lib/rules/describe.ts';
 	import { defaultValue, type ActionNode } from '#lib/rules/model.ts';
+	import { tagOptions } from '#lib/tags.ts';
 
-	// One action. `drawers` are the ones the rule's owner may file into.
+	// One action. `spaces` are the ones the rule's owner may file into.
 	let {
 		action,
 		lookup,
-		drawers,
+		spaces,
 		error,
 		onremove,
 		onup,
@@ -24,7 +25,7 @@
 	}: {
 		action: ActionNode;
 		lookup: Lookup;
-		drawers: readonly Drawer[];
+		spaces: readonly Space[];
 		error?: string;
 		onremove: () => void;
 		onup?: () => void;
@@ -43,6 +44,15 @@
 		];
 	}
 
+	function withUnknown(list: { value: string; label: string }[], value: string) {
+		const known = value === '' || list.some((entry) => entry.value === value);
+		return [
+			{ value: '', label: m.rule_choose() },
+			...list,
+			...(known ? [] : [{ value, label: m.rule_unknown() }])
+		];
+	}
+
 	const field = $derived(
 		action.type === 'set_field'
 			? (lookup.fields.find((entry) => entry.id === action.field_id) ?? null)
@@ -54,12 +64,12 @@
 	<div class="flex flex-wrap items-start gap-2">
 		<span class="w-full pt-2 text-sm font-medium sm:w-44">{label}</span>
 		<div class="flex min-w-0 flex-1 basis-64 flex-col gap-2">
-			{#if action.type === 'set_drawer'}
+			{#if action.type === 'set_space'}
 				<NativeSelect
 					aria-label={label}
 					aria-invalid={invalid || undefined}
-					bind:value={action.drawer_id}
-					options={options(drawers, action.drawer_id)}
+					bind:value={action.space_id}
+					options={options(spaces, action.space_id)}
 					class="h-10"
 				/>
 			{:else if action.type === 'set_contact'}
@@ -78,13 +88,21 @@
 					options={options(lookup.documentTypes, action.document_type_id)}
 					class="h-10"
 				/>
+			{:else if action.type === 'set_topic'}
+				<NativeSelect
+					aria-label={label}
+					aria-invalid={invalid || undefined}
+					bind:value={action.topic_id}
+					options={withUnknown(tagOptions(lookup.tags, 'topic'), action.topic_id)}
+					class="h-10"
+				/>
 			{:else if action.type === 'set_title'}
 				<TemplateInput id="title-{action.key}" {label} {invalid} bind:value={action.template} />
 			{:else if action.type === 'add_tags' || action.type === 'remove_tags'}
 				<MultiPicker
 					{label}
 					{invalid}
-					options={lookup.tags.map((tag) => ({ value: tag.id, label: tag.name }))}
+					options={tagOptions(lookup.tags, 'document')}
 					selected={action.tag_ids}
 					onchange={(next) => {
 						if (action.type === 'add_tags' || action.type === 'remove_tags') action.tag_ids = next;

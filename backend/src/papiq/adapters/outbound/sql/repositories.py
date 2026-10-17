@@ -1,5 +1,5 @@
 """The generic repository on SQL tables, with the explicit mapping between domain objects and
-rows; the repositories by area (users, drawers, master data, documents) build on it.
+rows; the repositories by area (users, spaces, master data, documents) build on it.
 
 `update` is optimistic: `UPDATE ... WHERE id = :id AND version = :version`. If no row matches,
 the entity is missing (NotFoundError) or was changed by someone else (ConcurrencyError). On

@@ -1,16 +1,22 @@
 <script lang="ts">
 	import CircleAlert from '@lucide/svelte/icons/circle-alert';
+	import type { Snippet } from 'svelte';
 	import type { Candidate } from '#lib/candidates.ts';
 	import CandidateSources from '#lib/components/document/CandidateSources.svelte';
 	import { m } from '#lib/paraglide/messages.js';
 
 	// The values the signals proposed for an open field, best first, with what each signal
 	// said; one that exists can be taken with a click. A value another signal named against is
-	// marked.
+	// marked. `lead` goes before a value's name (a contact's logo, a type's icon).
 	let {
 		candidates,
-		onpick
-	}: { candidates: readonly Candidate[]; onpick?: (value: unknown) => void } = $props();
+		onpick,
+		lead
+	}: {
+		candidates: readonly Candidate[];
+		onpick?: (value: unknown) => void;
+		lead?: Snippet<[Candidate]>;
+	} = $props();
 </script>
 
 <div class="flex flex-col gap-1.5">
@@ -20,6 +26,7 @@
 			<li
 				class="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-card/70 px-2.5 py-1.5 text-sm"
 			>
+				{@render lead?.(candidate)}
 				{#if candidate.value !== null && onpick}
 					<button
 						type="button"

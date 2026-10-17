@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 
 from papiq.core.domain.fields import FieldDefinition, FieldType, Money, Url, template_key
-from papiq.core.domain.ids import DrawerId, UserId, new_id
+from papiq.core.domain.ids import SpaceId, UserId, new_id
 from papiq.core.domain.templates import (
     TemplateValue,
     template_values,
@@ -33,7 +33,7 @@ def test_a_field_s_key_in_templates(name: str, key: str) -> None:
 
 
 def test_the_values_of_a_document() -> None:
-    document = builders.document(UserId(new_id()), DrawerId(new_id()), filename="Scan 2026-03.pdf")
+    document = builders.document(UserId(new_id()), SpaceId(new_id()), filename="Scan 2026-03.pdf")
     amount = FieldDefinition.create(name="LA_Brutto", data_type=FieldType.AMOUNT, now=builders.NOW)
     link = FieldDefinition.create(name="Portal", data_type=FieldType.LINK, now=builders.NOW)
     empty = FieldDefinition.create(name="Netto", data_type=FieldType.AMOUNT, now=builders.NOW)
@@ -41,7 +41,7 @@ def test_the_values_of_a_document() -> None:
         document,
         contact="Stadtwerke",
         document_type=None,
-        drawer="Privat",
+        space="Privat",
         owner="tobi",
         tags=["strom", "Gas"],
         document_date=date(2026, 3, 31),
@@ -50,6 +50,7 @@ def test_the_values_of_a_document() -> None:
             (link, Url("https://example.org/a")),
             (empty, None),
         ],
+        contact_groups=["Versorger", "Arbeitgeber"],
     )
     assert values == {
         "title": document.title,
@@ -59,7 +60,9 @@ def test_the_values_of_a_document() -> None:
         "document_date": date(2026, 3, 31),
         "added": builders.NOW.date(),
         "tags": ["Gas", "strom"],
-        "drawer": "Privat",
+        "contact_groups": ["Arbeitgeber", "Versorger"],
+        "document_type_groups": [],
+        "space": "Privat",
         "owner": "tobi",
         "channel": document.channel.value,
         "field": {"la_brutto": Money(Decimal("3650.00"), "EUR"), "portal": "https://example.org/a"},

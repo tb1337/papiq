@@ -158,23 +158,23 @@ async def test_the_migration_takes_everything_over(setup: Setup) -> None:
     nineteen = by_title(setup, "Document 19")
     assert {papiq.fields[k]["name"] for k in nineteen["fields"]} == {"Net"}
 
-    # drawers: no extra permissions, default drawer; otherwise one shared drawer per combination
-    assert by_title(setup, "Document 12")["drawer_id"].startswith("default:")
-    assert by_title(setup, "Document 16")["drawer_id"].startswith("default:")
+    # spaces: no extra permissions, default space; otherwise one shared space per combination
+    assert by_title(setup, "Document 12")["space_id"].startswith("default:")
+    assert by_title(setup, "Document 16")["space_id"].startswith("default:")
     shared = by_title(setup, "Document 13")
-    drawer = papiq.drawers[shared["drawer_id"]]
-    assert drawer["name"] == "Geteilt: bob (lesen), tobias (schreiben)"
-    assert drawer["owner_id"] == named(papiq.users, "anna")["id"]
-    assert {(s["user_id"], s["level"]) for s in drawer["shares"]} == {
+    space = papiq.spaces[shared["space_id"]]
+    assert space["name"] == "Geteilt: bob (lesen), tobias (schreiben)"
+    assert space["owner_id"] == named(papiq.users, "anna")["id"]
+    assert {(s["user_id"], s["level"]) for s in space["shares"]} == {
         (named(papiq.users, "bob")["id"], "read"),
         (named(papiq.users, "tobias")["id"], "read_write"),
     }
-    assert sum(1 for d in papiq.drawers.values() if not d["is_default"]) == 1
+    assert sum(1 for d in papiq.spaces.values() if not d["is_default"]) == 1
 
     # the upload carries owner, channel and metadata, and no key
     upload = next(u for u in papiq.uploads if u["filename"] == "scan-13.pdf")
-    assert upload["channel"] == "migration" and upload["owner"] == drawer["owner_id"]
-    assert upload["drawer_id"] == drawer["id"]
+    assert upload["channel"] == "migration" and upload["owner"] == space["owner_id"]
+    assert upload["space_id"] == space["id"]
     assert json.loads(upload["metadata"])["title"] == "Document 13"
     unowned = next(u for u in papiq.uploads if u["filename"] == "scan-14.pdf")
     assert unowned["owner"] == fake_papiq.ADMIN["id"]
@@ -218,7 +218,7 @@ async def test_a_second_run_creates_nothing_twice(setup: Setup) -> None:
     assert await setup.run("run") == 0
     snapshot = {
         name: len(getattr(setup.papiq, name))
-        for name in ("users", "contacts", "tags", "fields", "drawers", "documents")
+        for name in ("users", "contacts", "tags", "fields", "spaces", "documents")
     }
     uploads, writes = len(setup.papiq.uploads), len(setup.papiq.writes())
     downloads = len(setup.paperless.downloads)
@@ -228,7 +228,7 @@ async def test_a_second_run_creates_nothing_twice(setup: Setup) -> None:
     assert len(setup.papiq.writes()) == writes
     assert snapshot == {
         name: len(getattr(setup.papiq, name))
-        for name in ("users", "contacts", "tags", "fields", "drawers", "documents")
+        for name in ("users", "contacts", "tags", "fields", "spaces", "documents")
     }
     report = setup.report("run")
     # What the first run created still reads as created.
@@ -432,3 +432,36 @@ async def test_the_check_compares_numbers_by_value_and_skips_what_a_stopped_pipe
     # A wrong amount is still found.
     document["fields"][gross] = {"amount": "9.9E+1", "currency": "EUR"}
     assert await setup.run("verify") == 1
+
+
+async def test_a_group_of_the_same_name_is_no_tag(setup: Setup) -> None:
+    """Papiq's names are unique per scope: a contact group named like a Paperless tag stays a
+    group, and the tag becomes a document tag of its own."""
+    setup.papiq.tags["group"] = {"id": "group", "name": "tax", "scope": "contact"}
+    assert await setup.run("run") == 0
+    tags = [t for t in setup.papiq.tags.values() if t["name"] == "tax"]
+    assert sorted(t.get("scope", "document") for t in tags) == ["contact", "document"]
+    document_tag = next(t for t in tags if t.get("scope") == "document")
+    taken = [
+        d for d in setup.papiq.documents.values() if document_tag["id"] in d.get("tag_ids", [])
+    ]
+    assert taken and not any(
+        "group" in d.get("tag_ids", []) for d in setup.papiq.documents.values()
+    )
+
+
+async def test_a_tag_papiq_keeps_as_its_child_is_no_deviation(setup: Setup) -> None:
+    """Papiq keeps a child set with its parent as the child alone: the check compares tags with
+    the tags above them."""
+    assert await setup.run("run") == 0
+    tags = {t["name"]: t for t in setup.papiq.tags.values()}
+    tags["tax/2024"]["parent_id"] = tags["tax"]["id"]
+    for document in setup.papiq.documents.values():
+        held = document.get("tag_ids", [])
+        if tags["tax/2024"]["id"] in held and tags["tax"]["id"] in held:
+            document["tag_ids"] = [tags["tax/2024"]["id"]]
+            break
+    else:
+        raise AssertionError("no document carries both tags")
+    assert await setup.run("verify") == 0
+    assert setup.report("verify")["deviations"] == []

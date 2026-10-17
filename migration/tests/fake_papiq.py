@@ -25,7 +25,7 @@ class FakePapiq:
     document_types: dict[str, dict[str, Any]] = field(default_factory=dict)
     tags: dict[str, dict[str, Any]] = field(default_factory=dict)
     fields: dict[str, dict[str, Any]] = field(default_factory=dict)
-    drawers: dict[str, dict[str, Any]] = field(
+    spaces: dict[str, dict[str, Any]] = field(
         default_factory=lambda: {
             f"default:{ADMIN['id']}": {
                 "id": f"default:{ADMIN['id']}",
@@ -81,10 +81,14 @@ class FakePapiq:
             "/document-types": self.document_types,
             "/tags": self.tags,
             "/fields": self.fields,
-            "/drawers": self.drawers,
+            "/spaces": self.spaces,
         }
         if path in simple:
-            return self._collection(path, simple[path], method, body)
+            store = simple[path]
+            if path == "/tags" and method == "GET" and "scope" in request.url.params:
+                scope = request.url.params["scope"]
+                store = {k: v for k, v in store.items() if v.get("scope", "document") == scope}
+            return self._collection(path, store, method, body)
         if found := re.fullmatch(r"/(users|fields)/([^/]+)", path):
             store = self.users if found[1] == "users" else self.fields
             if method == "PATCH" and found[2] in store:
@@ -93,15 +97,15 @@ class FakePapiq:
                 if "choices" in body:
                     store[found[2]]["choices"] = body["choices"]
                 return httpx2.Response(200, json=store[found[2]])
-        if found := re.fullmatch(r"/drawers/([^/]+)/shares/([^/]+)", path):
-            drawer = self.drawers[found[1]]
-            if found[2] == drawer["owner_id"]:
-                return _problem(422, "a drawer cannot be shared with its owner")
+        if found := re.fullmatch(r"/spaces/([^/]+)/shares/([^/]+)", path):
+            space = self.spaces[found[1]]
+            if found[2] == space["owner_id"]:
+                return _problem(422, "a space cannot be shared with its owner")
             if not self.users[found[2]]["active"]:
                 return _problem(404, "user not found")
-            drawer["shares"] = [s for s in drawer["shares"] if s["user_id"] != found[2]]
-            drawer["shares"].append({"user_id": found[2], "level": body["level"]})
-            return httpx2.Response(200, json=drawer)
+            space["shares"] = [s for s in space["shares"] if s["user_id"] != found[2]]
+            space["shares"].append({"user_id": found[2], "level": body["level"]})
+            return httpx2.Response(200, json=space)
         if path == "/documents" and method == "POST":
             return self._upload(request)
         if path == "/documents" and method == "GET":
@@ -126,16 +130,18 @@ class FakePapiq:
         if f"POST {path}" in self.refuse:
             return _problem(self.refuse[f"POST {path}"], "refused")
         name = str(body.get("username") or body.get("name"))
+        scope = body.get("scope", "document")  # tags: names are unique per scope
         if any(
             (item.get("username") or item["name"]).casefold() == name.casefold()
+            and (path != "/tags" or item.get("scope", "document") == scope)
             for item in store.values()
         ):
             return _problem(409, f"{name} exists")
         id = uuid4().hex
         if path == "/users":
             item = {"id": id, "username": name, "role": "user", "active": True}
-            self._default_drawer(id)
-        elif path == "/drawers":
+            self._default_space(id)
+        elif path == "/spaces":
             owner = self.users.get(body.get("owner_id", ADMIN["id"]))
             if owner is None or not owner["active"]:
                 return _problem(404, "user not found")
@@ -154,6 +160,8 @@ class FakePapiq:
                 "choices": body.get("choices", []),
                 "document_type_ids": None,
             }
+        elif path == "/tags":
+            item = {"id": id, "name": name, "scope": body.get("scope", "document")}
         else:
             item = {"id": id, "name": name}
         store[id] = item
@@ -162,8 +170,8 @@ class FakePapiq:
             return _problem(503, "lost")
         return httpx2.Response(201, json=item)
 
-    def _default_drawer(self, owner: str) -> None:
-        self.drawers[f"default:{owner}"] = {
+    def _default_space(self, owner: str) -> None:
+        self.spaces[f"default:{owner}"] = {
             "id": f"default:{owner}",
             "name": "Default",
             "owner_id": owner,
@@ -217,7 +225,7 @@ class FakePapiq:
             "channel": fields.get("channel", "api"),
             "sha256": sha256,
             "owner_id": owner,
-            "drawer_id": fields.get("drawer_id", f"default:{owner}"),
+            "space_id": fields.get("space_id", f"default:{owner}"),
             "contact_id": metadata.get("contact_id"),
             "document_type_id": metadata.get("document_type_id"),
             "tag_ids": sorted(metadata.get("tag_ids", [])),

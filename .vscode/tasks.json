@@ -118,6 +118,13 @@
 			"problemMatcher": []
 		},
 		{
+			"label": "Papiq: Logos holen",
+			"detail": "Queue fetching the logos of contacts without one from their websites (fetch-logos; needs PAPIQ_LOGO_FETCH=true)",
+			"type": "shell",
+			"command": "set -a && . .devcontainer/live.env && set +a && cd backend && uv run python -m papiq.composition fetch-logos",
+			"problemMatcher": []
+		},
+		{
 			"label": "Migration: plan",
 			"detail": "Trial run against Paperless: reads, writes nothing",
 			"type": "shell",

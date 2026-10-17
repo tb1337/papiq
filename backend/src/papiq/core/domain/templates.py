@@ -38,7 +38,10 @@ NAMES = (
     "document_date",
     "added",
     "tags",
-    "drawer",
+    "topic",
+    "contact_groups",
+    "document_type_groups",
+    "space",
     "owner",
     "channel",
     "pages",
@@ -52,16 +55,24 @@ def template_values(
     *,
     contact: str | None,
     document_type: str | None,
-    drawer: str | None,
+    space: str | None,
     owner: str | None,
     tags: Iterable[str],
     document_date: date | None,
     fields: Iterable[tuple[FieldDefinition, FieldValue | None]],
+    contact_groups: Iterable[str] = (),
+    document_type_groups: Iterable[str] = (),
+    topic: str | None = None,
 ) -> dict[str, TemplateValue]:
     """The values of `document` as a template sees them, the names already resolved (as rules
-    leave them); what the document does not have is left out."""
-    ordered: list[str] = sorted(tags, key=str.casefold)
-    names: list[TemplateValue] = [*ordered]
+    leave them); what the document does not have is left out. `tags`: those set (not their
+    ancestors); `topic`: its name (not its path); `contact_groups`, `document_type_groups`: the
+    groups the contact and the type are in (not their ancestors). Lists are sorted by name."""
+
+    def ordered(items: Iterable[str]) -> list[TemplateValue]:
+        return [*sorted(items, key=str.casefold)]
+
+    names = ordered(tags)
     given: dict[str, TemplateValue | None] = {
         "title": document.title,
         "filename": PurePath(document.original_filename).stem,
@@ -71,7 +82,10 @@ def template_values(
         "document_date": document_date,
         "added": document.created_at.date(),
         "tags": names,
-        "drawer": drawer,
+        "topic": topic,
+        "contact_groups": ordered(contact_groups),
+        "document_type_groups": ordered(document_type_groups),
+        "space": space,
         "owner": owner,
         "channel": document.channel.value,
         "pages": document.page_count,

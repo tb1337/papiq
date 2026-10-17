@@ -115,14 +115,14 @@ async def test_the_whole_migration_runs_against_the_api(api: Api, tmp_path: Path
         assert by_title["Document 10"]["document_date"] == "2024-05-01"
         assert len(by_title["Document 10"]["fields"]) == 12
 
-        drawers = (await api.client.get(f"{PREFIX}/drawers", headers=helpers.auth(m.admin))).json()
-        shared = next(d for d in drawers if d["name"].startswith("Geteilt"))
+        spaces = (await api.client.get(f"{PREFIX}/spaces", headers=helpers.auth(m.admin))).json()
+        shared = next(d for d in spaces if d["name"].startswith("Geteilt"))
         assert shared["owner_id"] == users["anna"]["id"]
         assert {(s["user_id"], s["level"]) for s in shared["shares"]} == {
             (users["bob"]["id"], "read"),
             (users["tobias"]["id"], "read_write"),
         }
-        assert by_title["Document 13"]["drawer_id"] == shared["id"]
+        assert by_title["Document 13"]["space_id"] == shared["id"]
         # The owner sees it; bob reads it once it is green; a stranger does not.
         bob = await api.user("bob-session")
         assert (

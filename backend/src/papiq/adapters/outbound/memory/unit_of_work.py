@@ -24,13 +24,13 @@ from papiq.adapters.outbound.memory.database import (
     DOCUMENT_IDENTIFIERS,
     DOCUMENT_TYPES,
     DOCUMENTS,
-    DRAWERS,
     EXTERNAL_IDENTITIES,
     FIELDS,
     LOGIN_FAILURES,
     RULE_APPLICATIONS,
     RULES,
     SESSIONS,
+    SPACES,
     TAGS,
     USERS,
     WEBHOOKS,
@@ -51,7 +51,6 @@ from papiq.adapters.outbound.memory.rules import (
 )
 from papiq.adapters.outbound.memory.webhooks import MemoryWebhookRepository
 from papiq.core.domain.documents import Document, Sha256
-from papiq.core.domain.drawers import Drawer
 from papiq.core.domain.errors import ConcurrencyError, ConflictError, NotFoundError
 from papiq.core.domain.events import DomainEvent
 from papiq.core.domain.fields import FieldDefinition
@@ -60,17 +59,18 @@ from papiq.core.domain.ids import (
     ContactId,
     DocumentId,
     DocumentTypeId,
-    DrawerId,
     FieldId,
     JobId,
+    SpaceId,
     TagId,
     UserId,
     new_id,
 )
 from papiq.core.domain.jobs import Job, JobStatus
 from papiq.core.domain.json_value import JsonValue
-from papiq.core.domain.master_data import Contact, DocumentType, MasterData, Tag
+from papiq.core.domain.master_data import Contact, DocumentType, MasterData, Tag, TagScope
 from papiq.core.domain.pipeline import Lane, NodeRun
+from papiq.core.domain.spaces import Space
 from papiq.core.domain.users import User
 from papiq.core.domain.validation import name_key, require_utc
 from papiq.core.domain.verdict import KnownLabels
@@ -99,12 +99,12 @@ class MemoryUnitOfWork:
         self._held: asyncio.Lock | None = None
 
         self.users = MemoryUserRepository(self, USERS)
-        self.drawers = MemoryDrawerRepository(self, DRAWERS)
+        self.spaces = MemorySpaceRepository(self, SPACES)
         self.contacts = MemoryNamedRepository[ContactId, Contact](self, CONTACTS)
         self.document_types = MemoryNamedRepository[DocumentTypeId, DocumentType](
             self, DOCUMENT_TYPES
         )
-        self.tags = MemoryNamedRepository[TagId, Tag](self, TAGS)
+        self.tags = MemoryTagRepository(self, TAGS)
         self.fields = MemoryNamedRepository[FieldId, FieldDefinition](self, FIELDS)
         self.documents = MemoryDocumentRepository(self, DOCUMENTS)
         self.processing_log = MemoryProcessingLog(self)
@@ -259,6 +259,15 @@ class MemoryNamedRepository[K: UUID, E: MasterData](MemoryRepository[K, E]):
         self._uow._write(self._table, id, _REMOVED)
 
 
+class MemoryTagRepository(MemoryNamedRepository[TagId, Tag]):
+    async def find_by_name(self, name: str, scope: TagScope = TagScope.DOCUMENT) -> Tag | None:
+        key = name_key(name)
+        return next(
+            (_copy(row) for row in self._all() if row.scope is scope and name_key(row.name) == key),
+            None,
+        )
+
+
 class MemoryUserRepository(MemoryRepository[UserId, User]):
     async def find_by_username(self, username: str) -> User | None:
         key = name_key(username)
@@ -269,17 +278,17 @@ class MemoryUserRepository(MemoryRepository[UserId, User]):
         self._uow._write(self._table, id, _REMOVED)
 
 
-class MemoryDrawerRepository(MemoryRepository[DrawerId, Drawer]):
-    async def get_default(self, owner: UserId) -> Drawer:
+class MemorySpaceRepository(MemoryRepository[SpaceId, Space]):
+    async def get_default(self, owner: UserId) -> Space:
         for row in self._all():
             if row.owner_id == owner and row.is_default:
                 return _copy(row)
-        raise NotFoundError("default drawer of user", owner)
+        raise NotFoundError("default space of user", owner)
 
-    async def list_accessible(self, user: UserId) -> list[Drawer]:
+    async def list_accessible(self, user: UserId) -> list[Space]:
         return [_copy(row) for row in self._all() if row.owner_id == user or user in row.shares]
 
-    async def remove(self, id: DrawerId) -> None:
+    async def remove(self, id: SpaceId) -> None:
         await self.get(id)
         self._uow._write(self._table, id, _REMOVED)
 
@@ -292,11 +301,11 @@ class MemoryDocumentRepository(MemoryRepository[DocumentId, Document]):
         return None
 
     async def list_visible_to(self, user: UserId) -> list[Document]:
-        readable = {drawer.id for drawer in await self._uow.drawers.list_accessible(user)}
+        readable = {space.id for space in await self._uow.spaces.list_accessible(user)}
         return [
             _copy(row)
             for row in self._all()
-            if row.owner_id == user or (row.lane is Lane.GREEN and row.drawer_id in readable)
+            if row.owner_id == user or (row.lane is Lane.GREEN and row.space_id in readable)
         ]
 
     async def remove(self, id: DocumentId) -> None:
@@ -328,7 +337,7 @@ class MemoryDocumentRepository(MemoryRepository[DocumentId, Document]):
         limit: int,
     ) -> list[Document]:
         visible = await self.list_visible_to(user)
-        return _query(visible, filter, order=order, after=after, limit=limit)
+        return _query(visible, filter, self._groups(), order=order, after=after, limit=limit)
 
     async def query(
         self,
@@ -339,7 +348,27 @@ class MemoryDocumentRepository(MemoryRepository[DocumentId, Document]):
         limit: int,
     ) -> list[Document]:
         every = [_copy(row) for row in self._all()]
-        return _query(every, filter, order=order, after=after, limit=limit)
+        return _query(every, filter, self._groups(), order=order, after=after, limit=limit)
+
+    def _groups(self) -> "_Groups":
+        return _Groups(
+            {row.id: row.group_ids for row in self._uow._rows(CONTACTS)},
+            {row.id: row.group_ids for row in self._uow._rows(DOCUMENT_TYPES)},
+        )
+
+    async def count_tagged(
+        self, sets: Mapping[UUID, Collection[TagId]], user: UserId | None
+    ) -> dict[UUID, int]:
+        documents = (
+            [_copy(row) for row in self._all()]
+            if user is None
+            else await self.list_visible_to(user)
+        )
+        counts = {
+            key: sum(bool(document.tag_ids & set(tags)) for document in documents)
+            for key, tags in sets.items()
+        }
+        return {key: count for key, count in counts.items() if count}
 
     async def count_by(self, by: CountBy, user: UserId | None) -> dict[UUID, int]:
         documents = (
@@ -354,6 +383,8 @@ class MemoryDocumentRepository(MemoryRepository[DocumentId, Document]):
                     keys: Collection[UUID] = [document.contact_id] if document.contact_id else []
                 case CountBy.DOCUMENT_TYPE:
                     keys = [document.document_type_id] if document.document_type_id else []
+                case CountBy.TOPIC:
+                    keys = [document.topic_id] if document.topic_id else []
                 case CountBy.TAG:
                     keys = document.tag_ids
                 case CountBy.FIELD:
@@ -377,28 +408,31 @@ class MemoryDocumentRepository(MemoryRepository[DocumentId, Document]):
                 row.document_type_id for row in confirmed if row.document_type_id is not None
             ),
             tags=frozenset(tag for row in confirmed for tag in row.tag_ids),
+            topics=frozenset(row.topic_id for row in confirmed if row.topic_id is not None),
         )
 
     async def exists(
         self,
         *,
         owner: UserId | None = None,
-        drawer: DrawerId | None = None,
+        space: SpaceId | None = None,
         contact: ContactId | None = None,
         document_type: DocumentTypeId | None = None,
         tag: TagId | None = None,
+        topic: TagId | None = None,
         field: FieldId | None = None,
         sha256: Sha256 | None = None,
     ) -> bool:
-        criteria = (owner, drawer, contact, document_type, tag, field, sha256)
+        criteria = (owner, space, contact, document_type, tag, topic, field, sha256)
         if all(value is None for value in criteria):
             raise ValueError("exists needs at least one criterion")
         return any(
             (owner is None or row.owner_id == owner)
-            and (drawer is None or row.drawer_id == drawer)
+            and (space is None or row.space_id == space)
             and (contact is None or row.contact_id == contact)
             and (document_type is None or row.document_type_id == document_type)
             and (tag is None or tag in row.tag_ids)
+            and (topic is None or row.topic_id == topic)
             and (field is None or field in row.fields)
             and (sha256 is None or row.sha256 == sha256)
             for row in self._all()
@@ -601,9 +635,25 @@ class MemoryUnitOfWorkFactory:
         return MemoryUnitOfWork(self._database)
 
 
+@dataclass(frozen=True)
+class _Groups:
+    """The groups of each contact and document type."""
+
+    contacts: Mapping[UUID, frozenset[TagId]]
+    document_types: Mapping[UUID, frozenset[TagId]]
+
+    def match(self, document: Document, filter: DocumentFilter) -> bool:
+        contact = self.contacts.get(document.contact_id or UUID(int=0), frozenset())
+        kind = self.document_types.get(document.document_type_id or UUID(int=0), frozenset())
+        return all(groups & contact for groups in filter.contact_groups) and all(
+            groups & kind for groups in filter.document_type_groups
+        )
+
+
 def _query(
     documents: list[Document],
     filter: DocumentFilter,
+    groups: _Groups,
     *,
     order: DocumentOrder,
     after: DocumentPosition | None,
@@ -614,8 +664,10 @@ def _query(
         for document in documents
         if (filter.contact is None or document.contact_id == filter.contact)
         and (filter.document_type is None or document.document_type_id == filter.document_type)
-        and filter.tags <= document.tag_ids
-        and (filter.drawer is None or document.drawer_id == filter.drawer)
+        and (filter.topics is None or document.topic_id in filter.topics)
+        and all(tags & document.tag_ids for tags in filter.tags)
+        and groups.match(document, filter)
+        and (filter.space is None or document.space_id == filter.space)
         and (filter.lanes is None or document.lane in filter.lanes)
         and (filter.confirmed is None or (document.confirmed_at is not None) is filter.confirmed)
         and (filter.field is None or filter.field in document.fields)

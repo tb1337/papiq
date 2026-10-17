@@ -24,6 +24,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
     Uuid,
     false,
     true,
@@ -58,8 +59,8 @@ users = Table(
     Column("version", Integer, nullable=False),
 )
 
-drawers = Table(
-    "drawers",
+spaces = Table(
+    "spaces",
     metadata,
     Column("id", Uuid, primary_key=True),
     Column("owner_id", Uuid, ForeignKey("users.id"), nullable=False),
@@ -70,19 +71,19 @@ drawers = Table(
     Column("version", Integer, nullable=False),
     Index(None, "owner_id", "name_key", unique=True),
 )
-# One default drawer per owner.
+# One default space per owner.
 Index(
-    "uq_drawers_default_owner_id",
-    drawers.c.owner_id,
+    "uq_spaces_default_owner_id",
+    spaces.c.owner_id,
     unique=True,
-    sqlite_where=drawers.c.is_default,
-    postgresql_where=drawers.c.is_default,
+    sqlite_where=spaces.c.is_default,
+    postgresql_where=spaces.c.is_default,
 )
 
-drawer_shares = Table(
-    "drawer_shares",
+space_shares = Table(
+    "space_shares",
     metadata,
-    Column("drawer_id", Uuid, ForeignKey("drawers.id", ondelete="CASCADE"), primary_key=True),
+    Column("space_id", Uuid, ForeignKey("spaces.id", ondelete="CASCADE"), primary_key=True),
     Column("user_id", Uuid, ForeignKey("users.id"), primary_key=True, index=True),
     Column("level", Text, nullable=False),
 )
@@ -101,14 +102,74 @@ def _master_data(name: str, *columns: Column[Any]) -> Table:
     )
 
 
-contacts = _master_data("contacts")
+contacts = _master_data(
+    "contacts",
+    # The stored logo (`objects.logo_key`): `uploaded` or `fetched` (`LogoSource`), the domain
+    # of a fetched one, when it was stored; none without a logo.
+    Column("logo_source", Text, nullable=True),
+    Column("logo_domain", Text, nullable=True),
+    Column("logo_stored_at", UtcDateTime, nullable=True),
+    # The domains whose fetch found no logo (apart by spaces) and when the last did.
+    Column("logo_failed_domains", Text, nullable=True),
+    Column("logo_failed_at", UtcDateTime, nullable=True),
+)
 document_types = _master_data(
     "document_types",
     Column("description", Text, nullable=True),
     # A pattern the title of the type's documents is rendered from (see `domain.titles`).
     Column("title_pattern", Text, nullable=True),
+    # The name of a Lucide icon.
+    Column("icon", Text, nullable=True),
 )
-tags = _master_data("tags")
+# Names are unique per scope (a contact group may be named like a document tag).
+tags = Table(
+    "tags",
+    metadata,
+    Column("id", Uuid, primary_key=True),
+    Column("name", Text, nullable=False),
+    Column("name_key", Text, nullable=False),
+    # `document`, `contact` (a contact group), `document_type` (a type group) or `topic`:
+    # `TagScope`.
+    Column("scope", Text, nullable=False, server_default="document"),
+    # The tag it is nested under, of the same scope (checked by the service, as cycles are).
+    Column("parent_id", Uuid, ForeignKey("tags.id"), nullable=True, index=True),
+    # `auto` (classification proposes it) or `manual` (`Assignment`; groups always).
+    Column("assignment", Text, nullable=False, server_default="auto"),
+    # Whether documents show it.
+    Column("shown", Boolean, nullable=False, server_default=true()),
+    # The name of a Lucide icon; a colour of the palette or `#rrggbb`.
+    Column("icon", Text, nullable=True),
+    Column("color", Text, nullable=True),
+    Column("created_at", UtcDateTime, nullable=False),
+    Column("version", Integer, nullable=False),
+    UniqueConstraint("scope", "name_key"),
+)
+
+# The groups a contact or a document type is in (tags of scope `contact`, `document_type`).
+contact_groups = Table(
+    "contact_groups",
+    metadata,
+    Column("contact_id", Uuid, ForeignKey("contacts.id", ondelete="CASCADE"), primary_key=True),
+    Column("tag_id", Uuid, ForeignKey("tags.id"), primary_key=True, index=True),
+)
+document_type_groups = Table(
+    "document_type_groups",
+    metadata,
+    Column(
+        "document_type_id",
+        Uuid,
+        ForeignKey("document_types.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("tag_id", Uuid, ForeignKey("tags.id"), primary_key=True, index=True),
+)
+# The topics a contact enables (tags of scope `topic`).
+contact_topics = Table(
+    "contact_topics",
+    metadata,
+    Column("contact_id", Uuid, ForeignKey("contacts.id", ondelete="CASCADE"), primary_key=True),
+    Column("tag_id", Uuid, ForeignKey("tags.id"), primary_key=True, index=True),
+)
 
 # Other names of a contact; unique across contacts. That no alias is another contact's name is
 # checked by the service.
@@ -128,8 +189,6 @@ contact_aliases = Table(
     Column("position", Integer, nullable=False),
 )
 
-# Values a contact's documents carry (IBAN, VAT number, ...); kind and value are unique across
-# contacts. `source`: entered by hand, learned by training, or learned and rejected.
 # The trained classifiers; the models themselves are files in the object store.
 classifier_models = Table(
     "classifier_models",
@@ -144,6 +203,9 @@ classifier_models = Table(
     Column("version", Integer, nullable=False),
 )
 
+# Values a contact's documents carry (IBAN, VAT number, ...); kind and value are unique across
+# contacts. `source`: entered by hand, learned by training, or learned and rejected. `topic_id`:
+# the contact's topic it points to (one the contact enables, checked by the domain).
 contact_identifiers = Table(
     "contact_identifiers",
     metadata,
@@ -157,6 +219,7 @@ contact_identifiers = Table(
     Column("kind", Text, primary_key=True),
     Column("value", Text, primary_key=True),
     Column("source", Text, nullable=False),
+    Column("topic_id", Uuid, ForeignKey("tags.id"), nullable=True),
 )
 
 field_definitions = Table(
@@ -173,6 +236,8 @@ field_definitions = Table(
     Column("choices", json_type(), nullable=False),
     # What belongs in the field, for the language model.
     Column("description", Text, nullable=True),
+    # `auto` (the language model reads it) or `manual` (set by hand only, `Assignment`).
+    Column("assignment", Text, nullable=False, server_default="auto"),
     Column("created_at", UtcDateTime, nullable=False),
     Column("version", Integer, nullable=False),
 )
@@ -197,7 +262,7 @@ documents = Table(
     metadata,
     Column("id", Uuid, primary_key=True),
     Column("owner_id", Uuid, ForeignKey("users.id"), nullable=False),
-    Column("drawer_id", Uuid, ForeignKey("drawers.id"), nullable=False, index=True),
+    Column("space_id", Uuid, ForeignKey("spaces.id"), nullable=False, index=True),
     Column("sha256", String(64), nullable=False),
     Column("title", Text, nullable=False),
     # The title as lists sort it (`sort_key`): case and accents aside.
@@ -206,6 +271,8 @@ documents = Table(
     Column("media_type", Text, nullable=False),
     Column("contact_id", Uuid, ForeignKey("contacts.id"), nullable=True),
     Column("document_type_id", Uuid, ForeignKey("document_types.id"), nullable=True),
+    # A tag of scope `topic` the contact enables (checked by the services).
+    Column("topic_id", Uuid, ForeignKey("tags.id"), nullable=True, index=True),
     Column("document_date", Date, nullable=True),
     # Intake channel (`Channel`); documents from before M7 count as `api`.
     Column("channel", Text, nullable=False, server_default="api"),

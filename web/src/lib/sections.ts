@@ -24,7 +24,7 @@ export interface Section {
 export const SECTIONS: readonly Section[] = [
 	{ path: '/inbox', label: m.nav_inbox, icon: Inbox, admin: false },
 	{ path: '/documents', label: m.nav_documents, icon: FileText, admin: false },
-	{ path: '/drawers', label: m.nav_drawers, icon: Archive, admin: false },
+	{ path: '/spaces', label: m.nav_spaces, icon: Archive, admin: false },
 	{ path: '/rules', label: m.nav_rules, icon: Workflow, admin: false },
 	{ path: '/webhooks', label: m.nav_webhooks, icon: Webhook, admin: false },
 	{ path: '/admin/master-data', label: m.nav_master_data, icon: Tags, admin: true },

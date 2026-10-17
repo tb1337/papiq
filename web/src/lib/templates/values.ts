@@ -6,10 +6,13 @@ export const TEMPLATE_NAMES = [
 	'title',
 	'contact',
 	'document_type',
+	'topic',
 	'document_date',
 	'added',
 	'tags',
-	'drawer',
+	'contact_groups',
+	'document_type_groups',
+	'space',
 	'owner',
 	'filename',
 	'original_filename',
@@ -22,10 +25,13 @@ export const TEMPLATE_NAME_LABELS: Record<TemplateName, () => string> = {
 	title: m.field_title,
 	contact: m.field_contact,
 	document_type: m.field_document_type,
+	topic: m.field_topic,
 	document_date: m.field_date,
 	added: m.template_value_added,
 	tags: m.field_tags,
-	drawer: m.field_drawer,
+	contact_groups: m.template_value_contact_groups,
+	document_type_groups: m.template_value_document_type_groups,
+	space: m.field_space,
 	owner: m.template_value_owner,
 	filename: m.template_value_filename,
 	original_filename: m.template_value_original_filename,
@@ -34,7 +40,11 @@ export const TEMPLATE_NAME_LABELS: Record<TemplateName, () => string> = {
 };
 
 /** The lists among the values: a template joins them (`{{ tags | join: ', ' }}`). */
-export const LIST_NAMES: ReadonlySet<string> = new Set(['tags']);
+export const LIST_NAMES: ReadonlySet<string> = new Set([
+	'tags',
+	'contact_groups',
+	'document_type_groups'
+]);
 
 /** The fields a template may use: those of `documentType` (undefined: every field, as in a
  * rule; null: a type not saved yet, so the fields for every type). */

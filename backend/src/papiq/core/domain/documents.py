@@ -2,7 +2,7 @@
 
 import hashlib
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum, StrEnum
@@ -26,8 +26,8 @@ from papiq.core.domain.ids import (
     ContactId,
     DocumentId,
     DocumentTypeId,
-    DrawerId,
     FieldId,
+    SpaceId,
     TagId,
     UserId,
     new_id,
@@ -97,36 +97,59 @@ class DocumentChanges:
     tag_ids: frozenset[TagId] | Unset = UNSET
     document_date: date | Unset | None = UNSET
     fields: Mapping[FieldId, object] = field(default_factory=dict)
+    topic_id: TagId | Unset | None = UNSET
 
 
-CONFIRMING = frozenset({"contact_id", "document_type_id", "tag_ids", "document_date", "fields"})
+CONFIRMING = frozenset(
+    {"contact_id", "document_type_id", "topic_id", "tag_ids", "document_date", "fields"}
+)
 """Metadata a person confirms by changing it (as `Document.apply_changes` names it); a title
-or a drawer alone does not."""
-CLASSIFIER_LABELS = frozenset({"contact_id", "document_type_id", "tag_ids"})
+or a space alone does not, nor do tags set by hand alone (`confirms`)."""
+CLASSIFIER_LABELS = frozenset({"contact_id", "document_type_id", "topic_id", "tag_ids"})
 """What the classifier learns from confirmed documents: the pipeline deriving them anew ends
 the confirmation."""
+
+
+def confirms(
+    changed: Collection[str],
+    tags_before: Collection[TagId],
+    tags_after: Collection[TagId],
+    manual: Collection[TagId],
+) -> bool:
+    """Whether a person's change confirms the metadata: it changed a value in `CONFIRMING`
+    (`changed` as `Document.apply_changes` names them), unless all it changed are tags set by
+    hand (`manual`), added or removed. A status tag such as "to pay" says nothing about contact
+    and type; a change that also adds or removes an automatic tag, or changes any other
+    confirming value, confirms."""
+    touched = CONFIRMING & set(changed)
+    if touched != {"tag_ids"}:
+        return bool(touched)
+    return not set(tags_before) ^ set(tags_after) <= set(manual)
 
 
 @dataclass(kw_only=True)
 class Document:
     """A file with metadata.
 
-    Invariants: exactly one drawer; at most one contact and one document type; field values
-    fit their definition, and type-bound fields only exist while the document has a matching
-    type. `lane` is None while the pipeline runs and is set when it completes or fails.
+    Invariants: exactly one space; at most one contact, one document type and one topic (a
+    tag of scope `topic` its contact enables; the services see to that, `_access`); field
+    values fit their definition, and type-bound fields only exist while the document has a
+    matching type. `lane` is None while the pipeline runs and is set when it completes or
+    fails.
 
     State changes record domain events; `pull_events()` hands them over for the outbox.
     """
 
     id: DocumentId
     owner_id: UserId
-    drawer_id: DrawerId
+    space_id: SpaceId
     sha256: Sha256
     title: str
     original_filename: str
     media_type: str
     contact_id: ContactId | None = None
     document_type_id: DocumentTypeId | None = None
+    topic_id: TagId | None = None
     tag_ids: set[TagId] = field(default_factory=set)
     fields: dict[FieldId, FieldValue] = field(default_factory=dict)
     document_date: date | None = None
@@ -135,8 +158,9 @@ class Document:
     processing: Processing
     page_count: int | None = None  # known once the pages node has rendered the page images
     # When a person last set or confirmed its metadata (in the inbox, or by changing contact,
-    # type, tags, date or fields), or it was taken over with the source system's; None while
-    # its metadata is the pipeline's own. Confirmed documents train the classifier.
+    # type, topic, tags, date or fields; tags set by hand alone do not count, `confirms`), or
+    # it was taken over with the source system's; None while its metadata is the pipeline's
+    # own. Confirmed documents train the classifier.
     confirmed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
@@ -159,7 +183,7 @@ class Document:
         cls,
         *,
         owner_id: UserId,
-        drawer_id: DrawerId,
+        space_id: SpaceId,
         sha256: Sha256,
         original_filename: str,
         media_type: str,
@@ -175,7 +199,7 @@ class Document:
         document = cls(
             id=DocumentId(new_id()),
             owner_id=owner_id,
-            drawer_id=drawer_id,
+            space_id=space_id,
             sha256=sha256,
             title=PurePath(filename).stem or filename,
             original_filename=filename,
@@ -250,7 +274,7 @@ class Document:
             return ()  # a node that was still running after another failed
         if node is Node.FILE and result.outcome is Outcome.OK:
             self._record(
-                DocumentFiled(document_id=self.id, occurred_at=now, drawer_id=self.drawer_id)
+                DocumentFiled(document_id=self.id, occurred_at=now, space_id=self.space_id)
             )
         due = processing.due()
         if not due:
@@ -456,13 +480,14 @@ class Document:
         """Apply a metadata change; returns the names of the changed fields.
 
         `definitions` must contain the definitions of all fields in the change and of all
-        fields the document has. References to contacts, types and tags are checked by the
-        caller. Values of type-bound fields that no longer apply after a type change are
-        removed.
+        fields the document has. References to contacts, types, topics and tags are checked by
+        the caller, and so is that the contact enables the topic (`_access.checked_changes`).
+        Values of type-bound fields that no longer apply after a type change are removed.
         """
         title = require_name(_pick(changes.title, self.title), "title")
         contact_id = _pick(changes.contact_id, self.contact_id)
         document_type_id = _pick(changes.document_type_id, self.document_type_id)
+        topic_id = _pick(changes.topic_id, self.topic_id)
         tag_ids = set(_pick(changes.tag_ids, frozenset(self.tag_ids)))
         document_date = _pick(changes.document_date, self.document_date)
 
@@ -488,6 +513,7 @@ class Document:
             "title": title,
             "contact_id": contact_id,
             "document_type_id": document_type_id,
+            "topic_id": topic_id,
             "tag_ids": tag_ids,
             "document_date": document_date,
             "fields": fields,
@@ -496,6 +522,7 @@ class Document:
         self.title = title
         self.contact_id = contact_id
         self.document_type_id = document_type_id
+        self.topic_id = topic_id
         self.tag_ids = tag_ids
         self.document_date = document_date
         self.fields = fields
@@ -512,15 +539,16 @@ class Document:
         self._touch(now)
 
     def drop_confirmation(self) -> None:
-        """The pipeline derived contact, type or tags anew: they are no longer a person's."""
+        """The pipeline derived contact, type, topic or tags anew: they are no longer a
+        person's."""
         self.confirmed_at = None
 
-    def move_to(self, drawer_id: DrawerId, now: datetime) -> None:
-        """File the document into another drawer. Permissions are checked by the caller."""
-        if drawer_id == self.drawer_id:
+    def move_to(self, space_id: SpaceId, now: datetime) -> None:
+        """File the document into another space. Permissions are checked by the caller."""
+        if space_id == self.space_id:
             return
-        self.drawer_id = drawer_id
-        self._record(DocumentFiled(document_id=self.id, occurred_at=now, drawer_id=drawer_id))
+        self.space_id = space_id
+        self._record(DocumentFiled(document_id=self.id, occurred_at=now, space_id=space_id))
         self._touch(now)
 
     def delete(self, now: datetime, readers: Iterable[UserId] = ()) -> None:

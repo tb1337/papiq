@@ -3,11 +3,11 @@
 import pytest
 
 from papiq.core.domain.documents import DocumentChanges
-from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import NotFoundError, ValidationError
 from papiq.core.domain.ids import DocumentId, new_id
 from papiq.core.domain.pipeline import RULES_APPLY, Lane
-from papiq.core.domain.rules import ApplicationStatus, ForceReview, SetDrawer, SetTitle
+from papiq.core.domain.rules import ApplicationStatus, ForceReview, SetSpace, SetTitle
+from papiq.core.domain.spaces import ShareLevel
 from papiq.core.services.rules.retroactive import BATCH
 from tests.unit.services.conftest import World
 from tests.unit.services.rules_support import (
@@ -106,12 +106,12 @@ async def test_the_job_checks_the_rights_again_and_a_global_rule_moves_nothing(
     r = await rule_world(world)
     owner, editor = await world.user(), await world.user()
     seen = await r.tag("seen")
-    shared = await world.drawers.create(owner.id, "Shared")
-    readable = await world.drawers.create(owner.id, "Readable")
-    await world.drawers.share(owner.id, shared.id, editor.id, ShareLevel.READ_WRITE)
-    await world.drawers.share(owner.id, readable.id, editor.id, ShareLevel.READ)
-    in_shared = await r.arrive(owner, drawer=shared.id)
-    await r.arrive(owner, drawer=readable.id)
+    shared = await world.spaces.create(owner.id, "Shared")
+    readable = await world.spaces.create(owner.id, "Readable")
+    await world.spaces.share(owner.id, shared.id, editor.id, ShareLevel.READ_WRITE)
+    await world.spaces.share(owner.id, readable.id, editor.id, ShareLevel.READ)
+    in_shared = await r.arrive(owner, space=shared.id)
+    await r.arrive(owner, space=readable.id)
     private = await r.arrive(owner)
     own = await r.arrive(editor)
     rule = await r.global_rule(
@@ -125,7 +125,7 @@ async def test_the_job_checks_the_rights_again_and_a_global_rule_moves_nothing(
     application = await r.applications.start(
         editor.id, rule.id, version=1, documents=[in_shared.id, own.id, private.id]
     )
-    await world.drawers.share(owner.id, shared.id, editor.id, ShareLevel.READ)
+    await world.spaces.share(owner.id, shared.id, editor.id, ShareLevel.READ)
     await run_jobs(r)
 
     done = await r.applications.get(editor.id, application.id)
@@ -134,10 +134,10 @@ async def test_the_job_checks_the_rights_again_and_a_global_rule_moves_nothing(
     assert (await r.stored(in_shared)).tag_ids == set()
     assert (await r.stored(private)).tag_ids == set()
     changed = await r.stored(own)
-    assert (changed.tag_ids, changed.lane, changed.drawer_id) == (
+    assert (changed.tag_ids, changed.lane, changed.space_id) == (
         {seen.id},
         Lane.GREEN,
-        own.drawer_id,
+        own.space_id,
     )
 
 
@@ -145,9 +145,9 @@ async def test_a_user_rule_is_applied_by_its_owner_to_their_own_documents(world:
     r = await rule_world(world)
     owner, colleague = await world.user(), await world.user()
     tax = await r.tag("tax")
-    office = await world.drawers.create(colleague.id, "Office")
-    await world.drawers.share(colleague.id, office.id, owner.id, ShareLevel.READ_WRITE)
-    theirs = await r.arrive(colleague, drawer=office.id)
+    office = await world.spaces.create(colleague.id, "Office")
+    await world.spaces.share(colleague.id, office.id, owner.id, ShareLevel.READ_WRITE)
+    theirs = await r.arrive(colleague, space=office.id)
     mine = await r.arrive(owner)
     rule = await r.user_rule(owner, definition("Tax", channel_api(), add_tags(tax.id)))
 
@@ -235,25 +235,25 @@ async def test_filing_on_an_unconfirmed_contact_is_a_conflict_until_accepted(
     r = await rule_world(world)
     owner, reader = await world.user(), await world.user()
     acme = await r.contact("ACME")
-    shared = await world.drawers.create(owner.id, "Shared")
-    await world.drawers.share(owner.id, shared.id, reader.id, ShareLevel.READ)
+    shared = await world.spaces.create(owner.id, "Shared")
+    await world.spaces.share(owner.id, shared.id, reader.id, ShareLevel.READ)
     # The model set the contact; no person confirmed it.
     document = await r.arrive(owner, classify=Classifies(contact=acme.id))
-    rule = await r.user_rule(owner, definition("ACME", contact_is(acme.id), SetDrawer(shared.id)))
+    rule = await r.user_rule(owner, definition("ACME", contact_is(acme.id), SetSpace(shared.id)))
 
     (item,) = (await r.applications.preview(owner.id, rule.id)).items
     assert item.effects == ()
-    assert [(note.field, note.kind) for note in item.conflicts] == [("drawer", "conflict")]
+    assert [(note.field, note.kind) for note in item.conflicts] == [("space", "conflict")]
 
     await r.applications.start(owner.id, rule.id, version=1, documents=[document.id])
     await run_jobs(r)
-    assert (await r.stored(document)).drawer_id == document.drawer_id
+    assert (await r.stored(document)).space_id == document.space_id
 
     await r.applications.start(
         owner.id, rule.id, version=1, documents=[document.id], accept_conflicts=[document.id]
     )
     await run_jobs(r)
-    assert (await r.stored(document)).drawer_id == shared.id
+    assert (await r.stored(document)).space_id == shared.id
 
 
 async def test_an_unexpected_error_ends_the_application(world: World) -> None:

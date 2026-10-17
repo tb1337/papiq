@@ -8,7 +8,7 @@
 	import { describeError } from '#lib/errors.ts';
 	import { loadLookup, type Lookup } from '#lib/masterdata.svelte.ts';
 	import { m } from '#lib/paraglide/messages.js';
-	import { drawersFor } from '#lib/permissions.ts';
+	import { spacesFor } from '#lib/permissions.ts';
 	import { problemText } from '#lib/rules/describe.ts';
 	import { saveErrors } from '#lib/rules/errors.ts';
 	import { newModel, toApi, validate, type Scope } from '#lib/rules/model.ts';
@@ -23,7 +23,7 @@
 	let general = $state<string | null>(null);
 	let busy = $state(false);
 
-	const drawers = $derived(drawersFor(lookup?.drawers ?? [], session.user, session.user));
+	const spaces = $derived(spacesFor(lookup?.spaces ?? [], session.user, session.user));
 
 	onMount(() => {
 		loadLookup().then(
@@ -77,7 +77,7 @@
 			scopes={session.isAdmin ? ['user', 'global'] : []}
 			onscope={(next) => (scope = next)}
 			{lookup}
-			{drawers}
+			{spaces}
 			{errors}
 			{general}
 			{busy}

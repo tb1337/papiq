@@ -62,8 +62,19 @@ class State:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(path)
         self._db.executescript(SCHEMA)
-        # Papiq 0.1 called fields "attributes".
+        # Papiq 0.1 called fields "attributes", Papiq before 0.3 spaces "drawers".
         self._db.execute("UPDATE objects SET kind = 'field' WHERE kind = 'attribute'")
+        self._db.execute("UPDATE objects SET kind = 'space' WHERE kind = 'drawer'")
+        rows = self._db.execute(
+            "SELECT source_id, detail FROM documents WHERE detail LIKE '%\"drawer\"%'"
+        ).fetchall()
+        for source_id, text in rows:
+            old = json.loads(text)
+            detail = {"space" if key == "drawer" else key: value for key, value in old.items()}
+            self._db.execute(
+                "UPDATE documents SET detail = ? WHERE source_id = ?",
+                (json.dumps(detail), source_id),
+            )
         self._db.commit()
 
     def close(self) -> None:

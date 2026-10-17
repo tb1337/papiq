@@ -54,6 +54,8 @@ export default defineConfig({
 	test: {
 		environment: 'jsdom',
 		include: ['src/**/*.test.ts', 'tests/**/*.test.ts'],
-		setupFiles: ['./tests/setup.ts']
+		setupFiles: ['./tests/setup.ts'],
+		// The colour tests read the palette's tokens from it (`?raw`).
+		css: { include: [/app\.css/] }
 	}
 });

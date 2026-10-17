@@ -37,8 +37,8 @@ describe('apiFetch', () => {
 		setSessionHooks(hooks());
 		fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
 
-		await apiFetch(new Request(`${ORIGIN}/api/v1/drawers`, { method: 'POST', body: '{}' }));
-		await apiFetch(new Request(`${ORIGIN}/api/v1/drawers`));
+		await apiFetch(new Request(`${ORIGIN}/api/v1/spaces`, { method: 'POST', body: '{}' }));
+		await apiFetch(new Request(`${ORIGIN}/api/v1/spaces`));
 
 		expect(fetchMock.mock.calls[0][0].headers.get(CSRF_HEADER)).toBe('token-1');
 		expect(fetchMock.mock.calls[1][0].headers.get(CSRF_HEADER)).toBeNull();
@@ -53,7 +53,7 @@ describe('apiFetch', () => {
 
 	it('sends cookies of this site', async () => {
 		fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
-		await apiFetch(new Request(`${ORIGIN}/api/v1/drawers`));
+		await apiFetch(new Request(`${ORIGIN}/api/v1/spaces`));
 		expect(fetchMock.mock.calls[0][0].credentials).toBe('same-origin');
 	});
 
@@ -65,7 +65,7 @@ describe('apiFetch', () => {
 			.mockResolvedValueOnce(new Response('{"id":1}', { status: 201 }));
 
 		const response = await apiFetch(
-			new Request(`${ORIGIN}/api/v1/drawers`, { method: 'POST', body: '{"name":"a"}' })
+			new Request(`${ORIGIN}/api/v1/spaces`, { method: 'POST', body: '{"name":"a"}' })
 		);
 
 		expect(response.status).toBe(201);
@@ -93,7 +93,7 @@ describe('apiFetch', () => {
 		setSessionHooks(hooks({ refreshCsrfToken: async () => null }));
 		fetchMock.mockResolvedValue(problem(403, STALE));
 
-		const response = await apiFetch(new Request(`${ORIGIN}/api/v1/drawers`, { method: 'DELETE' }));
+		const response = await apiFetch(new Request(`${ORIGIN}/api/v1/spaces`, { method: 'DELETE' }));
 
 		expect(response.status).toBe(403);
 		expect(fetchMock).toHaveBeenCalledOnce();

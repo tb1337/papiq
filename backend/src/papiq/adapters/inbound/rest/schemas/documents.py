@@ -7,12 +7,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from papiq.adapters.inbound.rest.schemas.drawers import ShareOut
+from papiq.adapters.inbound.rest.schemas.spaces import ShareOut
 from papiq.adapters.inbound.schemas import FieldJson, RuleReportOut, field_json
 from papiq.core.domain.documents import Channel, Document
-from papiq.core.domain.drawers import Drawer, ShareLevel
 from papiq.core.domain.exchanges import ModelCall, RunExchange
-from papiq.core.domain.permissions import can_manage_drawer
+from papiq.core.domain.permissions import can_manage_space
 from papiq.core.domain.pipeline import (
     Lane,
     Node,
@@ -23,6 +22,7 @@ from papiq.core.domain.pipeline import (
     ProcessingStatus,
 )
 from papiq.core.domain.reading import DocumentReading, VisionAdvice
+from papiq.core.domain.spaces import ShareLevel, Space
 from papiq.core.domain.users import User
 from papiq.core.services.objects import EXCHANGE_NODES
 
@@ -102,10 +102,11 @@ class DocumentDetails(BaseModel):
                     "channel": "web",
                     "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
                     "owner_id": "01999d5e-1111-7c1e-b6a3-2f4d5e6f7a8b",
-                    "drawer_id": "01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b",
+                    "space_id": "01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b",
                     "access": "read_write",
                     "contact_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b",
                     "document_type_id": None,
+                    "topic_id": None,
                     "tag_ids": [],
                     "document_date": "2026-03-31",
                     "fields": {
@@ -157,10 +158,13 @@ class DocumentDetails(BaseModel):
         examples=["9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"],
     )
     owner_id: UUID
-    drawer_id: UUID
+    space_id: UUID
     access: ShareLevel = Field(description="What the caller may do: read, or read and write.")
     contact_id: UUID | None
     document_type_id: UUID | None
+    topic_id: UUID | None = Field(
+        description="A topic (tag of scope `topic`) the contact enables; at most one."
+    )
     tag_ids: list[UUID]
     document_date: date | None
     fields: dict[UUID, FieldJson] = Field(description="Values by field id.")
@@ -171,9 +175,9 @@ class DocumentDetails(BaseModel):
     confirmed_at: datetime | None = Field(
         description=(
             "When a person last set or confirmed the metadata (in the inbox, or by changing "
-            "contact, type, tags, date or fields), or it was taken over with the source "
-            "system's; null while it is the pipeline's own. Confirmed documents train the "
-            "classifier."
+            "contact, type, topic, tags, date or fields; adding or removing tags set by hand "
+            "alone does not count), or it was taken over with the source system's; null while "
+            "it is the pipeline's own. Confirmed documents train the classifier."
         )
     )
     processing: Processing
@@ -191,10 +195,11 @@ class DocumentDetails(BaseModel):
             channel=document.channel,
             sha256=document.sha256.hex,
             owner_id=document.owner_id,
-            drawer_id=document.drawer_id,
+            space_id=document.space_id,
             access=access,
             contact_id=document.contact_id,
             document_type_id=document.document_type_id,
+            topic_id=document.topic_id,
             tag_ids=sorted(document.tag_ids),
             document_date=document.document_date,
             fields={key: field_json(value) for key, value in sorted(document.fields.items())},
@@ -220,7 +225,9 @@ class DocumentPage(BaseModel):
 
 
 class DocumentPatch(BaseModel):
-    """Fields left out stay as they are; null removes a value."""
+    """Fields left out stay as they are; null removes a value. A new contact that does not
+    enable the document's topic removes the topic; a topic given must be one the contact
+    enables (422), unless an admin gives it: it is then enabled at the contact."""
 
     model_config = ConfigDict(
         extra="forbid",
@@ -245,6 +252,7 @@ class DocumentPatch(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=500)
     contact_id: UUID | None = None
     document_type_id: UUID | None = None
+    topic_id: UUID | None = None
     tag_ids: list[UUID] | None = Field(default=None, max_length=500)
     document_date: date | None = None
     fields: dict[UUID, Any] | None = Field(
@@ -285,10 +293,10 @@ class ImportedMetadataIn(BaseModel):
 class MoveRequest(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
-        json_schema_extra={"examples": [{"drawer_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b"}]},
+        json_schema_extra={"examples": [{"space_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b"}]},
     )
 
-    drawer_id: UUID
+    space_id: UUID
 
 
 class DocumentTextOut(BaseModel):
@@ -404,31 +412,29 @@ class DocumentOutOfReach(BaseModel):
 
 
 class VisibilityOut(BaseModel):
-    """Who sees the document. Its owner always; while it is green also the drawer's owner and
-    the users the drawer is shared with."""
+    """Who sees the document. Its owner always; while it is green also the space's owner and
+    the users the space is shared with."""
 
     owner_id: UUID = Field(description="The document's owner.")
-    drawer_id: UUID
-    drawer_owner_id: UUID | None = Field(description="None unless the document is green.")
+    space_id: UUID
+    space_owner_id: UUID | None = Field(description="None unless the document is green.")
     shares: list[ShareOut] | None = Field(
         description=(
-            "The drawer's shares, if the document is green and the caller owns the drawer or is "
+            "The space's shares, if the document is green and the caller owns the space or is "
             "an admin; otherwise not shown."
         )
     )
 
     @classmethod
-    def of(cls, document: Document, drawer: Drawer, viewer: User) -> "VisibilityOut":
+    def of(cls, document: Document, space: Space, viewer: User) -> "VisibilityOut":
         green = document.lane is Lane.GREEN
         shares = None
-        if green and can_manage_drawer(viewer, drawer):
-            shares = [
-                ShareOut(user_id=u, level=level) for u, level in sorted(drawer.shares.items())
-            ]
+        if green and can_manage_space(viewer, space):
+            shares = [ShareOut(user_id=u, level=level) for u, level in sorted(space.shares.items())]
         return cls(
             owner_id=document.owner_id,
-            drawer_id=drawer.id,
-            drawer_owner_id=drawer.owner_id if green else None,
+            space_id=space.id,
+            space_owner_id=space.owner_id if green else None,
             shares=shares,
         )
 
@@ -440,8 +446,8 @@ class DocumentPreviewOut(BaseModel):
         description="The document after the change; null if the caller could not read it then."
     )
     changed: list[str] = Field(
-        description="Fields that would change: `title`, `contact`, `document_type`, `tags`, "
-        "`document_date`, `field:<id>`, `drawer`."
+        description="Fields that would change: `title`, `contact`, `document_type`, `topic`, "
+        "`tags`, `document_date`, `field:<id>`, `space`."
     )
     rules: list[RuleReportOut] | None = Field(
         description="For the owner: the rules the change would set off, and what they would do."

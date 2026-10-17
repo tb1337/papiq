@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 from papiq.core.domain.classification import FieldCheck, checks_to_json
 from papiq.core.domain.documents import Channel, Document, DocumentChanges
 from papiq.core.domain.errors import PatternTimeoutError
-from papiq.core.domain.ids import ContactId, DocumentTypeId, DrawerId, TagId
+from papiq.core.domain.ids import ContactId, DocumentTypeId, SpaceId, TagId
 from papiq.core.domain.json_value import JsonObject, JsonValue
 from papiq.core.domain.master_data import Contact, Tag
 from papiq.core.domain.pipeline import Node, NodeResult, NodeRun, Outcome
@@ -62,7 +62,8 @@ class FakeMatcher:
 
 
 class Classifies:
-    """Classification that sets a contact and tags as the model does: applied, unconfirmed."""
+    """Classification that sets a contact, type, topic and tags as the model does: applied,
+    unconfirmed."""
 
     def __init__(
         self,
@@ -70,10 +71,12 @@ class Classifies:
         contact: ContactId | None = None,
         tags: Iterable[TagId] = (),
         document_type: DocumentTypeId | None = None,
+        topic: TagId | None = None,
     ) -> None:
         self.contact = contact
         self.tags = frozenset(tags)
         self.document_type = document_type
+        self.topic = topic
 
     async def run(self, document: Document) -> MetadataResult:
         checks: list[FieldCheck] = []
@@ -95,6 +98,11 @@ class Classifies:
                 )
             )
             changes = replace(changes, document_type_id=self.document_type)
+        if self.topic is not None:
+            checks.append(
+                FieldCheck(field="topic", outcome=Outcome.OK, confidence=1, value=str(self.topic))
+            )
+            changes = replace(changes, topic_id=self.topic)
         tags: list[JsonValue] = [str(tag) for tag in sorted(self.tags)]
         checks.append(FieldCheck(field="tags", outcome=Outcome.OK, confidence=0.9, value=tags))
         result = NodeResult(
@@ -244,7 +252,7 @@ class RuleWorld:
         self,
         owner: User,
         *,
-        drawer: DrawerId | None = None,
+        space: SpaceId | None = None,
         text: str | None = None,
         classify: NodeExecutor | None = None,
         fields: NodeExecutor | None = None,
@@ -253,9 +261,7 @@ class RuleWorld:
         """Upload a document, give it `text` as its parsed Markdown, process it; the stored
         document."""
         pipeline = self.pipeline(classify, fields)
-        received = await pipeline.receive(
-            owner.id, incoming_pdf(), filename=filename, drawer=drawer
-        )
+        received = await pipeline.receive(owner.id, incoming_pdf(), filename=filename, space=space)
         if text is not None:
             await self.world.object_store.put(
                 text_key(received.id), text.encode(), content_type="text/markdown"

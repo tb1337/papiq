@@ -1,0 +1,54 @@
+{
+  "description": "A letter of the insurance group showing two identifiers that point to different topics (the personnel number to Arbeit, the policy to Krankenversicherung): the topic stays empty, with both as candidates; a topic never makes a document wait.",
+  "expected": {
+    "lane": "green",
+    "contact": "Hanse Versicherung AG",
+    "document_type": "Versicherung",
+    "topic": "Krankenversicherung",
+    "tags": [
+      "Krankenversicherung",
+      "Versicherung"
+    ],
+    "document_date": "2026-03-20",
+    "fields": {
+      "Versicherungsnummer": "KV-2026-77310",
+      "Beitrag": {
+        "amount": "24.90",
+        "currency": "EUR"
+      }
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Hanse Versicherung AG",
+        "evidence": "Hanse Versicherung AG"
+      },
+      "document_type": "Versicherung",
+      "new_document_type": null,
+      "topic": "Krankenversicherung",
+      "tags": [
+        "Krankenversicherung",
+        "Versicherung"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-03-20",
+        "evidence": "Hamburg, 20.03.2026"
+      }
+    },
+    "fields": {
+      "Versicherungsnummer": {
+        "value": "KV-2026-77310",
+        "evidence": "Versicherungsschein-Nr.: KV-2026-77310"
+      },
+      "Beitrag": {
+        "value": {
+          "amount": "24.90",
+          "currency": "EUR"
+        },
+        "evidence": "| Zahn Plus | 24,90 € |"
+      }
+    }
+  }
+}

@@ -61,6 +61,7 @@ from papiq.core.domain.verdict import (
     Thresholds,
     judge_contact,
     judge_tags,
+    judge_topic,
     judge_type,
 )
 from papiq.core.ports import Clock, LanguageModel, ObjectStore, TextLocator, UnitOfWorkFactory
@@ -258,9 +259,10 @@ class _ModelStep:
 
 class LlmSignal(_ModelStep):
     """The language model's proposal (`signal_llm`): one request for the sender and the
-    recipient, the type, tags, date, a title and the language, and the values of the fields of
-    the type it chooses and of the global ones. Without a model it abstains; two unfit answers
-    fail it. It checks nothing: the judge and the fields node do."""
+    recipient, the type, the topic (among those of the contacts listed), tags, date, a title
+    and the language, and the values of the fields of the type it chooses and of the global
+    ones. Without a model it abstains; two unfit answers fail it. It checks nothing: the judge
+    and the fields node do."""
 
     async def run(self, document: Document) -> NodeResult:
         if self._model is None:
@@ -269,11 +271,25 @@ class LlmSignal(_ModelStep):
         async with self._uow() as uow:
             contacts = await uow.contacts.list_all()
             types = sorted(await uow.document_types.list_all(), key=lambda item: item.name)
-            tags = sorted(await uow.tags.list_all(), key=lambda item: item.name)
-            definitions = sorted(await uow.fields.list_all(), key=lambda item: item.name)
+            every = await uow.tags.list_all()
+            # Only the tags the classification sets: document tags, not those set by hand.
+            tags = sorted((item for item in every if item.is_target), key=lambda item: item.name)
+            topics = {item.id: item.name for item in every if item.is_topic_target}
+            definitions = sorted(
+                (item for item in await uow.fields.list_all() if item.is_read),
+                key=lambda item: item.name,
+            )
         facts = DocumentText(text)
         listed = _listed_tags(tags, facts, self._policy.max_tags)
         candidates = _listed_contacts(contacts, facts, self._policy.max_contacts)
+        # The topics of each contact listed: the answer names one of the sender's.
+        enabled = {
+            contact.id: tuple(
+                sorted((topics[id] for id in contact.topic_ids if id in topics), key=str.casefold)
+            )
+            for contact in candidates
+        }
+        topic_names = sorted({name for names in enabled.values() for name in names})
         keys = field_keys(definitions)
         key_of = {definition.id: key for key, definition in keys.items()}
         typed = [
@@ -295,6 +311,7 @@ class LlmSignal(_ModelStep):
             "document_types": len(types),
             "tags": len(tags),
             "tags_listed": len(listed),
+            "topics_listed": len(topic_names),
             "fields": {key: str(definition.id) for key, definition in keys.items()},
         }
         tag_names = [item.name for item in listed]
@@ -304,13 +321,16 @@ class LlmSignal(_ModelStep):
                 Node.SIGNAL_LLM,
                 PROPOSE_SYSTEM,
                 propose_message(
-                    [Listed(item.name, aliases=tuple(item.aliases)) for item in candidates],
+                    [
+                        Listed(item.name, aliases=tuple(item.aliases), topics=enabled[item.id])
+                        for item in candidates
+                    ],
                     typed,
                     general,
                     tag_names,
                     sent,
                 ),
-                propose_schema([item.name for item in types], tag_names, list(keys)),
+                propose_schema([item.name for item in types], tag_names, list(keys), topic_names),
                 "proposal",
                 lambda content: parse_propose(content, list(keys)),
             )
@@ -321,6 +341,7 @@ class LlmSignal(_ModelStep):
             "recipient": answer.recipient,
             "document_type": answer.document_type,
             "new_document_type": answer.new_document_type,
+            "topic": answer.topic,
             "tags": list[JsonValue](answer.tags),
             "new_tags": list[JsonValue](answer.new_tags),
             "document_date": _proposal_json(answer.document_date),
@@ -344,10 +365,11 @@ class LlmSignal(_ModelStep):
 
 
 class JudgeNode(_ModelStep):
-    """The judge (`judge`): contact, document type and tags from the signals' proposals by the
-    rules of `domain.verdict`, and the document date the model read, checked against the text.
-    What is green is applied; tags are added. A document the model answered for, but no signal
-    recognised anything in, fails (red); without the model's proposal the judge is uncertain."""
+    """The judge (`judge`): contact, document type, topic and tags from the signals' proposals
+    by the rules of `domain.verdict`, and the document date the model read, checked against the
+    text. What is green is applied; tags are added. A document the model answered for, but no
+    signal recognised anything in, fails (red); without the model's proposal the judge is
+    uncertain."""
 
     def __init__(
         self,
@@ -400,6 +422,7 @@ class JudgeNode(_ModelStep):
             )
         contact = judge_contact(signals, contacts, self._thresholds)
         kind = judge_type(signals, types, self._thresholds)
+        topic = judge_topic(signals, contact, contacts, tags, self._thresholds)
         tagged = judge_tags(signals, tags, self._thresholds)
         model_entry = entries.get(Node.SIGNAL_LLM)
         llm_input = model_entry.result.input if model_entry is not None else {}
@@ -426,16 +449,19 @@ class JudgeNode(_ModelStep):
                 reason="nothing recognised: no contact, document type or date",
                 model_version=model_version,
                 input=input,
-                output={"fields": checks_to_json([contact, kind, tagged, date_check])},
+                output={"fields": checks_to_json([contact, kind, topic, tagged, date_check])},
             )
-        contact, kind, tagged, date_check = await self._locate(
-            document, [contact, kind, tagged, date_check]
+        contact, kind, topic, tagged, date_check = await self._locate(
+            document, [contact, kind, topic, tagged, date_check]
         )
         date_check = _readable(date_check, _ocr_readings(log), self._policy.poor_reading)
-        checks = [contact, kind, tagged, date_check]
+        checks = [contact, kind, topic, tagged, date_check]
+        # A topic set is one of the contact's; a contact set that does not enable the
+        # document's topic clears it (`checked_changes`).
         changes = DocumentChanges(
             contact_id=_applied(contact, lambda value: ContactId(UUID(value))),
             document_type_id=_applied(kind, lambda value: _by_id(types, value).id),
+            topic_id=_applied(topic, lambda value: _by_id(tags, value).id),
             document_date=_applied(date_check, date.fromisoformat),
         )
         # Tags are added: those the document has (set by its owner) stay.
@@ -464,7 +490,8 @@ class FieldsNode(_ModelStep):
     document from before the signals) the fields it did not give are asked for. A required
     field the document does not show is uncertain, an optional one stays empty; a value given
     must pass its check either way. Without a model nothing reads the missing ones: the same
-    holds, the required ones say why.
+    holds, the required ones say why. A field set by hand is never asked for and keeps its
+    value (the rules node checks that a required one has one).
 
     The title comes from the type's title pattern, or from the model's proposal, as long as
     the document's title is still the file name or the one set here before."""
@@ -494,14 +521,14 @@ class FieldsNode(_ModelStep):
             )
             proposed = proposal.get("fields") or {}
             for definition in definitions:
-                if definition.is_global or same_type:
+                if definition.is_read and (definition.is_global or same_type):
                     written = proposed.get(str(definition.id)) or {}
                     given[definition.id] = Proposal(
                         value=written.get("value"), evidence=written.get("evidence")
                     )
-        missing = [item for item in definitions if item.id not in given]
+        missing = [item for item in definitions if item.is_read and item.id not in given]
         answers: list[StructuredAnswer] = []
-        text = await self._text(document) if definitions else ""
+        text = await self._text(document) if any(item.is_read for item in definitions) else ""
         taken_over = len(given)
         input: JsonObject = {"taken_over": taken_over}
         unread: set[FieldId] = set()
@@ -543,6 +570,8 @@ class FieldsNode(_ModelStep):
                 language=language,
                 default_currency=self._policy.default_currency,
             )
+            if definition.is_read
+            else _set_by_hand(definition)
             for definition in definitions
         ]
         checks = [
@@ -639,6 +668,17 @@ def _check_date(field: str, proposal: Proposal, facts: DocumentText, today: date
         )
     return _verified(
         common, value.isoformat(), proposal, facts, facts.has_date(value), "date", literal=True
+    )
+
+
+def _set_by_hand(definition: FieldDefinition) -> FieldCheck:
+    """A field set by hand is never read: its value stays as the document has it. Whether a
+    required one has a value is checked after the rules, which may set it (`ApplyRulesNode`)."""
+    return FieldCheck(
+        field=field_key(definition.id),
+        outcome=Outcome.OK,
+        confidence=1,
+        reason=f"'{definition.name}' is set by hand",
     )
 
 
@@ -739,7 +779,7 @@ def _check_period(
     today: date,
     document_date: date | None,
 ) -> FieldCheck:
-    """A period as the model gives it: `{start, end}` (extract-4) or as written (propose-2:
+    """A period as the model gives it: `{start, end}` (extract-4) or as written (propose-3:
     `September 2026`, `KW 38/2026`, `01.09.-30.09.2026`). Its quoted passage must show it. One
     without a year takes that of the document date and is only suggested, as is a single day
     equal to the document date (models put the document date where the text shows none)."""

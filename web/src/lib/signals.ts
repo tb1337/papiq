@@ -109,6 +109,7 @@ export function signalSummary(entry: LogEntry, lookup: Lookup | null): SummaryRo
 						text: `${item.text} (${m.candidate_new()})`
 					}))
 				]),
+				...('topic' in proposal ? [row(m.field_topic(), value('topic'))] : []),
 				row(m.field_date(), value('document_date', true)),
 				row(m.field_title(), value('title')),
 				row(m.signal_language(), value('language'))
@@ -117,7 +118,8 @@ export function signalSummary(entry: LogEntry, lookup: Lookup | null): SummaryRo
 		case 'signal_classifier':
 			return [
 				row(m.signal_contacts(), ranked(output.contacts, lookup)),
-				row(m.signal_document_types(), ranked(output.document_types, lookup))
+				row(m.signal_document_types(), ranked(output.document_types, lookup)),
+				...('topics' in output ? [row(m.signal_topics(), ranked(output.topics, lookup))] : [])
 			];
 		case 'signal_neighbours':
 			return [
@@ -125,7 +127,7 @@ export function signalSummary(entry: LogEntry, lookup: Lookup | null): SummaryRo
 					m.signal_neighbours(),
 					list(output.neighbours).map((item, index) => {
 						const found = object(item);
-						const about = [found.contact_id, found.document_type_id]
+						const about = [found.contact_id, found.document_type_id, found.topic_id]
 							.filter((id) => typeof id === 'string')
 							.map((id) => named(id, lookup));
 						const title = m.signal_document({ number: index + 1 });
@@ -157,8 +159,10 @@ export function signalSummary(entry: LogEntry, lookup: Lookup | null): SummaryRo
 					m.signal_identifiers(),
 					list(output.identifiers).map((item) => {
 						const found = object(item);
+						const topic =
+							typeof found.topic_id === 'string' ? ` · ${named(found.topic_id, lookup)}` : '';
 						return {
-							text: `${kind(found.kind)} ${String(found.value ?? '')}: ${named(found.contact_id, lookup)}`
+							text: `${kind(found.kind)} ${String(found.value ?? '')}: ${named(found.contact_id, lookup)}${topic}`
 						};
 					})
 				),

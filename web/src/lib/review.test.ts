@@ -6,7 +6,7 @@ type Document = components['schemas']['DocumentDetails'];
 type Check = components['schemas']['FieldCheckOut'];
 
 const document = {
-	drawer_id: 'd1',
+	space_id: 'd1',
 	contact_id: null,
 	document_type_id: 'type-old',
 	document_date: null,

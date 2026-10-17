@@ -1,4 +1,4 @@
-"""Contacts, document types and fields."""
+"""Contacts, document types, tags and fields."""
 
 from datetime import datetime
 from typing import Annotated
@@ -6,17 +6,25 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from papiq.adapters.inbound.rest.paths import logo_url
 from papiq.adapters.inbound.rest.schemas.common import Name, NameIn
+from papiq.core.domain.appearance import MAX_ICON, ContactLogo, LogoSource, PaletteColor
 from papiq.core.domain.fields import FieldDefinition, FieldType
 from papiq.core.domain.identifiers import MAX_IDENTIFIERS, IdentifierKind, IdentifierSource
 from papiq.core.domain.master_data import (
     MAX_ALIASES,
     MAX_DESCRIPTION,
+    MAX_GROUPS,
     MAX_TITLE_PATTERN,
+    MAX_TOPICS,
+    Assignment,
     Contact,
     DocumentType,
     MasterData,
+    Tag,
+    TagScope,
 )
+from papiq.core.domain.tag_tree import TagTree
 
 
 class MasterDataOut(BaseModel):
@@ -61,6 +69,12 @@ class IdentifierIn(BaseModel):
 
     kind: IdentifierKind
     value: str = Field(min_length=1, max_length=100, examples=["DE89 3704 0044 0532 0130 00"])
+    topic_id: UUID | None = Field(
+        default=None,
+        description="One of the contact's topics it points to (a personnel number to work): "
+        "found in a document, it is evidence for the contact and the topic. Not for a rejected "
+        "one.",
+    )
 
 
 class IdentifierOut(BaseModel):
@@ -70,6 +84,10 @@ class IdentifierOut(BaseModel):
         description="`manual`: entered by an admin; `learned`: found by training in "
         "confirmed documents of only this contact; `rejected`: learned, then rejected by an "
         "admin (does not count, and training does not learn it again)."
+    )
+    topic_id: UUID | None = Field(
+        description="The topic of the contact it points to; a learned one points to a topic "
+        "only if all the confirmed documents it stands in carry it."
     )
 
 
@@ -96,6 +114,31 @@ Rejected = Annotated[
     ),
 ]
 
+
+Icon = Annotated[
+    str,
+    Field(
+        max_length=MAX_ICON,
+        pattern=r"^[a-z0-9]+(-[a-z0-9]+)*$",
+        description=(
+            "The name of a Lucide icon (lucide.dev), as `heart-pulse`. Only the form is "
+            "checked; clients show a stand-in for a name they do not know. Null removes it."
+        ),
+        examples=["receipt-euro"],
+    ),
+]
+Color = Annotated[
+    str,
+    Field(
+        pattern=rf"^({'|'.join(PaletteColor)}|#[0-9a-fA-F]{{6}})$",
+        description=(
+            "One of the twelve colours of the palette, which clients tune for light and dark "
+            "themes, or an own colour as `#rrggbb` (stored in lower case; clients mix it with "
+            "their background and text colours so the text stays readable). Null removes it."
+        ),
+        examples=["teal", "#b45309"],
+    ),
+]
 
 Description = Annotated[
     str,
@@ -134,6 +177,31 @@ TitlePattern = Annotated[
 ]
 
 
+def _groups(scope: str) -> object:
+    return Field(
+        max_length=MAX_GROUPS,
+        description=(
+            f"The {scope} groups it is in (tags of scope `{scope.replace(' ', '_')}`); its "
+            "documents inherit them. A group set with one below it leaves the one below."
+        ),
+    )
+
+
+ContactGroups = Annotated[list[UUID], _groups("contact")]
+TypeGroups = Annotated[list[UUID], _groups("document type")]
+ContactTopics = Annotated[
+    list[UUID],
+    Field(
+        max_length=MAX_TOPICS,
+        description=(
+            "The topics it enables (tags of scope `topic`): its documents carry one of them at "
+            "most, and its identifiers may point to one. Taking one away is a conflict (409) "
+            "while a document of the contact carries it; its identifiers lose it."
+        ),
+    ),
+]
+
+
 class ContactCreate(NameIn):
     model_config = ConfigDict(
         extra="forbid",
@@ -142,6 +210,8 @@ class ContactCreate(NameIn):
 
     aliases: Aliases = Field(default_factory=list)
     identifiers: Identifiers = Field(default_factory=list)
+    group_ids: ContactGroups = Field(default_factory=list)
+    topic_ids: ContactTopics = Field(default_factory=list)
 
 
 class ContactPatch(BaseModel):
@@ -157,12 +227,56 @@ class ContactPatch(BaseModel):
     aliases: Aliases | None = None
     identifiers: Identifiers | None = None
     rejected_identifiers: Rejected | None = None
+    group_ids: ContactGroups | None = None
+    topic_ids: ContactTopics | None = None
+
+
+class LogoOut(BaseModel):
+    source: LogoSource = Field(
+        description="`uploaded` by an admin (a fetched one never replaces it) or `fetched` "
+        "from the contact's website."
+    )
+    domain: str | None = Field(
+        description="Of a fetched one: the domain whose website it came from.",
+        examples=["acme-energy.example"],
+    )
+    stored_at: datetime
+    url: str = Field(
+        description="Where to get it (`GET /contacts/{id}/logo`, WebP up to 128 px), with its "
+        "version: a new logo has a new URL, so it may be cached.",
+        examples=["/api/v1/contacts/01999d5e-1111-7c1e-b6a3-2f4d5e6f7a8b/logo?v=1792200000000000"],
+    )
+
+    @classmethod
+    def of(cls, contact: Contact, logo: ContactLogo) -> "LogoOut":
+        version = int(logo.stored_at.timestamp() * 1_000_000)
+        return cls(
+            source=logo.source,
+            domain=logo.domain,
+            stored_at=logo.stored_at,
+            url=logo_url(contact.id, version),
+        )
+
+
+class LogoFailureOut(BaseModel):
+    domains: list[str] = Field(
+        description="The domains whose website had no logo that fits, sorted.",
+        examples=[["acme-energy.example"]],
+    )
+    failed_at: datetime = Field(description="When the last of them failed.")
 
 
 class ContactOut(MasterDataOut):
     aliases: list[str] = Field(examples=[["ACME Strom"]])
     identifiers: list[IdentifierOut] = Field(
         description="Entered, learned and rejected identifiers, in this order."
+    )
+    group_ids: list[UUID] = Field(description="The contact groups it is in.")
+    topic_ids: list[UUID] = Field(description="The topics it enables.")
+    logo: LogoOut | None = Field(description="Its logo; without one, clients show initials.")
+    logo_failure: LogoFailureOut | None = Field(
+        description="The domains whose website had no logo that fits; they are tried again "
+        "only when an admin asks (`POST /contacts/{id}/logo/fetch`), another domain at once."
     )
 
     @classmethod
@@ -173,9 +287,25 @@ class ContactOut(MasterDataOut):
             name=item.name,
             aliases=item.aliases,
             identifiers=[
-                IdentifierOut(kind=entry.kind, value=entry.value, source=entry.source)
+                IdentifierOut(
+                    kind=entry.kind,
+                    value=entry.value,
+                    source=entry.source,
+                    topic_id=entry.topic_id,
+                )
                 for entry in item.identifiers
             ],
+            group_ids=sorted(item.group_ids),
+            topic_ids=sorted(item.topic_ids),
+            logo=None if item.logo is None else LogoOut.of(item, item.logo),
+            logo_failure=(
+                None
+                if item.logo_failure is None
+                else LogoFailureOut(
+                    domains=sorted(item.logo_failure.domains),
+                    failed_at=item.logo_failure.failed_at,
+                )
+            ),
             created_at=item.created_at,
         )
 
@@ -190,6 +320,8 @@ class DocumentTypeCreate(NameIn):
 
     description: Description | None = None
     title_pattern: TitlePattern | None = None
+    group_ids: TypeGroups = Field(default_factory=list)
+    icon: Icon | None = None
 
 
 class DocumentTypePatch(BaseModel):
@@ -203,11 +335,15 @@ class DocumentTypePatch(BaseModel):
     name: Name | None = None
     description: Description | None = None
     title_pattern: TitlePattern | None = None
+    group_ids: TypeGroups | None = None
+    icon: Icon | None = None
 
 
 class DocumentTypeOut(MasterDataOut):
     description: str | None = Field(examples=["Entgeltbescheinigung"])
     title_pattern: str | None = Field(examples=["Lohn {document_date:YYYY-MM}"])
+    group_ids: list[UUID] = Field(description="The document type groups it is in.")
+    icon: str | None = Field(description="The name of a Lucide icon.", examples=["receipt"])
 
     @classmethod
     def of(cls, item: MasterData) -> "DocumentTypeOut":
@@ -217,13 +353,150 @@ class DocumentTypeOut(MasterDataOut):
             name=item.name,
             description=item.description,
             title_pattern=item.title_pattern,
+            group_ids=sorted(item.group_ids),
+            icon=item.icon,
+            created_at=item.created_at,
+        )
+
+
+TagAssignment = Annotated[
+    Assignment,
+    Field(
+        description="`auto`: the classification proposes and sets it (document tags and "
+        "topics); `manual`: only a person or a rule sets it (a status such as 'to pay'). Groups "
+        "are always `manual`."
+    ),
+]
+Shown = Annotated[
+    bool,
+    Field(
+        description="Whether documents show it (the chips of lists and the document; filters, "
+        "search, rules and templates see it either way). Default: on for document tags and "
+        "topics, off for groups."
+    ),
+]
+
+
+class TagCreate(NameIn):
+    """Names are unique per scope. `parent_id`: a tag of the same scope; at most five levels.
+    `assignment` and `shown` follow the scope unless given."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "examples": [
+                {"name": "Health insurance", "parent_id": "01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b"},
+                {"name": "Insurer", "scope": "contact"},
+            ]
+        },
+    )
+
+    scope: TagScope = Field(
+        default=TagScope.DOCUMENT,
+        description="`document`: a tag of documents; `contact`: a contact group; "
+        "`document_type`: a type group; `topic`: a topic, enabled at contacts, one per "
+        "document at most. Fixed once the tag exists.",
+    )
+    parent_id: UUID | None = None
+    assignment: TagAssignment | None = None
+    shown: Shown | None = None
+    icon: Icon | None = None
+    color: Color | None = None
+
+
+class TagPatch(BaseModel):
+    """Fields left out stay; a `parent_id` of null makes it a top-level tag. The scope stays."""
+
+    model_config = ConfigDict(
+        extra="forbid", json_schema_extra={"examples": [{"parent_id": None, "shown": False}]}
+    )
+
+    name: Name | None = None
+    parent_id: UUID | None = None
+    assignment: TagAssignment | None = None
+    shown: Shown | None = None
+    icon: Icon | None = None
+    color: Color | None = None
+
+
+class TagOut(MasterDataOut):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "id": "01999d5e-2223-7c1e-b6a3-2f4d5e6f7a8b",
+                    "name": "Health insurance",
+                    "scope": "document",
+                    "parent_id": "01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b",
+                    "path": ["Insurance", "Health insurance"],
+                    "assignment": "auto",
+                    "shown": True,
+                    "icon": "heart-pulse",
+                    "color": "pink",
+                    "created_at": "2026-01-10T09:00:00Z",
+                }
+            ]
+        }
+    )
+
+    scope: TagScope
+    parent_id: UUID | None
+    path: list[str] = Field(
+        description="The names from the top-level tag down to its own; documents show the "
+        "last, its path tells where it stands."
+    )
+    assignment: TagAssignment
+    shown: Shown
+    icon: str | None = Field(description="The name of a Lucide icon.")
+    color: str | None = Field(description="A colour of the palette or `#rrggbb`.")
+    document_count: int | None = Field(
+        default=None,
+        description=(
+            "With `document_counts`: how many documents within the caller's reach (with "
+            "`all_users`, every document) it stands for: those with it or a tag below it, each "
+            "once; for a group, those whose contact (type) is in it or a group below it; for a "
+            "topic, those with it or a topic below it."
+        ),
+    )
+    contact_count: int | None = Field(
+        default=None,
+        description=(
+            "With `document_counts`, for a contact group or a topic (else null): how many "
+            "contacts are in it or a group below it (enable it or a topic below it), each once."
+        ),
+    )
+    document_type_count: int | None = Field(
+        default=None,
+        description=(
+            "With `document_counts`, for a type group (else null): how many document types are "
+            "in it or a group below it, each once."
+        ),
+    )
+
+    @classmethod
+    def of(cls, item: MasterData, tree: TagTree | None = None) -> "TagOut":
+        assert isinstance(item, Tag)
+        path = [item.name] if tree is None or item.id not in tree else tree.path(item.id)
+        return cls(
+            id=item.id,
+            name=item.name,
+            scope=item.scope,
+            parent_id=item.parent_id,
+            path=path,
+            assignment=item.assignment,
+            shown=item.shown,
+            icon=item.icon,
+            color=item.color,
             created_at=item.created_at,
         )
 
 
 Required = Annotated[
     bool,
-    Field(description="A global field: whether extraction must find it in every document."),
+    Field(
+        description="A global field: whether every document needs a value (read by the model, "
+        "or entered by hand for a field set by hand)."
+    ),
 ]
 RequiredTypes = Annotated[
     list[UUID],
@@ -263,6 +536,11 @@ class FieldCreate(BaseModel):
     required: Required = False
     required_document_type_ids: RequiredTypes = Field(default_factory=list)
     description: FieldDescription | None = None
+    assignment: Assignment = Field(
+        default=Assignment.AUTO,
+        description="`auto`: the language model reads it; `manual`: set by hand only, never "
+        "asked of the model (a required one keeps the document open until a person sets it).",
+    )
 
 
 class FieldPatch(BaseModel):
@@ -292,6 +570,11 @@ class FieldPatch(BaseModel):
     required: Required | None = None
     required_document_type_ids: RequiredTypes | None = None
     description: FieldDescription | None = None
+    assignment: Assignment | None = Field(
+        default=None,
+        description="`auto`: the language model reads it; `manual`: set by hand only, never "
+        "asked of the model (a required one keeps the document open until a person sets it).",
+    )
 
 
 class FieldOut(BaseModel):
@@ -308,6 +591,7 @@ class FieldOut(BaseModel):
                     "required": False,
                     "required_document_type_ids": [],
                     "description": "Gesamtbrutto des Monats, nicht das Grundgehalt",
+                    "assignment": "auto",
                     "created_at": "2026-01-10T09:00:00Z",
                 }
             ]
@@ -326,6 +610,10 @@ class FieldOut(BaseModel):
     required: Required
     required_document_type_ids: RequiredTypes
     description: str | None
+    assignment: Assignment = Field(
+        description="`auto`: the language model reads it; `manual`: set by hand only, never "
+        "asked of the model (a required one keeps the document open until a person sets it).",
+    )
     created_at: datetime
     document_count: int | None = Field(
         default=None,
@@ -349,6 +637,7 @@ class FieldOut(BaseModel):
             required=item.required,
             required_document_type_ids=sorted(item.required_types),
             description=item.description,
+            assignment=item.assignment,
             created_at=item.created_at,
         )
 

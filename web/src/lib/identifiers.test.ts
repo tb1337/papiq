@@ -6,9 +6,9 @@ import { changesOf, rowsOf } from '#lib/identifiers.ts';
 import { m } from '#lib/paraglide/messages.js';
 
 const stored = [
-	{ kind: 'iban', value: 'DE89370400440532013000', source: 'manual' },
-	{ kind: 'email_domain', value: 'stadtwerke.example', source: 'learned' },
-	{ kind: 'customer_number', value: '4711', source: 'rejected' }
+	{ kind: 'iban', value: 'DE89370400440532013000', source: 'manual', topic_id: null },
+	{ kind: 'email_domain', value: 'stadtwerke.example', source: 'learned', topic_id: null },
+	{ kind: 'customer_number', value: '4711', source: 'rejected', topic_id: null }
 ] as const;
 
 describe('identifiers', () => {
@@ -31,5 +31,22 @@ describe('identifiers', () => {
 		expect(screen.getAllByText(m.identifier_rejected())).toHaveLength(1);
 		await userEvent.click(screen.getByRole('button', { name: m.identifier_add() }));
 		expect(screen.getAllByRole('textbox', { name: m.identifier_value() })).toHaveLength(2);
+	});
+});
+
+describe('the topic of an identifier', () => {
+	it('is sent where the contact enables it, never with a rejected one', () => {
+		const rows = rowsOf([
+			{ kind: 'personnel_number', value: '4711', source: 'manual', topic_id: 'p1' },
+			{ kind: 'customer_number', value: 'KV-1', source: 'manual', topic_id: 'p2' },
+			{ kind: 'iban', value: 'DE89370400440532013000', source: 'rejected', topic_id: null }
+		]);
+		expect(changesOf(rows, ['p1'])).toEqual({
+			identifiers: [
+				{ kind: 'personnel_number', value: '4711', topic_id: 'p1' },
+				{ kind: 'customer_number', value: 'KV-1' }
+			],
+			rejected_identifiers: [{ kind: 'iban', value: 'DE89370400440532013000' }]
+		});
 	});
 });

@@ -1,7 +1,9 @@
-import { render, screen, within } from '@testing-library/svelte';
+import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { createRawSnippet } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { LANGUAGE_NAMES, locales } from '#lib/i18n.ts';
 import { m } from '#lib/paraglide/messages.js';
+import { phone } from '#lib/phone.svelte.ts';
 import { session, type User } from '#lib/session.svelte.ts';
 import AppShell from './AppShell.svelte';
 
@@ -19,11 +21,26 @@ function signIn(role: User['role']) {
 	});
 }
 
-afterEach(() => session.clear());
+afterEach(() => {
+	session.clear();
+	phone.override(null);
+});
 
 function mainNavigation() {
 	// The header holds the wide navigation; the narrow one lives in a closed sheet.
 	return screen.getByRole('navigation', { name: m.nav_main() });
+}
+
+/** The account menu; bits-ui opens it on a pointer press. */
+async function openAccountMenu(): Promise<HTMLElement> {
+	await fireEvent.pointerDown(
+		screen.getByRole('button', { name: m.account_menu({ username: 'tobi' }) }),
+		{
+			button: 0,
+			pointerType: 'mouse'
+		}
+	);
+	return screen.findByRole('menu');
 }
 
 describe('AppShell', () => {
@@ -60,7 +77,7 @@ describe('AppShell', () => {
 		expect(links.map((link) => link.getAttribute('href'))).toEqual([
 			'/ui/inbox',
 			'/ui/documents',
-			'/ui/drawers',
+			'/ui/spaces',
 			'/ui/rules',
 			'/ui/webhooks',
 			'/ui/admin/master-data',
@@ -79,5 +96,32 @@ describe('AppShell', () => {
 		);
 		expect(screen.getByRole('button', { name: m.account_menu({ username: 'tobi' }) })).toBeTruthy();
 		expect(screen.getByText('content')).toBeTruthy();
+	});
+
+	it('keeps language and theme in the header, beside the account menu', async () => {
+		phone.override(false);
+		signIn('user');
+		render(AppShell, { children });
+		expect(screen.getByRole('button', { name: m.theme_label() })).toBeTruthy();
+		expect(screen.getByRole('button', { name: /^Sprache|^Language/ })).toBeTruthy();
+		const menu = await openAccountMenu();
+		expect(within(menu).queryByRole('menuitemradio')).toBeNull();
+	});
+
+	it('moves language and theme into the account menu on a phone', async () => {
+		phone.override(true);
+		signIn('user');
+		render(AppShell, { children });
+		expect(screen.queryByRole('button', { name: m.theme_label() })).toBeNull();
+		expect(screen.queryByRole('button', { name: /^Sprache|^Language/ })).toBeNull();
+		const menu = await openAccountMenu();
+		const radios = within(menu).getAllByRole('menuitemradio');
+		expect(radios.map((radio) => radio.textContent?.trim())).toEqual([
+			...locales.map((locale) => LANGUAGE_NAMES[locale]),
+			m.theme_light(),
+			m.theme_dark(),
+			m.theme_system()
+		]);
+		expect(within(menu).getByRole('menuitem', { name: m.sign_out() })).toBeTruthy();
 	});
 });

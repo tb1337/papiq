@@ -17,6 +17,7 @@ from papiq.core.domain.classification import (
     DOCUMENT_DATE,
     DOCUMENT_TYPE,
     TAGS,
+    TOPIC,
     FieldCheck,
     checks_from_json,
     field_id_of,
@@ -36,7 +37,7 @@ from papiq.core.domain.pipeline import (
     Outcome,
 )
 
-ALWAYS_SET = frozenset({"drawer", "title", "review"})
+ALWAYS_SET = frozenset({"space", "title", "review"})
 """Open fields of the rules that always have a value: confirming keeps it."""
 
 MODEL_NODES = (Node.JUDGE, Node.FIELDS)
@@ -164,10 +165,10 @@ def decide(
     given: Collection[str] = (),
 ) -> Decision:
     """Every open field needs a decision: a value (or None) in `changes` (or named in `given`,
-    such as the drawer), a value the document has (its owner set it meanwhile; it is kept), or,
+    such as the space), a value the document has (its owner set it meanwhile; it is kept), or,
     with `accept_suggestions`, a suggestion that can be taken as it is. Suggestions never
     replace a value. OpenFieldsError lists the fields without a decision. Fields whose definition
-    no longer exists need none. The rules' drawer, title and review always have a value:
+    no longer exists need none. The rules' space, title and review always have a value:
     confirming keeps them."""
     accepted: dict[Node, list[str]] = {}
     entered: dict[Node, list[str]] = {}
@@ -180,7 +181,10 @@ def decide(
             field_id = _field_id(check.field)
             if field_id is not None and field_id not in definitions:
                 continue
-            if check.field in given or _given(changes, check.field, field_id):
+            if _left_empty_by_hand(check, field_id, changes, definitions):
+                # A required field set by hand needs its value; none is no decision.
+                undecided.append(_label(check.field, field_id, definitions))
+            elif check.field in given or _given(changes, check.field, field_id):
                 entered.setdefault(item.node, []).append(check.field)
             elif _has_value(document, check.field, field_id):
                 kept.setdefault(item.node, []).append(check.field)
@@ -254,6 +258,7 @@ def confirmation(
 _CHANGE_FIELDS = {
     CONTACT: "contact_id",
     DOCUMENT_TYPE: "document_type_id",
+    TOPIC: "topic_id",
     TAGS: "tag_ids",
     DOCUMENT_DATE: "document_date",
     "title": "title",
@@ -284,6 +289,18 @@ def _given(changes: DocumentChanges, field: str, field_id: FieldId | None) -> bo
     return name is not None and not isinstance(getattr(changes, name), Unset)
 
 
+def _left_empty_by_hand(
+    check: FieldCheck,
+    field_id: FieldId | None,
+    changes: DocumentChanges,
+    definitions: Mapping[FieldId, FieldDefinition],
+) -> bool:
+    """Whether `check` is a field set by hand that `changes` leaves empty."""
+    if field_id is None or field_id not in changes.fields or changes.fields[field_id] is not None:
+        return False
+    return not definitions[field_id].is_read
+
+
 def _has_value(document: Document, field: str, field_id: FieldId | None) -> bool:
     if field in ALWAYS_SET:
         return True
@@ -307,6 +324,8 @@ def _suggested(
                 return ContactId(UUID(str(value)))
             case "document_type":
                 return DocumentTypeId(UUID(str(value)))
+            case "topic":
+                return TagId(UUID(str(value)))
             case "tags" if isinstance(value, list):
                 return frozenset(TagId(UUID(str(item))) for item in value)
             case "document_date":

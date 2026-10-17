@@ -38,8 +38,9 @@ async def test_a_failing_check_makes_the_api_unavailable() -> None:
         ApiContext(
             auth=services.auth,
             users=services.users,
-            drawers=services.drawers,
+            spaces=services.spaces,
             master_data=services.master_data,
+            logos=services.logos,
             pipeline=services.pipeline,
             documents=services.documents,
             rules=services.rules,
@@ -76,8 +77,9 @@ async def test_a_failing_search_only_degrades_the_api() -> None:
             ApiContext(
                 auth=services.auth,
                 users=services.users,
-                drawers=services.drawers,
+                spaces=services.spaces,
                 master_data=services.master_data,
+                logos=services.logos,
                 pipeline=services.pipeline,
                 documents=services.documents,
                 rules=services.rules,
@@ -129,6 +131,10 @@ async def test_openapi_lists_every_endpoint(api: Api) -> None:
         (f"{PREFIX}/pipeline", "get"),
         (f"{PREFIX}/pipeline/reparse", "post"),
         (f"{PREFIX}/contacts/{{id}}/identifiers", "post"),
+        (f"{PREFIX}/contacts/{{id}}/logo", "put"),
+        (f"{PREFIX}/contacts/{{id}}/logo", "delete"),
+        (f"{PREFIX}/contacts/{{id}}/logo", "get"),
+        (f"{PREFIX}/contacts/{{id}}/logo/fetch", "post"),
         (f"{PREFIX}/document-types/{{id}}/fields", "put"),
         (f"{PREFIX}/documents/{{id}}/pages/{{number}}", "get"),
         (f"{PREFIX}/documents/{{id}}/text", "get"),
@@ -160,13 +166,13 @@ async def test_openapi_lists_every_endpoint(api: Api) -> None:
         (f"{PREFIX}/users/{{id}}/totp", "delete"),
         (f"{PREFIX}/users/{{id}}/oidc", "delete"),
         *master_data,
-        (f"{PREFIX}/drawers", "get"),
-        (f"{PREFIX}/drawers", "post"),
-        (f"{PREFIX}/drawers/{{id}}", "get"),
-        (f"{PREFIX}/drawers/{{id}}", "patch"),
-        (f"{PREFIX}/drawers/{{id}}", "delete"),
-        (f"{PREFIX}/drawers/{{id}}/shares/{{user_id}}", "put"),
-        (f"{PREFIX}/drawers/{{id}}/shares/{{user_id}}", "delete"),
+        (f"{PREFIX}/spaces", "get"),
+        (f"{PREFIX}/spaces", "post"),
+        (f"{PREFIX}/spaces/{{id}}", "get"),
+        (f"{PREFIX}/spaces/{{id}}", "patch"),
+        (f"{PREFIX}/spaces/{{id}}", "delete"),
+        (f"{PREFIX}/spaces/{{id}}/shares/{{user_id}}", "put"),
+        (f"{PREFIX}/spaces/{{id}}/shares/{{user_id}}", "delete"),
         (f"{PREFIX}/rules", "get"),
         (f"{PREFIX}/rules", "post"),
         (f"{PREFIX}/rules/{{id}}", "get"),
@@ -246,7 +252,7 @@ async def test_the_upload_body_is_multipart(api: Api) -> None:
         "format": "binary",
         "description": "PDF, JPEG, PNG or TIFF; recognised by content.",
     }
-    assert form["properties"]["drawer_id"]["format"] == "uuid"
+    assert form["properties"]["space_id"]["format"] == "uuid"
 
 
 async def test_schemas_of_status_log_and_events(api: Api) -> None:

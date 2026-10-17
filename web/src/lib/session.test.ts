@@ -68,7 +68,7 @@ describe('a stale CSRF token', () => {
 			.mockResolvedValueOnce(me('alice', 'new'))
 			.mockResolvedValueOnce(new Response('{}', { status: 201 }));
 
-		const { response } = await api.POST('/api/v1/drawers', { body: { name: 'Bills' } });
+		const { response } = await api.POST('/api/v1/spaces', { body: { name: 'Bills' } });
 
 		expect(response.status).toBe(201);
 		expect(fetchMock.mock.calls[3][0].headers.get(CSRF_HEADER)).toBe('new');
@@ -80,7 +80,7 @@ describe('a stale CSRF token', () => {
 		await session.load();
 		fetchMock.mockResolvedValueOnce(stale()).mockResolvedValueOnce(me('mallory', 'theirs'));
 
-		const { response } = await api.POST('/api/v1/drawers', { body: { name: 'Bills' } });
+		const { response } = await api.POST('/api/v1/spaces', { body: { name: 'Bills' } });
 
 		expect(response.status).toBe(403);
 		expect(fetchMock).toHaveBeenCalledTimes(3); // sign-in check, the change, `me`

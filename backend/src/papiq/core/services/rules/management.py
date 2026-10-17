@@ -4,7 +4,7 @@ Who may do what:
 
 - A user rule belongs to its owner, who changes it. Admins read and change every rule (Tobi,
   08.10.2026); the references of a user rule are checked for its owner, also when an admin
-  changes it (it files only into drawers its owner may write to). Other users do not learn that
+  changes it (it files only into spaces its owner may write to). Other users do not learn that
   someone else's rule exists (NotFoundError).
 - Global rules are read by everyone and changed by admins only.
 """
@@ -19,11 +19,12 @@ from papiq.core.domain.errors import (
     MissingValueError,
     NotFoundError,
     PermissionDeniedError,
+    SpaceWriteDeniedError,
     ValidationError,
 )
 from papiq.core.domain.fields import FieldDefinition, FieldType
 from papiq.core.domain.ids import DocumentId, DocumentTypeId, RuleId, UserId
-from papiq.core.domain.permissions import drawer_access
+from papiq.core.domain.permissions import space_access
 from papiq.core.domain.rules import (
     ForceReview,
     Rule,
@@ -223,28 +224,39 @@ async def check_references(
     uow: UnitOfWork, definition: RuleDefinition, *, owner: User | None
 ) -> None:
     """Everything the definition refers to exists (NotFoundError otherwise), field
-    conditions and values fit their field (ValidationError), and the `owner` of a user
-    rule may file into its drawer (PermissionDeniedError; checked again whenever it runs)."""
+    conditions and values fit their field, tags are of the scope their place asks for (groups
+    in the conditions on groups, topics in those on the topic and in "set topic", document
+    tags elsewhere; ValidationError), and the `owner` of a user rule may file into its space
+    (PermissionDeniedError; checked again whenever it runs)."""
     references = definition.references()
     for contact in references.contacts:
         await uow.contacts.get(contact)
     for document_type in references.document_types:
         await uow.document_types.get(document_type)
-    for tag in references.tags:
-        await uow.tags.get(tag)
+    if references.tags:
+        tags = {tag.id: tag for tag in await uow.tags.list_all()}
+        for id in references.tags:
+            if id not in tags:
+                raise NotFoundError("tag", id)
+        for id, scope in references.tag_scopes:
+            if tags[id].scope is not scope:
+                raise ValidationError(
+                    f"'{tags[id].name}' is a tag of scope {tags[id].scope}, where a tag of "
+                    f"scope {scope} belongs"
+                )
     if references.fields:
         fields = {field.id: field for field in await uow.fields.list_all()}
         for field_id in references.fields:
             if field_id not in fields:
                 raise NotFoundError("field", field_id)
         check_fields(definition, fields)
-    for drawer_id in references.drawers:
-        drawer = await uow.drawers.find(drawer_id)
-        access = None if drawer is None or owner is None else drawer_access(owner, drawer)
-        if drawer is None or access is None:
-            raise NotFoundError("drawer", drawer_id)
+    for space_id in references.spaces:
+        space = await uow.spaces.find(space_id)
+        access = None if space is None or owner is None else space_access(owner, space)
+        if space is None or access is None:
+            raise NotFoundError("space", space_id)
         if not access.can_write:
-            raise PermissionDeniedError(f"no write access to drawer '{drawer.name}'")
+            raise SpaceWriteDeniedError(space.id, f"'{space.name}'")
 
 
 async def check_templates(
@@ -361,16 +373,20 @@ async def document_values(
     """The values a template sees of `document` as it is (`templates.template_values`)."""
     contact = None if document.contact_id is None else await uow.contacts.find(document.contact_id)
     kind = None if document_type is None else await uow.document_types.find(document_type)
-    drawer = await uow.drawers.find(document.drawer_id)
+    space = await uow.spaces.find(document.space_id)
     owner = await uow.users.find(document.owner_id)
-    tags = [tag.name for id in document.tag_ids if (tag := await uow.tags.find(id)) is not None]
+    names = {tag.id: tag.name for tag in await uow.tags.list_all()}
+    tags = [names[id] for id in document.tag_ids if id in names]
     return template_values(
         document,
         contact=None if contact is None else contact.name,
         document_type=None if kind is None else kind.name,
-        drawer=None if drawer is None else drawer.name,
+        space=None if space is None else space.name,
         owner=None if owner is None else owner.username,
         tags=tags,
         document_date=document.document_date,
         fields=[(item, document.fields.get(item.id)) for item in fields],
+        contact_groups=[names[id] for id in (contact.group_ids if contact else ()) if id in names],
+        document_type_groups=[names[id] for id in (kind.group_ids if kind else ()) if id in names],
+        topic=names.get(document.topic_id) if document.topic_id is not None else None,
     )

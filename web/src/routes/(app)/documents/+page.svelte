@@ -325,4 +325,4 @@
 	{/if}
 </div>
 
-<UploadDialog bind:open={uploadOpen} drawers={lookup?.drawers ?? []} users={lookup?.users ?? []} />
+<UploadDialog bind:open={uploadOpen} spaces={lookup?.spaces ?? []} users={lookup?.users ?? []} />

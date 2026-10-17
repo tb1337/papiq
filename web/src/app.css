@@ -198,3 +198,74 @@
 		font-style: italic;
 	}
 }
+
+/*
+ * Colours of tags: twelve of the palette (approved preview, 16.10.2026), each a ground and a
+ * writing that meet 4.5:1 in light and dark (a test reads them here). An own colour (`#rrggbb`)
+ * is mixed with the card for the ground and with the text colour for the writing; how much of
+ * it goes into the writing, per theme, comes from `lib/colors.ts` as `--chip-light` and
+ * `--chip-dark`, so that the writing stays readable.
+ */
+:root {
+	--tag-gray: #eceef0;
+	--tag-gray-foreground: #374151;
+	--tag-red: #fde2e1;
+	--tag-red-foreground: #9b1c1c;
+	--tag-orange: #ffe8d5;
+	--tag-orange-foreground: #9a3412;
+	--tag-amber: #fbefc4;
+	--tag-amber-foreground: #7c4a03;
+	--tag-lime: #eaf5c6;
+	--tag-lime-foreground: #3f6212;
+	--tag-green: #d8f3e6;
+	--tag-green-foreground: #065f46;
+	--tag-teal: #d5efed;
+	--tag-teal-foreground: #115e59;
+	--tag-sky: #dcf0fb;
+	--tag-sky-foreground: #075985;
+	--tag-blue: #e0e9fd;
+	--tag-blue-foreground: #1e40af;
+	--tag-violet: #ece6fd;
+	--tag-violet-foreground: #5b21b6;
+	--tag-fuchsia: #f7e1fb;
+	--tag-fuchsia-foreground: #86198f;
+	--tag-pink: #fde3ec;
+	--tag-pink-foreground: #9f1239;
+}
+
+.dark {
+	--tag-gray: #262b2e;
+	--tag-gray-foreground: #cfd5db;
+	--tag-red: #3b1515;
+	--tag-red-foreground: #fca5a5;
+	--tag-orange: #3a1e0c;
+	--tag-orange-foreground: #fdba74;
+	--tag-amber: #352709;
+	--tag-amber-foreground: #fcd34d;
+	--tag-lime: #1f2a0c;
+	--tag-lime-foreground: #bef264;
+	--tag-green: #0d2a20;
+	--tag-green-foreground: #6ee7b7;
+	--tag-teal: #0c2826;
+	--tag-teal-foreground: #5eead4;
+	--tag-sky: #0c2333;
+	--tag-sky-foreground: #7dd3fc;
+	--tag-blue: #141e3b;
+	--tag-blue-foreground: #93c5fd;
+	--tag-violet: #221743;
+	--tag-violet-foreground: #c4b5fd;
+	--tag-fuchsia: #2f1333;
+	--tag-fuchsia-foreground: #f0abfc;
+	--tag-pink: #3a1321;
+	--tag-pink-foreground: #fda4af;
+}
+
+@layer components {
+	.chip-own {
+		--chip-bg: color-mix(in oklab, var(--chip-own) 22%, var(--card));
+		--chip-fg: color-mix(in oklab, var(--chip-own) var(--chip-light), var(--foreground));
+	}
+	.dark .chip-own {
+		--chip-fg: color-mix(in oklab, var(--chip-own) var(--chip-dark), var(--foreground));
+	}
+}

@@ -30,7 +30,7 @@ from papiq.composition.container import (
     build_services,
 )
 from papiq.composition.settings import Settings
-from papiq.core.domain.drawers import ShareLevel
+from papiq.core.domain.spaces import ShareLevel
 from papiq.core.domain.users import Role, User
 from papiq.core.ports import ObjectStore, OcrResult, ParseResult
 from papiq.core.services.indexing import SUBSCRIBER
@@ -87,7 +87,7 @@ class System:
         user = builders.user(role=role)
         async with self.container.unit_of_work() as uow:
             await uow.users.add(user)
-            await uow.drawers.add(builders.default_drawer(user))
+            await uow.spaces.add(builders.default_space(user))
             await uow.commit()
         await issue_token(self.services.auth, user)
         return user
@@ -222,12 +222,12 @@ async def test_documents_are_found_by_those_who_may_read_them(system: System) ->
     owner, reader, stranger = await system.user(), await system.user(), await system.user()
     admin = await system.user(Role.ADMIN)
     async with system.container.unit_of_work() as uow:
-        shared = builders.drawer(owner, "Household")
+        shared = builders.space(owner, "Household")
         shared.share(reader.id, ShareLevel.READ)
-        await uow.drawers.add(shared)
+        await uow.spaces.add(shared)
         await uow.commit()
 
-    bill = await system.upload(owner, "Stromrechnung der Stadtwerke", drawer_id=str(shared.id))
+    bill = await system.upload(owner, "Stromrechnung der Stadtwerke", space_id=str(shared.id))
     lease = await system.upload(owner, "Mietvertrag für die Wohnung in Berlin")
     private = {bill, lease}
 
@@ -237,7 +237,7 @@ async def test_documents_are_found_by_those_who_may_read_them(system: System) ->
     assert await system.ids(owner, "Wohnung Berlin") == {lease}
     assert await system.ids(owner, "document.pdf") == private  # the file name
 
-    # Others find what is green in a drawer shared with them, nothing else.
+    # Others find what is green in a space shared with them, nothing else.
     await system.found(reader, "Stromrechnung", {bill})  # once it is green, not while in processing
     assert await system.ids(reader, "Mietvertrag") == set()
     for user in (stranger, admin):
@@ -263,7 +263,7 @@ async def test_documents_are_found_by_those_who_may_read_them(system: System) ->
 
     # A withdrawn share ends the search at once, before the index could have changed.
     revoked = await system.client.delete(
-        f"{PREFIX}/drawers/{shared.id}/shares/{reader.id}", headers=auth(owner)
+        f"{PREFIX}/spaces/{shared.id}/shares/{reader.id}", headers=auth(owner)
     )
     assert revoked.status_code in {200, 204}, revoked.text
     assert await system.ids(reader, "Stromrechnung") == set()

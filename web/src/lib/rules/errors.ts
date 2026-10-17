@@ -1,7 +1,7 @@
 /**
  * Errors of saving a rule, next to the block they concern. The API names the place in a 422
  * (`conditions.all[1].any[0]: …`, `actions[2]: …`; request validation also names schema parts
- * in between), the missing id in a 404 (`tag <id> not found`) and the drawer in a 403.
+ * in between), the missing id in a 404 (`tag <id> not found`) and the space in a 403.
  */
 import { ApiError } from '#lib/api/problem.ts';
 import { describeError } from '#lib/errors.ts';
@@ -71,10 +71,10 @@ export function saveErrors(error: unknown, model: RuleModel): SaveErrors {
 		for (const key of blocks) result.byKey[key] = m.rule_error_missing();
 		if (blocks.length > 0) return result;
 	}
-	if (error instanceof ApiError && error.status === 403 && /drawer/.test(detail)) {
-		const drawer = model.actions.find((action) => action.type === 'set_drawer');
-		if (drawer) {
-			result.byKey[drawer.key] = describeError(error);
+	if (error instanceof ApiError && error.status === 403 && error.problem?.space_id) {
+		const space = model.actions.find((action) => action.type === 'set_space');
+		if (space) {
+			result.byKey[space.key] = describeError(error);
 			return result;
 		}
 	}

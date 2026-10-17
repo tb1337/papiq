@@ -28,6 +28,7 @@ class PipelineOut(BaseModel):
                         {"node": "file", "requires": ["apply_rules", "pages"]},
                     ],
                     "vision": {"model": "claude-sonnet-5-5", "endpoint": "chat.example"},
+                    "logo_fetch": False,
                 }
             ]
         }
@@ -38,6 +39,12 @@ class PipelineOut(BaseModel):
         description=(
             "The vision language model a person can have documents read with (`POST "
             "/documents/{id}/vision`); none if it is not configured."
+        )
+    )
+    logo_fetch: bool = Field(
+        description=(
+            "Whether Papiq fetches the logos of contacts from their websites "
+            "(`PAPIQ_LOGO_FETCH`; `POST /contacts/{id}/logo/fetch`)."
         )
     )
 

@@ -45,6 +45,7 @@ class ProposeAnswer:
     recipient: str | None
     document_type: str | None
     new_document_type: str | None
+    topic: str | None
     tags: list[str]
     new_tags: list[str]
     document_date: Proposal  # value: the date as written, or None
@@ -59,6 +60,7 @@ _PROPOSE_FIELDS = (
     "recipient",
     "document_type",
     "new_document_type",
+    "topic",
     "tags",
     "new_tags",
     "document_date",
@@ -71,10 +73,14 @@ _FIELD_ENTRY = ("key", "value", "evidence")
 
 
 def propose_schema(
-    document_types: Sequence[str], tags: Sequence[str], keys: Sequence[str]
+    document_types: Sequence[str],
+    tags: Sequence[str],
+    keys: Sequence[str],
+    topics: Sequence[str] = (),
 ) -> JsonObject:
     """Every field value is text, as written in the document; the fields come as a list of
-    the keys the document shows (the model leaves the others out)."""
+    the keys the document shows (the model leaves the others out). `topics`: those of the
+    listed contacts, one of them or null."""
     # Without tags or fields to list, anything given is left out or proposed as new.
     tag_items: JsonObject = {"type": "string"}
     if tags:
@@ -89,6 +95,7 @@ def propose_schema(
             "recipient": dict(_TEXT_OR_NULL),
             "document_type": _one_of_or_null(document_types),
             "new_document_type": dict(_TEXT_OR_NULL),
+            "topic": _one_of_or_null(topics),
             "tags": {"type": "array", "items": tag_items},
             "new_tags": {"type": "array", "items": {"type": "string"}},
             "document_date": _proposal(dict(_TEXT_OR_NULL)),
@@ -126,6 +133,7 @@ def parse_propose(content: str, keys: Sequence[str]) -> ProposeAnswer:
         recipient=_text_or_null(data["recipient"], "recipient"),
         document_type=_text_or_null(data["document_type"], "document_type"),
         new_document_type=_text_or_null(data["new_document_type"], "new_document_type"),
+        topic=_text_or_null(data["topic"], "topic"),
         tags=_texts(data["tags"], "tags"),
         new_tags=_texts(data["new_tags"], "new_tags"),
         document_date=_parse_proposal(data["document_date"], "document_date", text=True),

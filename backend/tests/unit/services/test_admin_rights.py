@@ -5,7 +5,6 @@ for all users."""
 import pytest
 
 from papiq.core.domain.documents import DocumentChanges
-from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import (
     AuthenticationError,
     ConflictError,
@@ -13,7 +12,8 @@ from papiq.core.domain.errors import (
     PermissionDeniedError,
 )
 from papiq.core.domain.pipeline import Lane, Node
-from papiq.core.domain.rules import RuleScope, SetDrawer
+from papiq.core.domain.rules import RuleScope, SetSpace
+from papiq.core.domain.spaces import ShareLevel
 from papiq.core.domain.users import Role, User
 from papiq.core.ports import DocumentFilter
 from tests.builders import UNCERTAIN, incoming
@@ -26,42 +26,42 @@ async def _second_admin(world: World) -> tuple[User, User]:
     return await world.user("admin", role=Role.ADMIN), await world.user("boss", role=Role.ADMIN)
 
 
-async def test_admins_list_drawers_of_everyone_and_manage_them(world: World) -> None:
+async def test_admins_list_spaces_of_everyone_and_manage_them(world: World) -> None:
     admin, boss = await _second_admin(world)
     owner, friend, stranger = await world.user(), await world.user(), await world.user()
-    office = await world.drawers.create(owner.id, "Office")
-    await world.drawers.share(owner.id, office.id, friend.id, ShareLevel.READ)
+    office = await world.spaces.create(owner.id, "Office")
+    await world.spaces.share(owner.id, office.id, friend.id, ShareLevel.READ)
 
-    assert office.id in {drawer.id for drawer in await world.drawers.list(admin.id)}
-    assert office.id not in {drawer.id for drawer in await world.drawers.list(stranger.id)}
-    assert (await world.drawers.get(admin.id, office.id)).id == office.id
+    assert office.id in {space.id for space in await world.spaces.list(admin.id)}
+    assert office.id not in {space.id for space in await world.spaces.list(stranger.id)}
+    assert (await world.spaces.get(admin.id, office.id)).id == office.id
 
-    renamed = await world.drawers.rename(admin.id, office.id, "Büro")
+    renamed = await world.spaces.rename(admin.id, office.id, "Büro")
     assert (renamed.name, renamed.owner_id) == ("Büro", owner.id)
-    shared = await world.drawers.share(admin.id, office.id, stranger.id, ShareLevel.READ_WRITE)
+    shared = await world.spaces.share(admin.id, office.id, stranger.id, ShareLevel.READ_WRITE)
     assert shared.shares[stranger.id] is ShareLevel.READ_WRITE
-    await world.drawers.unshare(admin.id, office.id, stranger.id)
-    # The default drawer stays private and cannot be deleted, by admins neither.
-    default = await world.default_drawer(owner)
+    await world.spaces.unshare(admin.id, office.id, stranger.id)
+    # The default space stays private and cannot be deleted, by admins neither.
+    default = await world.default_space(owner)
     with pytest.raises(ConflictError):
-        await world.drawers.delete(admin.id, default.id)
+        await world.spaces.delete(admin.id, default.id)
 
     # Nobody else gains anything.
     for user in (friend, stranger):
         with pytest.raises((PermissionDeniedError, NotFoundError)):
-            await world.drawers.rename(user.id, office.id, "Mine")
+            await world.spaces.rename(user.id, office.id, "Mine")
 
-    await world.drawers.delete(admin.id, office.id)
+    await world.spaces.delete(admin.id, office.id)
     with pytest.raises(NotFoundError):
-        await world.drawers.get(owner.id, office.id)
+        await world.spaces.get(owner.id, office.id)
 
     # A deactivated admin has no rights.
-    other = await world.drawers.create(owner.id, "Other")
+    other = await world.spaces.create(owner.id, "Other")
     await world.users.set_active(boss.id, admin.id, False)
     with pytest.raises(AuthenticationError):
-        await world.drawers.rename(admin.id, other.id, "Gone")
+        await world.spaces.rename(admin.id, other.id, "Gone")
     with pytest.raises(AuthenticationError):
-        await world.drawers.list(admin.id)
+        await world.spaces.list(admin.id)
 
 
 async def test_admins_control_other_users_documents_in_every_lane(world: World) -> None:
@@ -100,15 +100,15 @@ async def test_admins_control_other_users_documents_in_every_lane(world: World) 
     with pytest.raises(NotFoundError):
         await world.documents.processing_log(stranger.id, yellow.id)
 
-    owners_drawer = await world.drawers.create(owner.id, "Archive")
+    owners_space = await world.spaces.create(owner.id, "Archive")
     confirmed = await pipeline.confirm(
         admin.id,
         yellow.id,
         DocumentChanges(),
         accept_suggestions=True,
-        drawer=owners_drawer.id,
+        space=owners_space.id,
     )
-    assert confirmed.drawer_id == owners_drawer.id
+    assert confirmed.space_id == owners_space.id
     await world.drain()
     assert (await world.documents.get(owner.id, yellow.id)).lane is Lane.GREEN
 
@@ -129,42 +129,42 @@ def _all() -> DocumentFilter:
     return DocumentFilter()
 
 
-async def test_admins_file_into_any_drawer(world: World) -> None:
+async def test_admins_file_into_any_space(world: World) -> None:
     admin = await world.user("admin", role=Role.ADMIN)
     owner = await world.user()
-    office = await world.drawers.create(owner.id, "Office")
+    office = await world.spaces.create(owner.id, "Office")
     received = await world.pipeline().receive(
-        admin.id, incoming(b"%PDF-1.7 b"), filename="b.pdf", drawer=office.id
+        admin.id, incoming(b"%PDF-1.7 b"), filename="b.pdf", space=office.id
     )
     await world.drain()
     document = await world.documents.get(admin.id, received.id)
-    assert (document.drawer_id, document.lane) == (office.id, Lane.GREEN)
-    # The drawer's owner sees it, as any green document in their drawer.
+    assert (document.space_id, document.lane) == (office.id, Lane.GREEN)
+    # The space's owner sees it, as any green document in their space.
     assert (await world.documents.get(owner.id, received.id)).id == received.id
     user = await world.user()
     with pytest.raises(NotFoundError):
         await world.pipeline().receive(
-            user.id, incoming(b"%PDF-1.7 c"), filename="c.pdf", drawer=office.id
+            user.id, incoming(b"%PDF-1.7 c"), filename="c.pdf", space=office.id
         )
 
 
-async def test_admins_confirm_into_any_drawer(world: World) -> None:
+async def test_admins_confirm_into_any_space(world: World) -> None:
     admin, boss = await _second_admin(world)
     owner, stranger = await world.user(), await world.user()
-    foreign = await world.drawers.create(stranger.id, "Foreign")
+    foreign = await world.spaces.create(stranger.id, "Foreign")
     rules = await rule_world(world)
     pipeline = rules.pipeline()
     received = await pipeline.receive(owner.id, incoming(b"%PDF-1.7 d"), filename="d.pdf")
     await world.drain(rules.pipeline(Returns(UNCERTAIN)))
     with pytest.raises(NotFoundError):
-        await pipeline.confirm(owner.id, received.id, DocumentChanges(), drawer=foreign.id)
+        await pipeline.confirm(owner.id, received.id, DocumentChanges(), space=foreign.id)
 
     await pipeline.confirm(
-        admin.id, received.id, DocumentChanges(), accept_suggestions=True, drawer=foreign.id
+        admin.id, received.id, DocumentChanges(), accept_suggestions=True, space=foreign.id
     )
     await world.drain(pipeline)
     filed = await world.documents.get(owner.id, received.id)
-    assert (filed.drawer_id, filed.lane) == (foreign.id, Lane.GREEN)
+    assert (filed.space_id, filed.lane) == (foreign.id, Lane.GREEN)
     assert (await world.documents.get(stranger.id, received.id)).id == received.id
 
     # The admin's choice holds while they are an admin; then filing asks the owner again.
@@ -182,16 +182,16 @@ async def test_admins_change_user_rules_for_their_owner(world: World) -> None:
     owner, stranger = await world.user(), await world.user()
     tag = await r.tag("t")
     rule = await r.user_rule(owner, definition("Title", channel_api(), add_tags(tag.id)))
-    owners = await world.drawers.create(owner.id, "Owner's")
-    foreign = await world.drawers.create(stranger.id, "Stranger's")
+    owners = await world.spaces.create(owner.id, "Owner's")
+    foreign = await world.spaces.create(stranger.id, "Stranger's")
 
     # References are checked for the rule's owner, not for the admin (who may write anywhere).
     with pytest.raises(NotFoundError):
         await r.rules.change(
-            r.admin.id, rule.id, definition("File", channel_api(), SetDrawer(foreign.id))
+            r.admin.id, rule.id, definition("File", channel_api(), SetSpace(foreign.id))
         )
     changed = await r.rules.change(
-        r.admin.id, rule.id, definition("File", channel_api(), SetDrawer(owners.id))
+        r.admin.id, rule.id, definition("File", channel_api(), SetSpace(owners.id))
     )
     assert (changed.scope, changed.owner_id, changed.current.created_by) == (
         RuleScope.USER,

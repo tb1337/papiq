@@ -11,7 +11,9 @@ from papiq.adapters.inbound.evaluation.runner import CaseResult
 from papiq.core.domain.json_value import JsonValue
 from papiq.core.domain.pipeline import Lane
 
-FIELDS = ("contact", "document_type", "document_date")
+FIELDS = ("contact", "document_type", "topic", "document_date")
+_APPLIED_ONLY = frozenset({"topic"})
+"""Fields always checked OK, set or only suggested: accepted only when a value was applied."""
 _LANES: tuple[Lane | None, ...] = (Lane.GREEN, Lane.YELLOW, Lane.RED, None)
 
 
@@ -102,12 +104,12 @@ def summarise(results: Sequence[CaseResult], *, fake: bool) -> Summary:
         wanted: dict[str, JsonValue] = {
             "contact": expected.contact,
             "document_type": expected.document_type,
+            "topic": expected.topic,
             "document_date": expected.document_date,
         }
         # The title is no field of the set: nothing is expected of it.
-        fields = set(expected.fields) | {
-            name for name in result.checks if name not in (*FIELDS, "tags", "title")
-        }
+        checked = {name for name in result.checks if name not in (*FIELDS, "tags", "title")}
+        fields = (set(expected.fields) | checked) - result.by_hand
         wanted |= {name: expected.fields.get(name) for name in fields}
         wrong = []
         for name, value in wanted.items():
@@ -117,7 +119,11 @@ def summarise(results: Sequence[CaseResult], *, fake: bool) -> Summary:
             got = result.proposed.get(name)
             right = _same(got, value)
             score.hits += right
-            if check is not None and check.ok:
+            if (
+                check is not None
+                and check.ok
+                and (name not in _APPLIED_ONLY or check.value is not None)
+            ):
                 score.accepted += 1
                 score.corrected += name in result.corrected
                 if not right:
@@ -272,7 +278,7 @@ def _run_section(
             lines.append(
                 f"- {result.case.name}: lane {_lane(result.lane)}; applied fields: "
                 f"{', '.join(changed) or 'none'}; changes without a passed check: "
-                f"{len(result.violations)}; owner and drawer unchanged, title only as "
+                f"{len(result.violations)}; owner and space unchanged, title only as "
                 f"checked: {'no' if result.violations else 'yes'}"
             )
     lines += [

@@ -6,21 +6,22 @@ Layout of a set directory:
 - `master_data.json`: `contacts`, `document_types`, `tags` (names) and `fields`
   (`name`, `data_type`, `document_types` (names, or null for global), `choices`, `required`:
   true for a global field, else the names of the types it is required for); optional
-  `contact_aliases` (aliases by contact name), `contact_identifiers` (by contact name, a list
-  of `kind` and `value`, entered by hand), `type_descriptions` and `title_patterns` (by type
-  name).
+  `topics` (names, or `name` and `parent`, a parent before its children), `contact_topics`
+  (the topics by contact name), `contact_aliases` (aliases by contact name),
+  `contact_identifiers` (by contact name, a list of `kind`, `value` and optionally `topic`,
+  entered by hand), `type_descriptions` and `title_patterns` (by type name).
 - `training/<name>.md` and `training/<name>.json`: the corpus the trained run takes over
   before the cases, a document's text and its metadata (`contact`, `document_type`, `tags`,
-  `document_date`).
+  `document_date`, `topic`: set by a person after the takeover, as Paperless has none).
 - `cases/<name>.md`: the document text, as the parse node would produce it.
-- `cases/<name>.json`: `description`, `expected` (`lane`, `contact`, `document_type`, `tags`,
-  `document_date`, `fields` by name, in the JSON form of the API) and `fake`
+- `cases/<name>.json`: `description`, `expected` (`lane`, `contact`, `document_type`,
+  `topic`, `tags`, `document_date`, `fields` by name, in the JSON form of the API) and `fake`
   (`classification`: `contact`, `document_type`, `new_document_type`, `tags`, `new_tags`,
-  `document_date`, optionally `recipient`, `title` and `language`, from which the answer of
-  the language model's signal is built; `fields`: proposals by field name, in that answer as
-  text; `lane`: the lane this answer leads to, if not the expected one). `expected` and
-  `fake` may give `lanes` by run where a run differs; `runs` names the runs a case belongs to
-  (default: both).
+  `document_date`, optionally `recipient`, `topic`, `title` and `language`, from which the
+  answer of the language model's signal is built; `fields`: proposals by field name, in that
+  answer as text; `lane`: the lane this answer leads to, if not the expected one). `expected`
+  and `fake` may give `lanes` by run where a run differs; `runs` names the runs a case belongs
+  to (default: both).
 """
 
 import json
@@ -32,6 +33,7 @@ from typing import Any
 
 from papiq.core.domain.fields import FieldType
 from papiq.core.domain.json_value import JsonObject, JsonValue
+from papiq.core.domain.master_data import Assignment
 from papiq.core.domain.pipeline import Lane
 from papiq.core.ports import StructuredRequest
 
@@ -52,7 +54,7 @@ class Run(StrEnum):
 class FieldSpec:
     """`required`: a global field required everywhere; `required_types`: the types a typed
     one is required for (in the JSON, `"required"` is either); `description`: what belongs in
-    it, for the language model."""
+    it, for the language model; `assignment`: `manual` for a field set by hand only."""
 
     name: str
     data_type: FieldType
@@ -61,18 +63,30 @@ class FieldSpec:
     required: bool = False
     required_types: tuple[str, ...] = ()
     description: str | None = None
+    assignment: Assignment = Assignment.AUTO
+
+
+@dataclass(frozen=True)
+class IdentifierSpec:
+    kind: str
+    value: str
+    topic: str | None = None
 
 
 @dataclass(frozen=True)
 class MasterDataSpec:
+    """`topics`: each with its parent (a parent before its children)."""
+
     contacts: tuple[str, ...]
     document_types: tuple[str, ...]
     tags: tuple[str, ...]
     fields: tuple[FieldSpec, ...]
     contact_aliases: dict[str, tuple[str, ...]] = field(default_factory=dict)
-    contact_identifiers: dict[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
+    contact_identifiers: dict[str, tuple[IdentifierSpec, ...]] = field(default_factory=dict)
     type_descriptions: dict[str, str] = field(default_factory=dict)
     title_patterns: dict[str, str] = field(default_factory=dict)
+    topics: tuple[tuple[str, str | None], ...] = ()
+    contact_topics: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -84,6 +98,7 @@ class Expected:
     document_date: str | None
     fields: dict[str, JsonValue] = field(default_factory=dict)
     lanes: dict[Run, Lane] = field(default_factory=dict)
+    topic: str | None = None
 
     def lane_in(self, run: Run) -> Lane:
         return self.lanes.get(run, self.lane)
@@ -123,7 +138,14 @@ class FakeAnswer:
             if isinstance(proposal, dict) and proposal.get("value") is not None:
                 value = _written(proposal["value"])
                 fields.append({"key": key, "value": value, "evidence": proposal.get("evidence")})
-        return {"recipient": None, "title": None, "language": "de", **answer, "fields": fields}
+        return {
+            "recipient": None,
+            "title": None,
+            "language": "de",
+            "topic": None,
+            **answer,
+            "fields": fields,
+        }
 
 
 @dataclass(frozen=True)
@@ -147,6 +169,7 @@ class TrainingDocument:
     document_type: str | None
     tags: frozenset[str]
     document_date: str | None
+    topic: str | None = None
 
 
 @dataclass(frozen=True)
@@ -240,6 +263,7 @@ def _master_data(data: Any) -> MasterDataSpec:
                     tuple(item["required"]) if isinstance(item.get("required"), list) else ()
                 ),
                 description=item.get("description"),
+                assignment=Assignment(item.get("assignment", "auto")),
             )
             for item in data["fields"]
         )
@@ -252,17 +276,40 @@ def _master_data(data: Any) -> MasterDataSpec:
                 name: tuple(aliases) for name, aliases in data.get("contact_aliases", {}).items()
             },
             contact_identifiers={
-                name: tuple((str(item["kind"]), str(item["value"])) for item in identifiers)
+                name: tuple(
+                    IdentifierSpec(str(item["kind"]), str(item["value"]), item.get("topic"))
+                    for item in identifiers
+                )
                 for name, identifiers in data.get("contact_identifiers", {}).items()
             },
             type_descriptions=dict(data.get("type_descriptions", {})),
             title_patterns=dict(data.get("title_patterns", {})),
+            topics=tuple(_topic(item) for item in data.get("topics", ())),
+            contact_topics={
+                name: tuple(topics) for name, topics in data.get("contact_topics", {}).items()
+            },
         )
     except (KeyError, TypeError, ValueError) as error:
         raise EvaluationSetError(f"master_data.json: {error!r}") from None
+    topics = {name for name, _ in master.topics}
+    for contact, enables in master.contact_topics.items():
+        if set(enables) - topics:
+            raise EvaluationSetError(
+                f"master_data.json: contact_topics of {contact!r} names unknown topics "
+                f"{set(enables) - topics}"
+            )
+    for contact, identifiers in master.contact_identifiers.items():
+        enabled = set(master.contact_topics.get(contact, ()))
+        wrong = {item.topic for item in identifiers if item.topic is not None} - enabled
+        if wrong:
+            raise EvaluationSetError(
+                f"master_data.json: identifiers of {contact!r} point to topics it does not "
+                f"enable: {wrong}"
+            )
     for what, names, known in (
         ("contact_aliases", master.contact_aliases, master.contacts),
         ("contact_identifiers", master.contact_identifiers, master.contacts),
+        ("contact_topics", master.contact_topics, master.contacts),
         ("type_descriptions", master.type_descriptions, master.document_types),
         ("title_patterns", master.title_patterns, master.document_types),
     ):
@@ -292,6 +339,7 @@ def _case(markdown: Path, master: MasterDataSpec) -> Case:
             document_date=expected_data.get("document_date"),
             fields=dict(expected_data.get("fields", {})),
             lanes=_lanes(expected_data),
+            topic=expected_data.get("topic"),
         )
         fake = None
         if data.get("fake") is not None:
@@ -322,6 +370,13 @@ def _case(markdown: Path, master: MasterDataSpec) -> Case:
     return case
 
 
+def _topic(item: Any) -> tuple[str, str | None]:
+    """A topic of `topics`: a name, or an object with `name` and `parent`."""
+    if isinstance(item, str):
+        return item, None
+    return str(item["name"]), item.get("parent")
+
+
 def _lanes(data: Any) -> dict[Run, Lane]:
     return {Run(run): Lane(lane) for run, lane in data.get("lanes", {}).items()}
 
@@ -337,10 +392,12 @@ def _training(markdown: Path, master: MasterDataSpec) -> TrainingDocument:
             document_type=data.get("document_type"),
             tags=frozenset(data.get("tags", ())),
             document_date=data.get("document_date"),
+            topic=data.get("topic"),
         )
     except (TypeError, ValueError) as error:
         raise EvaluationSetError(f"training/{name}: {error!r}") from None
     problems = _unknown_names(document.contact, document.document_type, document.tags, master)
+    problems += _unknown_topic(document.contact, document.topic, master)
     if problems:
         raise EvaluationSetError(f"training/{name}: {', '.join(problems)}")
     return document
@@ -357,9 +414,19 @@ def _unknown_names(
     return problems + [f"unknown tag {tag!r}" for tag in sorted(tags - set(master.tags))]
 
 
+def _unknown_topic(contact: str | None, topic: str | None, master: MasterDataSpec) -> list[str]:
+    """A topic must be one the contact enables."""
+    if topic is None:
+        return []
+    if contact is None or topic not in master.contact_topics.get(contact, ()):
+        return [f"topic {topic!r} is none {contact!r} enables"]
+    return []
+
+
 def _check_names(case: Case, master: MasterDataSpec) -> None:
     expected = case.expected
     problems = _unknown_names(expected.contact, expected.document_type, expected.tags, master)
+    problems += _unknown_topic(expected.contact, expected.topic, master)
     names = {field.name for field in master.fields}
     problems += [f"unknown field {name!r}" for name in expected.fields if name not in names]
     if problems:

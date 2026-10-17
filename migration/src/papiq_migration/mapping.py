@@ -242,9 +242,9 @@ def access_of(
     )
 
 
-def drawer_name(shares: tuple[tuple[str, str], ...]) -> str:
-    """The name of the drawer for a combination of readers and writers; it names the users, so
-    the same combination gets the same drawer."""
+def space_name(shares: tuple[tuple[str, str], ...]) -> str:
+    """The name of the space for a combination of readers and writers; it names the users, so
+    the same combination gets the same space."""
     words = {READ: "lesen", READ_WRITE: "schreiben"}
     text = "Geteilt: " + ", ".join(f"{user} ({words[level]})" for user, level in shares)
     if len(text) <= NAME_LIMIT:

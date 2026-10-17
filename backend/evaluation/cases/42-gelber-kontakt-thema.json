@@ -1,0 +1,36 @@
+{
+  "description": "A letter whose letterhead is a logo: only the policy number tells the contact (an identifier alone is a suggestion), so the contact waits for a person, and the topic the identifier and the model point to is only suggested.",
+  "expected": {
+    "lane": "yellow",
+    "contact": "Hanse Versicherung AG",
+    "document_type": "Mitteilung",
+    "topic": "Krankenversicherung",
+    "tags": [
+      "Krankenversicherung",
+      "Versicherung"
+    ],
+    "document_date": "2026-04-02"
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": null,
+        "evidence": null
+      },
+      "recipient": "Max Mustermann",
+      "document_type": "Mitteilung",
+      "new_document_type": null,
+      "topic": "Krankenversicherung",
+      "tags": [
+        "Krankenversicherung",
+        "Versicherung"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-04-02",
+        "evidence": "Hamburg, 02.04.2026"
+      }
+    },
+    "fields": {}
+  }
+}

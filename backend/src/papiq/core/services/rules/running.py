@@ -1,5 +1,5 @@
 """What every rule run needs: the rules that apply to a document, its text and pattern results,
-where its values came from (model, person), and the facts about drawers and master data.
+where its values came from (model, person), and the facts about spaces and master data.
 
 Loading the text and running the regular expressions on it happens before the unit of work that
 stores the result (`prepare`), so no transaction waits for a slow pattern. Patterns on field
@@ -19,6 +19,7 @@ from papiq.core.domain.classification import (
     DOCUMENT_TYPE,
     TAGS,
     TITLE,
+    TOPIC,
     field_key,
 )
 from papiq.core.domain.documents import Document
@@ -28,18 +29,18 @@ from papiq.core.domain.fields import FieldDefinition, field_to_json
 from papiq.core.domain.ids import (
     ContactId,
     DocumentTypeId,
-    DrawerId,
     FieldId,
     RuleId,
+    SpaceId,
     TagId,
     UserId,
 )
 from papiq.core.domain.json_value import JsonObject, JsonValue
 from papiq.core.domain.permissions import can_file_into
 from papiq.core.domain.pipeline import (
-    CHOSEN_DRAWER,
+    CHOSEN_SPACE,
     PERSON,
-    PERSON_DRAWER,
+    PERSON_SPACE,
     RULES,
     RULES_CHANGE,
     Node,
@@ -48,19 +49,21 @@ from papiq.core.domain.pipeline import (
     Outcome,
 )
 from papiq.core.domain.rule_engine import (
-    DRAWER,
+    SPACE,
     TEXT_TARGET,
-    DrawerTarget,
     Facts,
     Mode,
     RulePlan,
     Situation,
+    SpaceTarget,
+    Taxonomy,
     matches,
     pattern_subjects,
     pattern_text,
     plan,
 )
-from papiq.core.domain.rules import Rule, SetDrawer, Trigger
+from papiq.core.domain.rules import Rule, SetSpace, Trigger
+from papiq.core.domain.tag_tree import TagTree
 from papiq.core.domain.users import User
 from papiq.core.ports import ObjectStore, PatternMatcher, TemplateRenderer, UnitOfWork
 from papiq.core.services.inbox import MODEL_NODES, field_checks, latest_entries
@@ -171,15 +174,15 @@ async def _search(
 # --- where values came from -------------------------------------------------------------------
 
 _DECISIONS = ("accepted", "entered", "kept", "changed")
-_PERSON_ENTRIES = (PERSON, RULES_CHANGE, PERSON_DRAWER)
+_PERSON_ENTRIES = (PERSON, RULES_CHANGE, PERSON_SPACE)
 
 
 @dataclass(frozen=True)
 class Provenance:
     """Where the document's values came from, read from the processing log.
 
-    - `model_values`: single fields (contact, type, date, fields) whose value the model set
-      in its latest run and no person has decided since, as JSON.
+    - `model_values`: single fields (contact, type, topic, date, fields) whose value the model
+      set in its latest run and no person has decided since, as JSON.
     - `machine_title`: the title the machine gave (`titles.machine_title`), if the document
       still has it and no person decided the title; applied to existing documents, rules
       replace it as they replace the file name.
@@ -199,7 +202,9 @@ class Provenance:
 
     @property
     def unverified(self) -> frozenset[str]:
-        return frozenset(name for name in (CONTACT, DOCUMENT_TYPE) if name in self.model_values)
+        return frozenset(
+            name for name in (CONTACT, DOCUMENT_TYPE, TOPIC) if name in self.model_values
+        )
 
 
 def provenance(log: Sequence[NodeRun], document: Document) -> Provenance:
@@ -293,14 +298,19 @@ def person_record(
     }
 
 
-def corrected_fields(before: Document, after: Document) -> frozenset[str]:
-    """The values that differ between two states of a document, named as in field checks."""
+def corrected_fields(
+    before: Document, after: Document, *, decided: Collection[str] | None = None
+) -> frozenset[str]:
+    """The values that differ between two states of a document, named as in field checks.
+    With `decided` (the fields a person set), a topic only if they set it: one cleared
+    because the new contact does not enable it is no correction of theirs."""
     names = {
         name
         for name, attribute in (
             (TITLE, "title"),
             (CONTACT, "contact_id"),
             (DOCUMENT_TYPE, "document_type_id"),
+            (TOPIC, "topic_id"),
             (TAGS, "tag_ids"),
             (DOCUMENT_DATE, "document_date"),
         )
@@ -309,27 +319,29 @@ def corrected_fields(before: Document, after: Document) -> frozenset[str]:
     for field_id in set(before.fields) | set(after.fields):
         if before.fields.get(field_id) != after.fields.get(field_id):
             names.add(field_key(field_id))
+    if decided is not None and TOPIC not in decided:
+        names.discard(TOPIC)
     return frozenset(names)
 
 
-def drawer_choice(
+def space_choice(
     document: Document, *, node: Node, actor: UserId, trigger: str, version: str, now: datetime
 ) -> NodeRun:
-    """The log entry of a person choosing the document's drawer outside the inbox."""
+    """The log entry of a person choosing the document's space outside the inbox."""
     return NodeRun(
         document_id=document.id,
         node=node,
         run=document.processing.run,
         result=NodeResult(
             outcome=Outcome.OK,
-            model_version=PERSON_DRAWER,
+            model_version=PERSON_SPACE,
             input={
                 "trigger": trigger,
                 "actor": str(actor),
-                CHOSEN_DRAWER: str(document.drawer_id),
+                CHOSEN_SPACE: str(document.space_id),
             },
             output=person_record(
-                changed=[DRAWER], tags_before=document.tag_ids, tags_after=document.tag_ids
+                changed=[SPACE], tags_before=document.tag_ids, tags_after=document.tag_ids
             ),
         ),
         pipeline_version=version,
@@ -344,6 +356,7 @@ def _current_values(document: Document) -> dict[str, JsonValue]:
         DOCUMENT_TYPE: None
         if document.document_type_id is None
         else str(document.document_type_id),
+        TOPIC: None if document.topic_id is None else str(document.topic_id),
         "document_date": None
         if document.document_date is None
         else document.document_date.isoformat(),
@@ -358,6 +371,7 @@ def facts(
     prepared: Prepared,
     patterns: Mapping[PatternKey, bool],
     origin: Provenance,
+    taxonomy: Taxonomy | None = None,
 ) -> Facts:
     return Facts.of(
         document,
@@ -365,7 +379,36 @@ def facts(
         patterns={**prepared.patterns, **patterns},
         unverified=origin.unverified,
         unverified_tags=origin.model_tags,
+        taxonomy=taxonomy,
     )
+
+
+async def taxonomy(
+    uow: UnitOfWork, documents: Iterable[Document], rules: Iterable[Rule]
+) -> Taxonomy:
+    """The tag trees, and the groups of the contacts and types of `documents` and of those the
+    rules set, and the topics those contacts enable."""
+    contacts: set[UUID] = set()
+    types: set[UUID] = set()
+    for document in documents:
+        if document.contact_id is not None:
+            contacts.add(document.contact_id)
+        if document.document_type_id is not None:
+            types.add(document.document_type_id)
+    for rule in rules:
+        references = rule.definition.references()
+        contacts |= references.contacts
+        types |= references.document_types
+    groups: dict[UUID, frozenset[TagId]] = {}
+    topics: dict[UUID, frozenset[TagId]] = {}
+    for id in contacts:
+        if (contact := await uow.contacts.find(ContactId(id))) is not None:
+            groups[id] = contact.group_ids
+            topics[id] = contact.topic_ids
+    for id in types:
+        if (kind := await uow.document_types.find(DocumentTypeId(id))) is not None:
+            groups[id] = kind.group_ids
+    return Taxonomy(TagTree.of(await uow.tags.list_all()), groups, topics)
 
 
 # --- the situation ----------------------------------------------------------------------------
@@ -385,8 +428,10 @@ async def situation(
     person_added_tags: frozenset[TagId] = frozenset(),
     person_removed_tags: frozenset[TagId] = frozenset(),
     accept_conflicts: bool = False,
+    tags: Taxonomy | None = None,
 ) -> Situation:
-    """Everything `plan` needs to know besides the matching rules."""
+    """Everything `plan` needs to know besides the matching rules. `tags`: the taxonomy of the
+    run (`taxonomy`), made here unless given."""
     rules = list(rules)
     references = [rule.definition.references() for rule in rules]
     existing: set[object] = set(definitions)
@@ -407,36 +452,37 @@ async def situation(
         if document_type is not None:
             existing.add(type_id)
             names[type_id] = document_type.name
-    for tag_id in {id for refs in references for id in refs.tags} | set(document.tag_ids):
+    shown = {*document.tag_ids, *([] if document.topic_id is None else [document.topic_id])}
+    for tag_id in {id for refs in references for id in refs.tags} | shown:
         tag = await uow.tags.find(tag_id)
         if tag is not None:
             existing.add(tag_id)
             names[tag_id] = tag.name
-    drawers: dict[DrawerId, DrawerTarget] = {}
+    spaces: dict[SpaceId, SpaceTarget] = {}
     for rule in rules:
         for action in rule.definition.actions:
-            if isinstance(action, SetDrawer) and action.drawer_id not in drawers:
-                drawer = await uow.drawers.find(action.drawer_id)
-                if drawer is not None:
-                    drawers[drawer.id] = DrawerTarget(
-                        name=drawer.name,
-                        writable=can_file_into(owner, drawer),
-                        shared=drawer.owner_id != owner.id or bool(drawer.shares),
+            if isinstance(action, SetSpace) and action.space_id not in spaces:
+                space = await uow.spaces.find(action.space_id)
+                if space is not None:
+                    spaces[space.id] = SpaceTarget(
+                        name=space.name,
+                        writable=can_file_into(owner, space),
+                        shared=space.owner_id != owner.id or bool(space.shares),
                     )
-    for drawer_id in {*drawers, document.drawer_id}:
-        if drawer_id in drawers:
-            names[drawer_id] = drawers[drawer_id].name
-        elif (current := await uow.drawers.find(drawer_id)) is not None:
-            names[drawer_id] = current.name
-    default = await uow.drawers.get_default(owner.id)
+    for space_id in {*spaces, document.space_id}:
+        if space_id in spaces:
+            names[space_id] = spaces[space_id].name
+        elif (current := await uow.spaces.find(space_id)) is not None:
+            names[space_id] = current.name
+    default = await uow.spaces.get_default(owner.id)
     return Situation(
         mode=mode,
         document=document,
-        default_drawer=default.id,
+        default_space=default.id,
         definitions=definitions,
         render=templates.render,
         owner_name=owner.username,
-        drawers=drawers,
+        spaces=spaces,
         existing=frozenset(existing),
         names=names,
         model_values=origin.model_values,
@@ -446,6 +492,7 @@ async def situation(
         person_removed_tags=person_removed_tags,
         reviewed=origin.reviewed,
         accept_conflicts=accept_conflicts,
+        taxonomy=tags or await taxonomy(uow, [document], rules),
     )
 
 
@@ -491,10 +538,11 @@ async def run_rules(
     for a change, the state before it and its field pattern results; only rules that become
     true with the change act."""
     patterns, problems = await field_patterns(matcher, rules, document)
-    now_facts = facts(document, prepared, patterns, origin)
+    tags = await taxonomy(uow, [document, *([] if before is None else [before[0]])], rules)
+    now_facts = facts(document, prepared, patterns, origin, tags)
     before_facts = None
     if before is not None:
-        before_facts = facts(before[0], prepared, before[1], origin)
+        before_facts = facts(before[0], prepared, before[1], origin, tags)
     matched = matches(rules, now_facts, definitions, before=before_facts)
     context = await situation(
         uow,
@@ -509,6 +557,7 @@ async def run_rules(
         person_added_tags=origin.tags_added,
         person_removed_tags=origin.tags_removed,
         accept_conflicts=accept_conflicts,
+        tags=tags,
     )
     return RuleRun(plan(matched, context), prepared.problems + problems)
 
@@ -519,12 +568,12 @@ def apply_plan(
     definitions: Mapping[FieldId, FieldDefinition],
     now: datetime,
 ) -> str | None:
-    """Apply the planned change and drawer; the reason if the change no longer fits (nothing
+    """Apply the planned change and space; the reason if the change no longer fits (nothing
     is applied then)."""
     try:
         document.apply_changes(rule_plan.changes, definitions, now)
     except ValidationError as error:
         return f"the rules' change does not fit: {error}"
-    if rule_plan.drawer is not None:
-        document.move_to(rule_plan.drawer, now)
+    if rule_plan.space is not None:
+        document.move_to(rule_plan.space, now)
     return None

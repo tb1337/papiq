@@ -16,13 +16,13 @@ from papiq.adapters.inbound.rest import (
     account,
     classifier,
     documents,
-    drawers,
     health,
     master_data,
     pipeline,
     problems,
     rules,
     search,
+    spaces,
     streams,
     users,
     webhooks,
@@ -37,10 +37,11 @@ from papiq.adapters.inbound.rest.auth import (
 from papiq.adapters.inbound.rest.context import ApiContext
 from papiq.adapters.inbound.rest.events import EventHub, dispatch_forever
 from papiq.adapters.inbound.rest.middleware import LimitRequestBody, NoStore
+from papiq.adapters.inbound.rest.paths import PREFIX
 from papiq.adapters.inbound.rest.schemas.events import EventMessage
 from papiq.adapters.inbound.rest.ui import ui_routes
 
-PREFIX = "/api/v1"
+__all__ = ["PREFIX", "create_app"]
 
 DESCRIPTION = """\
 Papiq is a headless document management system; this API is the only way in.
@@ -53,7 +54,7 @@ endpoint needs one of them (401 without), except health and the sign-in endpoint
 /auth/login` and, below `/auth/oidc`, information, start and callback. A `read` token may only
 read (403). The own sign-in (password, sessions, TOTP, API tokens, provider links) and
 creating users or resetting their sign-in need a session; a token gets 403 there. Documents
-and drawers the caller may not see are "not found" (404), the same as ones that do not exist.
+and spaces the caller may not see are "not found" (404), the same as ones that do not exist.
 
 The same services are available to AI clients over MCP (Streamable HTTP, stateless) at
 `/api/v1/mcp`, with the same API tokens as bearer; it is not part of this OpenAPI document.
@@ -124,19 +125,22 @@ def create_app(context: ApiContext, mounts: Sequence[Mount] = ()) -> FastAPI:
     app.add_middleware(
         LimitRequestBody,
         limit=context.max_request_size,
-        exempt={("POST", f"{PREFIX}/documents")},  # the upload has its own limit
+        # The uploads have their own limits.
+        exempt={("POST", f"{PREFIX}/documents"), ("PUT", master_data.LOGO_PATH)},
     )
     app.add_middleware(
         NoStore,
         prefix=PREFIX,
         public=(f"{PREFIX}/health", f"{PREFIX}/docs", f"{PREFIX}/openapi.json", f"{PREFIX}/redoc"),
+        # A logo is master data every user sees; its URL changes with it.
+        cacheable=(master_data.LOGO_PATH,),
     )
     for router in (
         account.public,
         account.router,
         users.router,
         *master_data.ROUTERS,
-        drawers.router,
+        spaces.router,
         rules.router,
         rules.applications,
         rules.templates,

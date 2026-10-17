@@ -26,7 +26,7 @@ from papiq.composition.container import (
     build_services,
 )
 from papiq.composition.settings import Settings
-from papiq.core.domain.drawers import ShareLevel
+from papiq.core.domain.spaces import ShareLevel
 from papiq.core.domain.users import User
 from papiq.core.ports import ObjectStore, OcrResult
 from papiq.core.ports.ocr import VisionModel
@@ -72,7 +72,7 @@ class System:
         user = builders.user()
         async with self.container.unit_of_work() as uow:
             await uow.users.add(user)
-            await uow.drawers.add(builders.default_drawer(user))
+            await uow.spaces.add(builders.default_space(user))
             await uow.commit()
         await issue_token(self.services.auth, user)
         return user
@@ -137,9 +137,9 @@ async def system(stores: tuple[Database, ObjectStore], settings: Settings) -> As
 async def test_documents_go_through_the_api(system: System, object_store: ObjectStore) -> None:
     owner, reader, stranger = await system.user(), await system.user(), await system.user()
     async with system.container.unit_of_work() as uow:
-        shared = builders.drawer(owner, "Household")
+        shared = builders.space(owner, "Household")
         shared.share(reader.id, ShareLevel.READ)
-        await uow.drawers.add(shared)
+        await uow.spaces.add(shared)
         await uow.commit()
 
     streams = {user.id: Stream() for user in (owner, reader, stranger)}
@@ -151,8 +151,8 @@ async def test_documents_go_through_the_api(system: System, object_store: Object
         await asyncio.wait_for(stream.ready.wait(), timeout=10)
     await asyncio.sleep(0.1)
 
-    # A scan into the shared drawer and a photo into the owner's default drawer.
-    scan = await system.upload(owner, "scan.pdf", drawer_id=str(shared.id))
+    # A scan into the shared space and a photo into the owner's default space.
+    scan = await system.upload(owner, "scan.pdf", space_id=str(shared.id))
     photo = await system.upload(owner, "photo.jpg")
     assert (scan.status_code, photo.status_code) == (202, 202)
     ids = {"scan": scan.json()["id"], "photo": photo.json()["id"]}

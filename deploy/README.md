@@ -85,6 +85,7 @@ environment variable of a container (visible in `docker inspect` of Meilisearch,
 | `PAPIQ_LLM_BASE_URL`, `_MODEL` | – | set both or neither; `PAPIQ_LLM_TIMEOUT` (seconds, 300) |
 | `PAPIQ_EMBEDDING_BASE_URL`, `_MODEL`, `_DIMENSIONS`, `_QUERY_PREFIX` | – | with Meilisearch and embeddings the dimensions are required |
 | `PAPIQ_VLM_BASE_URL`, `_MODEL`, `_API_KEY(_FILE)` | – | a vision language model that reads a document's pages when a person asks for it; set both or neither; `PAPIQ_VLM_TIMEOUT` (seconds per document, 1800) |
+| `PAPIQ_LOGO_FETCH` | `false` | fetch the logos of contacts from their own websites; see [Outgoing requests](#outgoing-requests) |
 | `PAPIQ_COOKIE_SECURE`, `PAPIQ_FORWARDED_ALLOW_IPS`, `PAPIQ_PUBLIC_URL` | `true`, –, – | behind a proxy, see below |
 | `PAPIQ_UPLOAD_MAX_SIZE` | 100 MiB | the proxy's body limit must allow it |
 | `PAPIQ_UI_DIR` | `/opt/papiq/ui` | the web UI's files; unset it to serve the API only |
@@ -111,6 +112,18 @@ every endpoint outside the local network.
 A vision language model (`PAPIQ_VLM_*`) reads a document's pages only when a person asks for it
 in the web UI ("Read with VLM"): every page goes there as an image. The model has to take images
 and give each line's box in pixels (measured with Claude Sonnet 5.5 through Open WebUI).
+
+### Outgoing requests
+
+Besides the endpoints configured above (language model, embeddings, vision model, identity
+provider, S3, webhooks of the users), Papiq asks nothing on the internet. Only with
+`PAPIQ_LOGO_FETCH=true` (off by default) does the worker fetch the logos of contacts from their
+own websites: the domains among their identifiers, which training also learns from documents.
+It goes over HTTPS to public addresses only (no private, loopback, link-local or shared address,
+checked again for every redirect, at most three) and reads at most 1 MB in 10 s per request,
+with the user agent `Papiq/<version>`; a website learns that this Papiq fetched its icon. No
+logo service of a third party is asked. A proxy from the environment is not used for it. Switched
+off again, fetches still queued end without asking. Logos uploaded by an admin need no setting.
 
 ## Roles
 
@@ -323,3 +336,6 @@ processed at that moment is skipped; run the command again once it is through.
 The same update renamed `PAPIQ_STEP_MAX_ATTEMPTS` and `PAPIQ_STEP_RETRY_DELAY` to
 `PAPIQ_NODE_MAX_ATTEMPTS` and `PAPIQ_NODE_RETRY_DELAY`; a container with an old name refuses
 to start and says so.
+The update to 0.3.0 renamed drawers to spaces in the API (`/api/v1/spaces`, `space_id`), in
+rules and in templates (`{{ space }}`); it needs no `reindex`. What to do after it is in
+[backend/README.md](../backend/README.md) ("After the update to 0.3").

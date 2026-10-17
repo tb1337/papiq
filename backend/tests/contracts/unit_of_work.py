@@ -1,20 +1,23 @@
 import asyncio
+from collections.abc import Collection
 from datetime import date, timedelta
 from decimal import Decimal
+from uuid import UUID
 
 import pytest
 
+from papiq.core.domain.appearance import ContactLogo, FailedLogoFetch, LogoSource
 from papiq.core.domain.classifier import ClassifierModel
 from papiq.core.domain.documents import Document, DocumentChanges
-from papiq.core.domain.drawers import Drawer, ShareLevel
 from papiq.core.domain.errors import ConcurrencyError, ConflictError, NotFoundError
 from papiq.core.domain.fields import FieldDefinition, FieldType, Money, Url
 from papiq.core.domain.identifiers import Identifier, IdentifierKind, IdentifierSource
-from papiq.core.domain.ids import DocumentId, DrawerId, new_id
-from papiq.core.domain.master_data import Contact, DocumentType, Tag
+from papiq.core.domain.ids import DocumentId, SpaceId, TagId, new_id
+from papiq.core.domain.master_data import Assignment, Contact, DocumentType, Tag, TagScope
 from papiq.core.domain.periods import Period
 from papiq.core.domain.permissions import can_read_document
 from papiq.core.domain.pipeline import Lane, Node, NodeResult, NodeRun, Outcome, ProcessingStatus
+from papiq.core.domain.spaces import ShareLevel, Space
 from papiq.core.domain.users import User
 from papiq.core.domain.verdict import KnownLabels
 from papiq.core.ports import (
@@ -26,26 +29,27 @@ from papiq.core.ports import (
     SortKey,
     UnitOfWorkFactory,
 )
+from papiq.core.ports.repository import TagSets
 from tests import builders
 from tests.builders import FAILED, NOW, OK, UNCERTAIN
 
 
 async def seed(
-    uow_factory: UnitOfWorkFactory, *users: User, drawers: tuple[Drawer, ...] = ()
+    uow_factory: UnitOfWorkFactory, *users: User, spaces: tuple[Space, ...] = ()
 ) -> None:
     async with uow_factory() as uow:
         for user in users:
             await uow.users.add(user)
-        for drawer in drawers:
-            await uow.drawers.add(drawer)
+        for space in spaces:
+            await uow.spaces.add(space)
         await uow.commit()
 
 
-async def owner_with_drawer(uow_factory: UnitOfWorkFactory) -> tuple[User, Drawer]:
+async def owner_with_space(uow_factory: UnitOfWorkFactory) -> tuple[User, Space]:
     owner = builders.user()
-    drawer = builders.default_drawer(owner)
-    await seed(uow_factory, owner, drawers=(drawer,))
-    return owner, drawer
+    space = builders.default_space(owner)
+    await seed(uow_factory, owner, spaces=(space,))
+    return owner, space
 
 
 def _repository_of(item: object) -> str:
@@ -107,7 +111,7 @@ class UnitOfWorkContract:
                 await uow.commit()
 
     async def test_reads_are_copies(self, uow_factory: UnitOfWorkFactory) -> None:
-        owner, _ = await owner_with_drawer(uow_factory)
+        owner, _ = await owner_with_space(uow_factory)
         async with uow_factory() as uow:
             loaded = await uow.users.get(owner.id)
             loaded.username = "changed"
@@ -131,7 +135,7 @@ class UnitOfWorkContract:
     # --- versions -------------------------------------------------------------------------------
 
     async def test_update_increments_the_version(self, uow_factory: UnitOfWorkFactory) -> None:
-        owner, _ = await owner_with_drawer(uow_factory)
+        owner, _ = await owner_with_space(uow_factory)
         async with uow_factory() as uow:
             user = await uow.users.get(owner.id)
             user.username = "renamed"
@@ -145,7 +149,7 @@ class UnitOfWorkContract:
             assert (stored.username, stored.version) == ("renamed", 3)
 
     async def test_stale_update_is_rejected(self, uow_factory: UnitOfWorkFactory) -> None:
-        owner, _ = await owner_with_drawer(uow_factory)
+        owner, _ = await owner_with_space(uow_factory)
         async with uow_factory() as first, uow_factory() as second:
             mine = await first.users.get(owner.id)
             theirs = await second.users.get(owner.id)
@@ -165,7 +169,7 @@ class UnitOfWorkContract:
         The two units run as concurrent tasks, so an adapter may block the second write until
         the first unit commits (row locks) or detect the conflict on commit.
         """
-        owner, _ = await owner_with_drawer(uow_factory)
+        owner, _ = await owner_with_space(uow_factory)
         both_read = asyncio.Barrier(2)
 
         async def rename(name: str) -> str:
@@ -274,54 +278,54 @@ class UnitOfWorkContract:
         async with uow_factory() as uow:
             assert {user.id for user in await uow.users.list_all()} >= {u.id for u in users}
 
-    # --- drawers --------------------------------------------------------------------------------
+    # --- spaces --------------------------------------------------------------------------------
 
-    async def test_drawer_round_trip(self, uow_factory: UnitOfWorkFactory) -> None:
+    async def test_space_round_trip(self, uow_factory: UnitOfWorkFactory) -> None:
         owner, reader, writer = builders.user(), builders.user(), builders.user()
-        drawer = builders.drawer(owner, "Household")
-        drawer.share(reader.id, ShareLevel.READ)
-        drawer.share(writer.id, ShareLevel.READ_WRITE)
-        await seed(uow_factory, owner, reader, writer, drawers=(drawer,))
+        space = builders.space(owner, "Household")
+        space.share(reader.id, ShareLevel.READ)
+        space.share(writer.id, ShareLevel.READ_WRITE)
+        await seed(uow_factory, owner, reader, writer, spaces=(space,))
         async with uow_factory() as uow:
-            assert await uow.drawers.get(drawer.id) == drawer
+            assert await uow.spaces.get(space.id) == space
 
-    async def test_drawer_names_are_unique_per_owner(self, uow_factory: UnitOfWorkFactory) -> None:
+    async def test_space_names_are_unique_per_owner(self, uow_factory: UnitOfWorkFactory) -> None:
         alice, bob = builders.user(), builders.user()
         await seed(
             uow_factory,
             alice,
             bob,
-            drawers=(builders.drawer(alice, "Taxes"), builders.drawer(bob, "Taxes")),
+            spaces=(builders.space(alice, "Taxes"), builders.space(bob, "Taxes")),
         )
         with pytest.raises(ConflictError):
-            await seed(uow_factory, drawers=(builders.drawer(alice, "TAXES"),))
+            await seed(uow_factory, spaces=(builders.space(alice, "TAXES"),))
 
-    async def test_one_default_drawer_per_owner(self, uow_factory: UnitOfWorkFactory) -> None:
-        owner, _ = await owner_with_drawer(uow_factory)
-        second = Drawer(
-            id=DrawerId(new_id()),
+    async def test_one_default_space_per_owner(self, uow_factory: UnitOfWorkFactory) -> None:
+        owner, _ = await owner_with_space(uow_factory)
+        second = Space(
+            id=SpaceId(new_id()),
             owner_id=owner.id,
             name="Another default",
             is_default=True,
             created_at=NOW,
         )
         with pytest.raises(ConflictError):
-            await seed(uow_factory, drawers=(second,))
+            await seed(uow_factory, spaces=(second,))
 
-    async def test_default_and_accessible_drawers(self, uow_factory: UnitOfWorkFactory) -> None:
+    async def test_default_and_accessible_spaces(self, uow_factory: UnitOfWorkFactory) -> None:
         alice, bob, carol = builders.user(), builders.user(), builders.user()
-        alice_default, bob_default = builders.default_drawer(alice), builders.default_drawer(bob)
-        shared = builders.drawer(alice, "Shared")
+        alice_default, bob_default = builders.default_space(alice), builders.default_space(bob)
+        shared = builders.space(alice, "Shared")
         shared.share(bob.id, ShareLevel.READ)
-        await seed(uow_factory, alice, bob, carol, drawers=(alice_default, bob_default, shared))
+        await seed(uow_factory, alice, bob, carol, spaces=(alice_default, bob_default, shared))
         async with uow_factory() as uow:
-            assert await uow.drawers.get_default(alice.id) == alice_default
+            assert await uow.spaces.get_default(alice.id) == alice_default
             with pytest.raises(NotFoundError):
-                await uow.drawers.get_default(carol.id)
-            accessible = {drawer.id for drawer in await uow.drawers.list_accessible(bob.id)}
+                await uow.spaces.get_default(carol.id)
+            accessible = {space.id for space in await uow.spaces.list_accessible(bob.id)}
             assert accessible == {bob_default.id, shared.id}
-            assert await uow.drawers.list_accessible(carol.id) == []
-            every = {drawer.id for drawer in await uow.drawers.list_all()}
+            assert await uow.spaces.list_accessible(carol.id) == []
+            every = {space.id for space in await uow.spaces.list_all()}
             assert every >= {alice_default.id, bob_default.id, shared.id}
 
     # --- master data ----------------------------------------------------------------------------
@@ -345,6 +349,189 @@ class UnitOfWorkContract:
             with pytest.raises(ConflictError):
                 await uow.contacts.add(Contact.create(name="stadtwerke", now=NOW))
                 await uow.commit()
+
+    async def test_tags_keep_scope_parent_assignment_and_display(
+        self, uow_factory: UnitOfWorkFactory
+    ) -> None:
+        top = Tag.create(name="Insurance", now=NOW)
+        child = Tag.create(
+            name="Health", now=NOW, parent_id=top.id, assignment=Assignment.MANUAL, shown=False
+        )
+        group = Tag.create(name="Insurance", now=NOW, scope=TagScope.CONTACT)
+        type_group = Tag.create(name="Bills", now=NOW, scope=TagScope.DOCUMENT_TYPE, shown=True)
+        async with uow_factory() as uow:
+            for item in (top, child, group, type_group):
+                await uow.tags.add(item)
+            await uow.commit()
+        async with uow_factory() as uow:
+            assert await uow.tags.get(child.id) == child
+            assert await uow.tags.get(type_group.id) == type_group
+            assert await uow.tags.find_by_name("INSURANCE") == top
+            assert await uow.tags.find_by_name("insurance", TagScope.CONTACT) == group
+            assert await uow.tags.find_by_name("Bills") is None
+            stored = await uow.tags.get(child.id)
+            stored.move(None)
+            stored.rename("Health insurance")
+            await uow.tags.update(stored)
+            await uow.commit()
+        async with uow_factory() as uow:
+            assert (await uow.tags.get(child.id)).parent_id is None
+        # Names are unique per scope.
+        with pytest.raises(ConflictError):
+            async with uow_factory() as uow:
+                await uow.tags.add(Tag.create(name="insurance", now=NOW, scope=TagScope.CONTACT))
+                await uow.commit()
+
+    async def test_master_data_keeps_icons_colours_and_logos(
+        self, uow_factory: UnitOfWorkFactory
+    ) -> None:
+        tag = Tag.create(name="Health", now=NOW, icon="heart-pulse", color="pink")
+        own = Tag.create(name="Car", now=NOW, scope=TagScope.TOPIC, icon="car", color="#b45309")
+        plain = Tag.create(name="Plain", now=NOW)
+        kind = DocumentType.create(name="Invoice", now=NOW, icon="receipt-euro")
+        uploaded = Contact.create(name="Nord", now=NOW)
+        uploaded.set_logo(ContactLogo(source=LogoSource.UPLOADED, stored_at=NOW))
+        failed = Contact.create(name="Süd", now=NOW)
+        failed.note_failed_fetch(["sued.example", "sued-ag.example"], NOW)
+        async with uow_factory() as uow:
+            for item in (tag, own, plain):
+                await uow.tags.add(item)
+            await uow.document_types.add(kind)
+            await uow.contacts.add(uploaded)
+            await uow.contacts.add(failed)
+            await uow.commit()
+        async with uow_factory() as uow:
+            assert await uow.tags.get(tag.id) == tag
+            assert (await uow.tags.get(own.id)).color == "#b45309"
+            assert (await uow.tags.get(plain.id)).icon is None
+            assert (await uow.document_types.get(kind.id)).icon == "receipt-euro"
+            stored = await uow.contacts.get(uploaded.id)
+            assert stored.logo == uploaded.logo and stored.logo_failure is None
+            other = await uow.contacts.get(failed.id)
+            assert other.logo is None and other.logo_failure == FailedLogoFetch(
+                domains=frozenset({"sued.example", "sued-ag.example"}), failed_at=NOW
+            )
+            later = NOW + timedelta(minutes=1)
+            other.set_logo(
+                ContactLogo(source=LogoSource.FETCHED, stored_at=later, domain="sued.example")
+            )
+            stored.remove_logo()
+            for contact in (stored, other):
+                await uow.contacts.update(contact)
+            await uow.commit()
+        async with uow_factory() as uow:
+            assert (await uow.contacts.get(uploaded.id)).logo is None
+            fetched = await uow.contacts.get(failed.id)
+            assert fetched.logo == ContactLogo(
+                source=LogoSource.FETCHED, stored_at=later, domain="sued.example"
+            )
+            assert fetched.logo_failure is None
+
+    async def test_contacts_and_types_keep_their_groups(
+        self, uow_factory: UnitOfWorkFactory
+    ) -> None:
+        insurer = Tag.create(name="Insurer", now=NOW, scope=TagScope.CONTACT)
+        employer = Tag.create(name="Employer", now=NOW, scope=TagScope.CONTACT)
+        bills = Tag.create(name="Bills", now=NOW, scope=TagScope.DOCUMENT_TYPE)
+        contact = Contact.create(name="Nord", now=NOW)
+        contact.set_groups([insurer.id, employer.id])
+        kind = DocumentType.create(name="Invoice", now=NOW)
+        kind.set_groups([bills.id])
+        async with uow_factory() as uow:
+            for tag in (insurer, employer, bills):
+                await uow.tags.add(tag)
+            await uow.contacts.add(contact)
+            await uow.document_types.add(kind)
+            await uow.commit()
+        async with uow_factory() as uow:
+            stored = await uow.contacts.get(contact.id)
+            assert stored.group_ids == {insurer.id, employer.id}
+            assert (await uow.document_types.get(kind.id)).group_ids == {bills.id}
+            stored.set_groups([employer.id])
+            await uow.contacts.update(stored)
+            await uow.commit()
+        async with uow_factory() as uow:
+            assert (await uow.contacts.get(contact.id)).group_ids == {employer.id}
+            await uow.contacts.remove(contact.id)
+            await uow.document_types.remove(kind.id)
+            await uow.commit()
+        async with uow_factory() as uow:
+            # The groups stay; what was in them went with the contact and the type.
+            assert {tag.id for tag in await uow.tags.list_all()} >= {insurer.id, bills.id}
+            await uow.tags.remove(employer.id)
+            await uow.commit()
+
+    async def test_topics_at_contacts_identifiers_and_documents(
+        self, uow_factory: UnitOfWorkFactory
+    ) -> None:
+        """A contact keeps the topics it enables and the topic of each identifier; a document
+        keeps its topic, is found by it (one of a set) and counted by it."""
+        owner, space = await owner_with_space(uow_factory)
+        stranger = builders.user()
+        await seed(uow_factory, stranger)
+        insurance = Tag.create(name="Insurance", now=NOW, scope=TagScope.TOPIC)
+        health = Tag.create(name="Health", now=NOW, scope=TagScope.TOPIC, parent_id=insurance.id)
+        work = Tag.create(name="Work", now=NOW, scope=TagScope.TOPIC)
+        number = Identifier.parse(IdentifierKind.PERSONNEL_NUMBER, "4711", topic_id=work.id)
+        policy = Identifier.parse(IdentifierKind.CUSTOMER_NUMBER, "KV-2026-1")
+        contact = Contact.create(
+            name="Nord", now=NOW, topic_ids=[work.id, health.id], identifiers=[number, policy]
+        )
+        contact.set_learned(
+            [Identifier(IdentifierKind.EMAIL_DOMAIN, "nord.example", topic_id=health.id)]
+        )
+        documents = []
+        for topic in (work.id, health.id, None):
+            document = builders.processed(owner, space)
+            document.apply_changes(DocumentChanges(contact_id=contact.id, topic_id=topic), {}, NOW)
+            document.mark_confirmed(NOW)
+            documents.append(document)
+        async with uow_factory() as uow:
+            for tag in (insurance, health, work):
+                await uow.tags.add(tag)
+            await uow.contacts.add(contact)
+            for document in documents:
+                await uow.documents.add(document)
+            await uow.commit()
+        numbers = {document.id: index for index, document in enumerate(documents)}
+        async with uow_factory() as uow:
+            stored = await uow.contacts.get(contact.id)
+            assert stored == contact
+            assert stored.topic_ids == {work.id, health.id}
+            assert [item.topic_id for item in stored.identifiers] == [None, work.id, health.id]
+            assert (await uow.documents.get(documents[0].id)).topic_id == work.id
+
+            async def found(topics: frozenset[TagId]) -> set[int]:
+                filter = DocumentFilter(topics=topics)
+                listed = await uow.documents.query(filter, limit=9)
+                assert listed == await uow.documents.query_visible(owner.id, filter, limit=9)
+                return {numbers[document.id] for document in listed}
+
+            assert await found(frozenset({work.id})) == {0}
+            assert await found(frozenset({work.id, health.id})) == {0, 1}
+            assert await found(frozenset({insurance.id})) == set()
+            assert await uow.documents.count_by(CountBy.TOPIC, None) == {work.id: 1, health.id: 1}
+            assert await uow.documents.count_by(CountBy.TOPIC, stranger.id) == {}
+            assert (await uow.documents.confirmed_labels(owner.id)).topics == {work.id, health.id}
+            assert await uow.documents.exists(topic=work.id)
+            assert await uow.documents.exists(contact=contact.id, topic=health.id)
+            assert not await uow.documents.exists(topic=insurance.id)
+            # Taking a topic away leaves its identifiers without one.
+            stored.set_topics([work.id])
+            await uow.contacts.update(stored)
+            await uow.commit()
+        async with uow_factory() as uow:
+            stored = await uow.contacts.get(contact.id)
+            assert stored.topic_ids == {work.id}
+            assert [item.topic_id for item in stored.identifiers] == [None, work.id, None]
+            for document in documents:
+                await uow.documents.remove(document.id)
+            await uow.contacts.remove(contact.id)
+            await uow.commit()
+        async with uow_factory() as uow:
+            # The topics stay; the contact took its enabling with it.
+            await uow.tags.remove(work.id)
+            await uow.commit()
 
     async def test_contact_aliases_and_type_description(
         self, uow_factory: UnitOfWorkFactory
@@ -503,12 +690,30 @@ class UnitOfWorkContract:
         async with uow_factory() as uow:
             assert (await uow.fields.get(gross.id)).description is None
 
+    async def test_a_field_keeps_whether_it_is_set_by_hand(
+        self, uow_factory: UnitOfWorkFactory
+    ) -> None:
+        asn = FieldDefinition.create(
+            name="ASN", data_type=FieldType.NUMBER, now=NOW, assignment=Assignment.MANUAL
+        )
+        async with uow_factory() as uow:
+            await uow.fields.add(asn)
+            await uow.commit()
+        async with uow_factory() as uow:
+            stored = await uow.fields.get(asn.id)
+            assert stored.assignment is Assignment.MANUAL and not stored.is_read
+            stored.assignment = Assignment.AUTO
+            await uow.fields.update(stored)
+            await uow.commit()
+        async with uow_factory() as uow:
+            assert (await uow.fields.get(asn.id)).is_read
+
     # --- documents ------------------------------------------------------------------------------
 
     async def test_document_round_trip_with_all_fields(
         self, uow_factory: UnitOfWorkFactory
     ) -> None:
-        owner, drawer = await owner_with_drawer(uow_factory)
+        owner, space = await owner_with_space(uow_factory)
         contact = Contact.create(name="Bank", now=NOW)
         invoice = DocumentType.create(name="Invoice", now=NOW)
         tags = [Tag.create(name=name, now=NOW) for name in ("a", "b")]
@@ -531,7 +736,7 @@ class UnitOfWorkContract:
             FieldType.LINK: Url("https://example.org/contract?id=7"),
             FieldType.PERIOD: Period(date(2026, 9, 1), date(2026, 9, 30)),
         }
-        document = builders.document(owner, drawer)
+        document = builders.document(owner, space)
         document.apply_changes(
             DocumentChanges(
                 title="Statement",
@@ -561,15 +766,15 @@ class UnitOfWorkContract:
     async def test_document_processing_state_round_trip(
         self, uow_factory: UnitOfWorkFactory
     ) -> None:
-        owner, drawer = await owner_with_drawer(uow_factory)
-        failed = builders.processed(owner, drawer, {Node.PARSE: FAILED})
+        owner, space = await owner_with_space(uow_factory)
+        failed = builders.processed(owner, space, {Node.PARSE: FAILED})
         failed.retry(NOW)
         failed.pull_events()
-        received = builders.document(owner, drawer)
-        in_review = builders.processed(owner, drawer, {Node.JUDGE: UNCERTAIN})
+        received = builders.document(owner, space)
+        in_review = builders.processed(owner, space, {Node.JUDGE: UNCERTAIN})
         assert in_review.processing.status is ProcessingStatus.REVIEW
         # A person asked that the vision language model read it.
-        read_again = builders.processed(owner, drawer, {})
+        read_again = builders.processed(owner, space, {})
         read_again.read_with_vision(NOW)
         read_again.pull_events()
         assert read_again.processing.vision
@@ -583,8 +788,8 @@ class UnitOfWorkContract:
                 assert await uow.documents.get(document.id) == document
 
     async def test_loaded_documents_carry_no_events(self, uow_factory: UnitOfWorkFactory) -> None:
-        owner, drawer = await owner_with_drawer(uow_factory)
-        document = builders.document(owner, drawer)
+        owner, space = await owner_with_space(uow_factory)
+        document = builders.document(owner, space)
         builders.run_pipeline(document)  # events recorded but not pulled
         async with uow_factory() as uow:
             await uow.documents.add(document)
@@ -593,31 +798,31 @@ class UnitOfWorkContract:
             assert (await uow.documents.get(document.id)).pull_events() == []
 
     async def test_original_is_unique_per_owner(self, uow_factory: UnitOfWorkFactory) -> None:
-        alice, alice_drawer = await owner_with_drawer(uow_factory)
-        bob, bob_drawer = await owner_with_drawer(uow_factory)
-        first = builders.document(alice, alice_drawer, content="same")
+        alice, alice_space = await owner_with_space(uow_factory)
+        bob, bob_space = await owner_with_space(uow_factory)
+        first = builders.document(alice, alice_space, content="same")
         async with uow_factory() as uow:
             await uow.documents.add(first)
-            await uow.documents.add(builders.document(bob, bob_drawer, content="same"))
+            await uow.documents.add(builders.document(bob, bob_space, content="same"))
             await uow.commit()
         async with uow_factory() as uow:
             assert await uow.documents.find_by_sha256(alice.id, first.sha256) == first
             assert await uow.documents.find_by_sha256(alice.id, builders.sha256()) is None
         with pytest.raises(ConflictError):
             async with uow_factory() as uow:
-                await uow.documents.add(builders.document(alice, alice_drawer, content="same"))
+                await uow.documents.add(builders.document(alice, alice_space, content="same"))
                 await uow.commit()
 
     async def test_document_identifiers_tell_the_contacts_that_show_them(
         self, uow_factory: UnitOfWorkFactory
     ) -> None:
         """Only confirmed documents with a contact count."""
-        owner, drawer = await owner_with_drawer(uow_factory)
+        owner, space = await owner_with_space(uow_factory)
         utility, bank = (Contact.create(name=name, now=NOW) for name in ("Stadtwerke", "Bank"))
         own = (IdentifierKind.IBAN, "DE02120300000000202051")
         customer = (IdentifierKind.CUSTOMER_NUMBER, "20047718")
         other = (IdentifierKind.VAT_ID, "DE312456789")
-        documents = [builders.processed(owner, drawer) for _ in range(4)]
+        documents = [builders.processed(owner, space) for _ in range(4)]
         shows = [{own, customer}, {own}, {other}, {own}]
         for document, contact in zip(documents, [utility, bank, utility, None], strict=True):
             document.contact_id = None if contact is None else contact.id
@@ -646,8 +851,8 @@ class UnitOfWorkContract:
             }
 
     async def test_remove_document(self, uow_factory: UnitOfWorkFactory) -> None:
-        owner, drawer = await owner_with_drawer(uow_factory)
-        document = builders.document(owner, drawer)
+        owner, space = await owner_with_space(uow_factory)
+        document = builders.document(owner, space)
         async with uow_factory() as uow:
             await uow.documents.add(document)
             await uow.commit()
@@ -664,11 +869,11 @@ class UnitOfWorkContract:
         self, uow_factory: UnitOfWorkFactory
     ) -> None:
         owner, reader, stranger = builders.user(), builders.user(), builders.user()
-        private = builders.default_drawer(owner)
-        shared = builders.drawer(owner, "Shared")
+        private = builders.default_space(owner)
+        shared = builders.space(owner, "Shared")
         shared.share(reader.id, ShareLevel.READ)
-        reader_default = builders.default_drawer(reader)
-        await seed(uow_factory, owner, reader, stranger, drawers=(private, shared, reader_default))
+        reader_default = builders.default_space(reader)
+        await seed(uow_factory, owner, reader, stranger, spaces=(private, shared, reader_default))
         documents = [
             builders.processed(owner, private),
             builders.processed(owner, shared),
@@ -683,34 +888,34 @@ class UnitOfWorkContract:
             for document in documents:
                 await uow.documents.add(document)
             await uow.commit()
-        drawers = {drawer.id: drawer for drawer in (private, shared, reader_default)}
+        spaces = {space.id: space for space in (private, shared, reader_default)}
         async with uow_factory() as uow:
             for user in (owner, reader, stranger):
                 expected = {
                     document.id
                     for document in documents
-                    if can_read_document(user, document, drawers[document.drawer_id])
+                    if can_read_document(user, document, spaces[document.space_id])
                 }
                 visible = {document.id for document in await uow.documents.list_visible_to(user.id)}
                 assert visible == expected, user.username
                 queried = await uow.documents.query_visible(user.id, DocumentFilter(), limit=100)
                 assert {document.id for document in queried} == expected, user.username
                 for lane in (Lane.YELLOW, Lane.RED, None):
-                    only = DocumentFilter(lanes=frozenset({lane}), drawer=shared.id)
+                    only = DocumentFilter(lanes=frozenset({lane}), space=shared.id)
                     found = await uow.documents.query_visible(user.id, only, limit=100)
                     assert {d.id for d in found} <= expected, user.username
         assert len(expected) == 0  # the stranger sees nothing
         async with uow_factory() as uow:
             every = await uow.documents.query(DocumentFilter(), limit=100)
             assert {d.id for d in every} >= {d.id for d in documents}
-            yellow = DocumentFilter(lanes=frozenset({Lane.YELLOW}), drawer=shared.id)
+            yellow = DocumentFilter(lanes=frozenset({Lane.YELLOW}), space=shared.id)
             yellow_ids = {d.id for d in await uow.documents.query(yellow, limit=100)}
             assert yellow_ids == {d.id for d in documents if d.lane is Lane.YELLOW}
 
     async def test_confirmed_documents(self, uow_factory: UnitOfWorkFactory) -> None:
         """The time a person confirmed the metadata is kept; documents filter and count by it."""
-        owner, drawer = await owner_with_drawer(uow_factory)
-        early, late, never = (builders.processed(owner, drawer) for _ in range(3))
+        owner, space = await owner_with_space(uow_factory)
+        early, late, never = (builders.processed(owner, space) for _ in range(3))
         early.mark_confirmed(NOW)
         late.mark_confirmed(NOW + timedelta(hours=1))
         async with uow_factory() as uow:
@@ -730,14 +935,14 @@ class UnitOfWorkContract:
     async def test_confirmed_labels(self, uow_factory: UnitOfWorkFactory) -> None:
         """What the confirmed documents a user may read carry; not what the open ones do, nor
         another owner's."""
-        owner, drawer = await owner_with_drawer(uow_factory)
-        stranger, elsewhere = await owner_with_drawer(uow_factory)
+        owner, space = await owner_with_space(uow_factory)
+        stranger, elsewhere = await owner_with_space(uow_factory)
         known, other, foreign = (
             Contact.create(name=name, now=NOW) for name in ("Known", "Other", "Foreign")
         )
         kind = DocumentType.create(name="Invoice", now=NOW)
         tag, untouched = (Tag.create(name=name, now=NOW) for name in ("Energy", "Unused"))
-        confirmed, open_ = builders.processed(owner, drawer), builders.processed(owner, drawer)
+        confirmed, open_ = builders.processed(owner, space), builders.processed(owner, space)
         theirs = builders.processed(stranger, elsewhere)
         confirmed.apply_changes(
             DocumentChanges(
@@ -804,9 +1009,9 @@ class UnitOfWorkContract:
                 await uow.commit()
 
     async def test_query_filters_and_pages(self, uow_factory: UnitOfWorkFactory) -> None:
-        owner, drawer = await owner_with_drawer(uow_factory)
-        other = builders.drawer(owner, "Other")
-        await seed(uow_factory, drawers=(other,))
+        owner, space = await owner_with_space(uow_factory)
+        other = builders.space(owner, "Other")
+        await seed(uow_factory, spaces=(other,))
         contact = Contact.create(name="ACME", now=NOW)
         invoice = DocumentType.create(name="Invoice", now=NOW)
         tax, paid = Tag.create(name="tax", now=NOW), Tag.create(name="paid", now=NOW)
@@ -814,7 +1019,7 @@ class UnitOfWorkContract:
         for number in range(6):
             document = builders.processed(
                 owner,
-                other if number == 5 else drawer,
+                other if number == 5 else space,
                 {Node.JUDGE: UNCERTAIN} if number == 4 else None,
             )
             tags = frozenset({tax.id, paid.id} if number < 2 else {tax.id} if number < 4 else set())
@@ -828,7 +1033,7 @@ class UnitOfWorkContract:
                 NOW,
             )
             documents.append(document)
-        processing = builders.document(owner, drawer)
+        processing = builders.document(owner, space)
         async with uow_factory() as uow:
             for item in (contact, invoice, tax, paid):
                 await getattr(uow, _repository_of(item)).add(item)
@@ -853,15 +1058,17 @@ class UnitOfWorkContract:
             }
             by_type = DocumentFilter(document_type=invoice.id)
             assert set(ids(await query(owner.id, by_type, limit=9))) == {0, 1, 2}
-            both_tags = DocumentFilter(tags=frozenset({tax.id, paid.id}))
+            both_tags = DocumentFilter(tags=(frozenset({tax.id}), frozenset({paid.id})))
             assert set(ids(await query(owner.id, both_tags, limit=9))) == {0, 1}
-            assert set(ids(await query(owner.id, DocumentFilter(drawer=other.id), limit=9))) == {5}
+            either_tag = DocumentFilter(tags=(frozenset({tax.id, paid.id}),))
+            assert set(ids(await query(owner.id, either_tag, limit=9))) == {0, 1, 2, 3}
+            assert set(ids(await query(owner.id, DocumentFilter(space=other.id), limit=9))) == {5}
             yellow = DocumentFilter(lanes=frozenset({Lane.YELLOW}))
             assert set(ids(await query(owner.id, yellow, limit=9))) == {4}
             in_processing = await query(owner.id, DocumentFilter(lanes=frozenset({None})), limit=9)
             assert [d.id for d in in_processing] == [processing.id]
             combined = DocumentFilter(
-                contact=contact.id, document_type=invoice.id, tags=frozenset({paid.id})
+                contact=contact.id, document_type=invoice.id, tags=(frozenset({paid.id}),)
             )
             assert set(ids(await query(owner.id, combined, limit=9))) == {0}
 
@@ -878,17 +1085,89 @@ class UnitOfWorkContract:
             assert [d.id for d in await query(owner.id, both_tags, limit=9)] == [
                 d.id for d in await uow.documents.query(both_tags, limit=9)
             ]
-            in_drawer = [d.id for d in everything if d.drawer_id == drawer.id]
-            first = await uow.documents.query(DocumentFilter(drawer=drawer.id), limit=2)
+            in_space = [d.id for d in everything if d.space_id == space.id]
+            first = await uow.documents.query(DocumentFilter(space=space.id), limit=2)
             rest = await uow.documents.query(
-                DocumentFilter(drawer=drawer.id), after=DocumentPosition(first[-1].id), limit=100
+                DocumentFilter(space=space.id), after=DocumentPosition(first[-1].id), limit=100
             )
-            assert [d.id for d in [*first, *rest]] == in_drawer
+            assert [d.id for d in [*first, *rest]] == in_space
+
+    async def test_query_by_groups_and_counts_of_tag_sets(
+        self, uow_factory: UnitOfWorkFactory
+    ) -> None:
+        owner, space = await owner_with_space(uow_factory)
+        stranger = builders.user()
+        await seed(uow_factory, stranger)
+        insurer = Tag.create(name="Insurer", now=NOW, scope=TagScope.CONTACT)
+        employer = Tag.create(name="Employer", now=NOW, scope=TagScope.CONTACT)
+        bills = Tag.create(name="Bills", now=NOW, scope=TagScope.DOCUMENT_TYPE)
+        tax, paid = Tag.create(name="tax", now=NOW), Tag.create(name="paid", now=NOW)
+        nord, sued = Contact.create(name="Nord", now=NOW), Contact.create(name="Süd", now=NOW)
+        nord.set_groups([insurer.id, employer.id])
+        sued.set_groups([employer.id])
+        invoice = DocumentType.create(name="Invoice", now=NOW)
+        invoice.set_groups([bills.id])
+        documents = []
+        for contact, kind, tags in (
+            (nord, invoice, {tax.id, paid.id}),
+            (sued, None, {tax.id}),
+            (None, None, set()),
+        ):
+            document = builders.processed(owner, space)
+            changes = DocumentChanges(
+                contact_id=None if contact is None else contact.id,
+                document_type_id=None if kind is None else kind.id,
+                tag_ids=frozenset(tags),
+            )
+            document.apply_changes(changes, {}, NOW)
+            documents.append(document)
+        async with uow_factory() as uow:
+            for tag in (insurer, employer, bills, tax, paid):
+                await uow.tags.add(tag)
+            await uow.contacts.add(nord)
+            await uow.contacts.add(sued)
+            await uow.document_types.add(invoice)
+            for document in documents:
+                await uow.documents.add(document)
+            await uow.commit()
+        numbers = {document.id: number for number, document in enumerate(documents)}
+
+        async with uow_factory() as uow:
+
+            async def found(
+                contacts: TagSets = (), types: TagSets = (), tags: TagSets = ()
+            ) -> set[int]:
+                filter = DocumentFilter(
+                    contact_groups=contacts, document_type_groups=types, tags=tags
+                )
+                listed = await uow.documents.query(filter, limit=9)
+                assert listed == await uow.documents.query_visible(owner.id, filter, limit=9)
+                return {numbers[document.id] for document in listed}
+
+            assert await found(contacts=(frozenset({insurer.id}),)) == {0}
+            assert await found(contacts=(frozenset({employer.id}),)) == {0, 1}
+            assert await found(contacts=(frozenset({insurer.id, employer.id}),)) == {0, 1}
+            assert await found(contacts=(frozenset({insurer.id}), frozenset({employer.id}))) == {0}
+            assert await found(types=(frozenset({bills.id}),)) == {0}
+            assert await found(
+                contacts=(frozenset({employer.id}),), tags=(frozenset({paid.id}),)
+            ) == {0}
+            assert await found(types=(frozenset({employer.id}),)) == set()
+
+            either, only_paid, none = (TagId(new_id()) for _ in range(3))
+            sets: dict[UUID, Collection[TagId]] = {
+                either: {tax.id, paid.id},
+                only_paid: {paid.id},
+                none: {insurer.id},
+            }
+            assert await uow.documents.count_tagged(sets, None) == {either: 2, only_paid: 1}
+            assert await uow.documents.count_tagged(sets, owner.id) == {either: 2, only_paid: 1}
+            assert await uow.documents.count_tagged(sets, stranger.id) == {}
 
     async def test_query_sorts_by_date_and_title_and_filters_by_field(
         self, uow_factory: UnitOfWorkFactory
     ) -> None:
-        owner, drawer = await owner_with_drawer(uow_factory)
+        owner, space = await owner_with_space(uow_factory)
         note = FieldDefinition.create(name="Note", data_type=FieldType.TEXT, now=NOW)
         rows = [  # title, document date, note; in the order they come in
             ("Ärztebrief", date(2026, 3, 1), "a"),
@@ -899,7 +1178,7 @@ class UnitOfWorkContract:
         ]
         documents = []
         for title, day, value in rows:
-            document = builders.processed(owner, drawer)
+            document = builders.processed(owner, space)
             values = {note.id: value} if value else {}
             changes = DocumentChanges(title=title, document_date=day, fields=values)
             document.apply_changes(changes, {note.id: note}, NOW)
@@ -957,15 +1236,15 @@ class UnitOfWorkContract:
     async def test_documents_are_counted_by_master_data(
         self, uow_factory: UnitOfWorkFactory
     ) -> None:
-        owner, drawer = await owner_with_drawer(uow_factory)
-        stranger, theirs = await owner_with_drawer(uow_factory)
+        owner, space = await owner_with_space(uow_factory)
+        stranger, theirs = await owner_with_space(uow_factory)
         contact = Contact.create(name="ACME", now=NOW)
         invoice = DocumentType.create(name="Invoice", now=NOW)
         tax = Tag.create(name="tax", now=NOW)
         note = FieldDefinition.create(name="Note", data_type=FieldType.TEXT, now=NOW)
         documents = []
         for number, (user, place) in enumerate(
-            [(owner, drawer), (owner, drawer), (stranger, theirs)]
+            [(owner, space), (owner, space), (stranger, theirs)]
         ):
             document = builders.processed(user, place)
             changes = DocumentChanges(
@@ -986,7 +1265,7 @@ class UnitOfWorkContract:
 
         async with uow_factory() as uow:
             count = uow.documents.count_by
-            # Within the owner's reach: their own two (the stranger's drawer is not shared).
+            # Within the owner's reach: their own two (the stranger's space is not shared).
             assert await count(CountBy.CONTACT, owner.id) == {contact.id: 2}
             assert await count(CountBy.DOCUMENT_TYPE, owner.id) == {invoice.id: 1}
             assert await count(CountBy.TAG, owner.id) == {tax.id: 2}
@@ -998,8 +1277,8 @@ class UnitOfWorkContract:
     async def test_removing_a_document_removes_its_processing_log(
         self, uow_factory: UnitOfWorkFactory
     ) -> None:
-        owner, drawer = await owner_with_drawer(uow_factory)
-        document = builders.document(owner, drawer)
+        owner, space = await owner_with_space(uow_factory)
+        document = builders.document(owner, space)
         entry = NodeRun(
             document_id=document.id,
             node=Node.RECEIVE,
@@ -1023,8 +1302,8 @@ class UnitOfWorkContract:
     # --- processing log -------------------------------------------------------------------------
 
     async def test_processing_log(self, uow_factory: UnitOfWorkFactory) -> None:
-        owner, drawer = await owner_with_drawer(uow_factory)
-        document, other = builders.document(owner, drawer), builders.document(owner, drawer)
+        owner, space = await owner_with_space(uow_factory)
+        document, other = builders.document(owner, space), builders.document(owner, space)
         entries = [
             NodeRun(
                 document_id=document.id,
@@ -1080,25 +1359,25 @@ class UnitOfWorkContract:
         async with uow_factory() as uow:
             assert (await uow.users.get(user.id)).active is True
 
-    async def test_users_and_drawers_are_removed(self, uow_factory: UnitOfWorkFactory) -> None:
-        owner, drawer = await owner_with_drawer(uow_factory)
+    async def test_users_and_spaces_are_removed(self, uow_factory: UnitOfWorkFactory) -> None:
+        owner, space = await owner_with_space(uow_factory)
         other = builders.user()
-        shared = builders.drawer(owner)
+        shared = builders.space(owner)
         shared.share(other.id, ShareLevel.READ)
-        await seed(uow_factory, other, drawers=(shared,))
+        await seed(uow_factory, other, spaces=(shared,))
         async with uow_factory() as uow:
-            await uow.drawers.remove(shared.id)
-            await uow.drawers.remove(drawer.id)
+            await uow.spaces.remove(shared.id)
+            await uow.spaces.remove(space.id)
             await uow.users.remove(owner.id)
             await uow.commit()
         async with uow_factory() as uow:
             assert await uow.users.find(owner.id) is None
-            assert await uow.drawers.find(shared.id) is None
-            assert await uow.drawers.list_accessible(other.id) == []
+            assert await uow.spaces.find(shared.id) is None
+            assert await uow.spaces.list_accessible(other.id) == []
             with pytest.raises(NotFoundError):
                 await uow.users.remove(owner.id)
             with pytest.raises(NotFoundError):
-                await uow.drawers.remove(drawer.id)
+                await uow.spaces.remove(space.id)
 
     async def test_a_lock_makes_other_units_wait(self, uow_factory: UnitOfWorkFactory) -> None:
         order: list[str] = []
@@ -1135,13 +1414,13 @@ class UnitOfWorkContract:
             await uow.commit()
 
     async def test_field_values_in_use(self, uow_factory: UnitOfWorkFactory) -> None:
-        owner, drawer = await owner_with_drawer(uow_factory)
+        owner, space = await owner_with_space(uow_factory)
         invoice = DocumentType.create(name="Invoice", now=NOW)
         letter = DocumentType.create(name="Letter", now=NOW)
         kind = FieldDefinition.create(
             name="Kind", data_type=FieldType.CHOICE, now=NOW, choices=["a", "b", "c"]
         )
-        typed, untyped = builders.document(owner, drawer), builders.document(owner, drawer)
+        typed, untyped = builders.document(owner, space), builders.document(owner, space)
         definitions = {kind.id: kind}
         typed.apply_changes(
             DocumentChanges(document_type_id=invoice.id, fields={kind.id: "a"}),
@@ -1183,13 +1462,13 @@ class UnitOfWorkContract:
                 await uow.tags.remove(tag.id)
 
     async def test_documents_exist_by_reference(self, uow_factory: UnitOfWorkFactory) -> None:
-        owner, drawer = await owner_with_drawer(uow_factory)
-        stranger, empty = await owner_with_drawer(uow_factory)
+        owner, space = await owner_with_space(uow_factory)
+        stranger, empty = await owner_with_space(uow_factory)
         contact = Contact.create(name="ACME", now=NOW)
         document_type = DocumentType.create(name="Invoice", now=NOW)
         tag = Tag.create(name="tax", now=NOW)
         field = FieldDefinition.create(name="note", data_type=FieldType.TEXT, now=NOW)
-        document = builders.document(owner, drawer)
+        document = builders.document(owner, space)
         document.apply_changes(
             DocumentChanges(
                 contact_id=contact.id,
@@ -1210,14 +1489,14 @@ class UnitOfWorkContract:
         unused_tag = Tag.create(name="unused", now=NOW)
         async with uow_factory() as uow:
             assert await uow.documents.exists(owner=owner.id)
-            assert await uow.documents.exists(drawer=drawer.id)
+            assert await uow.documents.exists(space=space.id)
             assert await uow.documents.exists(contact=contact.id)
             assert await uow.documents.exists(document_type=document_type.id)
             assert await uow.documents.exists(tag=tag.id)
             assert await uow.documents.exists(field=field.id)
             assert await uow.documents.exists(owner=owner.id, tag=tag.id)
             assert not await uow.documents.exists(owner=stranger.id)
-            assert not await uow.documents.exists(drawer=empty.id)
+            assert not await uow.documents.exists(space=empty.id)
             assert not await uow.documents.exists(owner=stranger.id, tag=tag.id)
             assert not await uow.documents.exists(tag=unused_tag.id)
             assert await uow.documents.exists(sha256=document.sha256)

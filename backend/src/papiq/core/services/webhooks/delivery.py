@@ -418,11 +418,11 @@ async def _owners_who_may_read(
         return set()
     if isinstance(event, DocumentFiled) and document.lane is None:
         return set()
-    drawer = await uow.drawers.get(document.drawer_id)
+    space = await uow.spaces.get(document.space_id)
     allowed: set[UserId] = set()
     for owner in owners:
         user = await uow.users.find(owner)
-        if user is not None and in_reach(user, document, drawer):
+        if user is not None and in_reach(user, document, space):
             allowed.add(owner)
     return allowed
 
@@ -451,10 +451,10 @@ async def _reason_to_drop(
 
 async def _may_read(uow: UnitOfWork, user: User, document: Document) -> bool:
     try:
-        drawer = await uow.drawers.get(document.drawer_id)
+        space = await uow.spaces.get(document.space_id)
     except NotFoundError:
         return False
-    return in_reach(user, document, drawer)
+    return in_reach(user, document, space)
 
 
 # --- answers ------------------------------------------------------------------------------------

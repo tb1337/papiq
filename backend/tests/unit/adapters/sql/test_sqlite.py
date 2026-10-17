@@ -16,7 +16,7 @@ from tests.contracts.event_bus import EventBusContract
 from tests.contracts.identity import IdentityRepositoriesContract
 from tests.contracts.job_queue import JobQueueContract
 from tests.contracts.rules import RuleRepositoriesContract
-from tests.contracts.unit_of_work import UnitOfWorkContract, owner_with_drawer
+from tests.contracts.unit_of_work import UnitOfWorkContract, owner_with_space
 from tests.contracts.webhooks import WebhookRepositoryContract
 from tests.sql_suite import MigrationSuite, SqlAdapterSuite
 
@@ -65,9 +65,9 @@ async def test_decimals_and_timestamps_are_stored_as_exact_text(
 ) -> None:
     """SQLite has no decimal or timezone types: decimals are their exact text, timestamps UTC
     text of fixed width (so text order is time order)."""
-    owner, drawer = await owner_with_drawer(uow_factory)
+    owner, space = await owner_with_space(uow_factory)
     amount = FieldDefinition.create(name="a", data_type=FieldType.AMOUNT, now=NOW)
-    document = builders.document(owner, drawer)
+    document = builders.document(owner, space)
     document.apply_changes(
         DocumentChanges(fields={amount.id: Money(Decimal("-12.30"), "CHF")}),
         {amount.id: amount},

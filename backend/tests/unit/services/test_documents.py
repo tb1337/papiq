@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 
 from papiq.core.domain.documents import Document, DocumentChanges
-from papiq.core.domain.drawers import Drawer, ShareLevel
 from papiq.core.domain.errors import (
     ConflictError,
     NotFoundError,
@@ -15,8 +14,9 @@ from papiq.core.domain.errors import (
 from papiq.core.domain.events import DocumentDeleted, DocumentFiled, DocumentUpdated
 from papiq.core.domain.exchanges import ModelCall, RunExchange, exchanges_to_json
 from papiq.core.domain.fields import FieldType
-from papiq.core.domain.ids import ContactId, DocumentId, DrawerId, TagId, UserId, new_id
-from papiq.core.domain.pipeline import PERSON_DRAWER, Lane, Node
+from papiq.core.domain.ids import ContactId, DocumentId, SpaceId, TagId, UserId, new_id
+from papiq.core.domain.pipeline import PERSON_SPACE, Lane, Node
+from papiq.core.domain.spaces import ShareLevel, Space
 from papiq.core.domain.users import Role, User
 from papiq.core.ports import DocumentFilter
 from papiq.core.services.documents import DocumentFile, FileInfo
@@ -32,13 +32,13 @@ from tests.unit.services.conftest import Returns, World
 
 
 class Scene:
-    """Owner with a shared drawer (reader: read, writer: read_write) and a green document."""
+    """Owner with a shared space (reader: read, writer: read_write) and a green document."""
 
     owner: User
     reader: User
     writer: User
     stranger: User
-    shared: Drawer
+    shared: Space
     document: Document
 
 
@@ -47,16 +47,16 @@ async def scene(world: World) -> Scene:
     scene = Scene()
     scene.owner, scene.reader = await world.user("owner"), await world.user("reader")
     scene.writer, scene.stranger = await world.user("writer"), await world.user("stranger")
-    scene.shared = await world.drawers.create(scene.owner.id, "Household")
-    await world.drawers.share(scene.owner.id, scene.shared.id, scene.reader.id, ShareLevel.READ)
-    await world.drawers.share(
+    scene.shared = await world.spaces.create(scene.owner.id, "Household")
+    await world.spaces.share(scene.owner.id, scene.shared.id, scene.reader.id, ShareLevel.READ)
+    await world.spaces.share(
         scene.owner.id, scene.shared.id, scene.writer.id, ShareLevel.READ_WRITE
     )
     received = await world.pipeline().receive(
         scene.owner.id,
         incoming(b"%PDF-1.7 electricity"),
         filename="electricity.pdf",
-        drawer=scene.shared.id,
+        space=scene.shared.id,
     )
     await world.drain()
     scene.document = await world.documents.get(scene.owner.id, received.id)
@@ -143,28 +143,28 @@ async def test_field_values_are_checked(world: World, scene: Scene) -> None:
     assert world.events() == []
 
 
-async def test_owner_moves_into_drawers_with_write_access(world: World, scene: Scene) -> None:
-    owner_default = await world.default_drawer(scene.owner)
-    read_only = await world.drawers.create(scene.stranger.id, "Archive")
-    await world.drawers.share(scene.stranger.id, read_only.id, scene.owner.id, ShareLevel.READ)
+async def test_owner_moves_into_spaces_with_write_access(world: World, scene: Scene) -> None:
+    owner_default = await world.default_space(scene.owner)
+    read_only = await world.spaces.create(scene.stranger.id, "Archive")
+    await world.spaces.share(scene.stranger.id, read_only.id, scene.owner.id, ShareLevel.READ)
     with pytest.raises(PermissionDeniedError):
         await world.documents.move(scene.owner.id, scene.document.id, read_only.id)
     with pytest.raises(NotFoundError):
         await world.documents.move(
-            scene.owner.id, scene.document.id, (await world.default_drawer(scene.writer)).id
+            scene.owner.id, scene.document.id, (await world.default_space(scene.writer)).id
         )
 
     await world.documents.move(scene.owner.id, scene.document.id, owner_default.id)
     moved = await world.documents.get(scene.owner.id, scene.document.id)
-    assert moved.drawer_id == owner_default.id
+    assert moved.space_id == owner_default.id
     (event,) = world.events()
-    assert isinstance(event, DocumentFiled) and event.drawer_id == owner_default.id
+    assert isinstance(event, DocumentFiled) and event.space_id == owner_default.id
     with pytest.raises(NotFoundError):
         await world.documents.get(scene.reader.id, scene.document.id)
 
 
 async def test_shares_never_allow_moving(world: World, scene: Scene) -> None:
-    writer_default = await world.default_drawer(scene.writer)
+    writer_default = await world.default_space(scene.writer)
     with pytest.raises(PermissionDeniedError):
         await world.documents.move(scene.writer.id, scene.document.id, writer_default.id)
     with pytest.raises(PermissionDeniedError):
@@ -174,11 +174,11 @@ async def test_shares_never_allow_moving(world: World, scene: Scene) -> None:
     assert world.events() == []
 
 
-async def test_admin_moves_any_document_into_any_drawer(world: World, scene: Scene) -> None:
+async def test_admin_moves_any_document_into_any_space(world: World, scene: Scene) -> None:
     admin = await world.user(role=Role.ADMIN)
-    stranger_default = await world.default_drawer(scene.stranger)
+    stranger_default = await world.default_space(scene.stranger)
     await world.documents.move(admin.id, scene.document.id, stranger_default.id)
-    assert (await world.documents.get(scene.owner.id, scene.document.id)).drawer_id == (
+    assert (await world.documents.get(scene.owner.id, scene.document.id)).space_id == (
         stranger_default.id
     )
     # Admins read every document anyway (Tobi, 08.10.2026).
@@ -186,7 +186,7 @@ async def test_admin_moves_any_document_into_any_drawer(world: World, scene: Sce
     with pytest.raises(NotFoundError):
         await world.documents.move(admin.id, DocumentId(new_id()), stranger_default.id)
     with pytest.raises(NotFoundError):
-        await world.documents.move(admin.id, scene.document.id, DrawerId(new_id()))
+        await world.documents.move(admin.id, scene.document.id, SpaceId(new_id()))
 
 
 async def test_only_the_owner_deletes(world: World, scene: Scene) -> None:
@@ -220,7 +220,7 @@ async def test_a_deactivated_user_and_a_document_in_the_inbox_have_fewer_readers
 
     world.database.outbox.clear()
     received = await world.pipeline().receive(
-        scene.owner.id, incoming(b"%PDF-1.7 yellow"), filename="y.pdf", drawer=scene.shared.id
+        scene.owner.id, incoming(b"%PDF-1.7 yellow"), filename="y.pdf", space=scene.shared.id
     )
     await world.drain(world.pipeline({Node.JUDGE: Returns(UNCERTAIN)}))
     yellow = await world.documents.get(scene.owner.id, received.id)
@@ -234,7 +234,7 @@ async def test_a_deactivated_user_and_a_document_in_the_inbox_have_fewer_readers
 
 async def test_only_the_owner_reads_the_processing_log(world: World, scene: Scene) -> None:
     entries = await world.documents.processing_log(scene.owner.id, scene.document.id)
-    nodes = [entry.node for entry in entries if entry.result.model_version != PERSON_DRAWER]
+    nodes = [entry.node for entry in entries if entry.result.model_version != PERSON_SPACE]
     assert sorted(nodes, key=list(Node).index) == list(Node)  # ocr and pages in either order
     for user in (scene.reader, scene.writer):
         with pytest.raises(PermissionDeniedError, match="only the owner"):

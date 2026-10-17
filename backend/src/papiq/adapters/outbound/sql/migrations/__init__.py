@@ -1,10 +1,12 @@
 """Schema migrations with Alembic: one chain for SQLite and Postgres.
 
-`migrate` brings a database to the newest revision in one transaction. On SQLite, Alembic's
+`migrate` brings a database to the newest revision in one transaction (`downgrade` takes it
+back the same way). On SQLite, Alembic's
 batch mode recreates tables for changes SQLite cannot make in place; foreign keys are switched
 off meanwhile (as SQLite requires) and checked before the commit.
 """
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -62,12 +64,22 @@ async def migrate(database: Database, revision: str = "head") -> None:
     SQLite file and its directory."""
     if database.is_sqlite and database.engine.url.database:
         Path(database.engine.url.database).parent.mkdir(parents=True, exist_ok=True)
+    await _run(database, lambda sync: command.upgrade(alembic_config(sync), revision))
+
+
+async def downgrade(database: Database, revision: str) -> None:
+    """Downgrade the schema to `revision`, in one transaction like `migrate` (for tests and
+    recovery by hand; Papiq itself only upgrades)."""
+    await _run(database, lambda sync: command.downgrade(alembic_config(sync), revision))
+
+
+async def _run(database: Database, operation: Callable[[Connection], None]) -> None:
     async with database.engine.connect() as connection:
         if database.is_sqlite:
             await connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
         try:
             await database.begin_write(connection)
-            await connection.run_sync(lambda sync: command.upgrade(alembic_config(sync), revision))
+            await connection.run_sync(operation)
             if database.is_sqlite:
                 violations = (await connection.execute(text("PRAGMA foreign_key_check"))).all()
                 if violations:

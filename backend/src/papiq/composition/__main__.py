@@ -1,5 +1,5 @@
 """`python -m papiq.composition [check | migrate | api | worker | evaluate | evaluate-search |
-reindex | render-pages | read-codes | reparse | train]`.
+reindex | render-pages | read-codes | fetch-logos | reparse | train]`.
 
 - `check` (default): validate the configuration and print it without secrets.
 - `migrate`: validate, then bring the configured database to the newest schema. Run before the
@@ -31,6 +31,9 @@ reindex | render-pages | read-codes | reparse | train]`.
 - `read-codes`: queue reading the facts of every document with a text: the worker reads the
   codes on its pages and keeps the identifiers it shows (for documents from before codes were
   read, and for telling on how many contacts' documents an identifier stands).
+- `fetch-logos`: queue fetching the logo of every contact without one that has a domain among
+  its identifiers (one whose fetch failed is not tried again); the worker asks the websites.
+  Needs `PAPIQ_LOGO_FETCH=true`.
 - `reparse`: queue reading the text of every document again (after the update to 0.2, which
   reads the text as it is set instead of Docling's Markdown); the worker reads them, and the
   search index takes up the new texts. Train the classifier afterwards (`train`).
@@ -57,6 +60,7 @@ from papiq.composition.endpoints import external_endpoints
 from papiq.composition.errors import ConfigurationError
 from papiq.composition.evaluation import run_evaluation
 from papiq.composition.logging_setup import configure_logging
+from papiq.composition.logos import run_fetch_logos
 from papiq.composition.pages import run_render_pages
 from papiq.composition.reindex import run_reindex
 from papiq.composition.reparse import run_reparse
@@ -68,6 +72,7 @@ from papiq.composition.search_evaluation import (
 from papiq.composition.settings import Settings, find_unknown_variables, load_settings
 from papiq.composition.train import run_training
 from papiq.composition.worker import run_worker
+from papiq.core.domain.errors import LogoFetchDisabledError
 
 # Services and the roles that run them.
 SERVICES = {"api": {"all", "api"}, "worker": {"all", "worker"}}
@@ -88,6 +93,7 @@ def main(argv: Sequence[str] = ()) -> int:
             "reindex",
             "render-pages",
             "read-codes",
+            "fetch-logos",
             "reparse",
             "train",
         ],
@@ -169,6 +175,8 @@ def main(argv: Sequence[str] = ()) -> int:
         return _render_pages(settings)
     if command == "read-codes":
         return _read_codes(settings)
+    if command == "fetch-logos":
+        return _fetch_logos(settings)
     if command == "reparse":
         return _reparse(settings)
     if command == "reindex":
@@ -259,6 +267,20 @@ def _read_codes(settings: Settings) -> int:
         log.exception("queueing the facts failed")
         return 1
     log.info("read-codes queued", documents=queued)
+    return 0
+
+
+def _fetch_logos(settings: Settings) -> int:
+    log = structlog.get_logger("papiq.composition")
+    try:
+        queued = asyncio.run(run_fetch_logos(settings))
+    except LogoFetchDisabledError as error:
+        print(f"{error}: set PAPIQ_LOGO_FETCH=true", file=sys.stderr)
+        return 1
+    except Exception:
+        log.exception("queueing the logos failed")
+        return 1
+    log.info("fetch-logos queued", contacts=queued)
     return 0
 
 

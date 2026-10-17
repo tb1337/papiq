@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Papiq API",
-    "description": "Papiq is a headless document management system; this API is the only way in.\n\nErrors are problem details (RFC 9457, `application/problem+json`).\n\nAuthentication: a session cookie from `POST /auth/login` (web UI; changing requests also send\nthe header `X-CSRF-Token`) or a personal API token as `Authorization: Bearer papiq_…`. Every\nendpoint needs one of them (401 without), except health and the sign-in endpoints: `POST\n/auth/login` and, below `/auth/oidc`, information, start and callback. A `read` token may only\nread (403). The own sign-in (password, sessions, TOTP, API tokens, provider links) and\ncreating users or resetting their sign-in need a session; a token gets 403 there. Documents\nand drawers the caller may not see are \"not found\" (404), the same as ones that do not exist.\n\nThe same services are available to AI clients over MCP (Streamable HTTP, stateless) at\n`/api/v1/mcp`, with the same API tokens as bearer; it is not part of this OpenAPI document.\nTools: `search`, `get_document`, `get_text`, `update_metadata` (needs a `read_write` token),\n`list_tags`.\n",
+    "description": "Papiq is a headless document management system; this API is the only way in.\n\nErrors are problem details (RFC 9457, `application/problem+json`).\n\nAuthentication: a session cookie from `POST /auth/login` (web UI; changing requests also send\nthe header `X-CSRF-Token`) or a personal API token as `Authorization: Bearer papiq_…`. Every\nendpoint needs one of them (401 without), except health and the sign-in endpoints: `POST\n/auth/login` and, below `/auth/oidc`, information, start and callback. A `read` token may only\nread (403). The own sign-in (password, sessions, TOTP, API tokens, provider links) and\ncreating users or resetting their sign-in need a session; a token gets 403 there. Documents\nand spaces the caller may not see are \"not found\" (404), the same as ones that do not exist.\n\nThe same services are available to AI clients over MCP (Streamable HTTP, stateless) at\n`/api/v1/mcp`, with the same API tokens as bearer; it is not part of this OpenAPI document.\nTools: `search`, `get_document`, `get_text`, `update_metadata` (needs a `read_write` token),\n`list_tags`.\n",
     "version": "0.1.0"
   },
   "paths": {
@@ -1875,7 +1875,7 @@
           "users"
         ],
         "summary": "Create a user",
-        "description": "Admins only. Creates the user's private default drawer, too. A user with the role `user` and no password can be created with an admin's API token (`read_write`), e.g. by a migration; a password or the role `admin` needs a session, as for `/auth/*`.",
+        "description": "Admins only. Creates the user's private default space, too. A user with the role `user` and no password can be created with an admin's API token (`read_write`), e.g. by a migration; a password or the role `admin` needs a session, as for `/auth/*`.",
         "operationId": "create_user_api_v1_users_post",
         "requestBody": {
           "content": {
@@ -2285,7 +2285,7 @@
           "users"
         ],
         "summary": "Delete a user",
-        "description": "Admins only. Only a user who owns no documents and whose drawers are empty (409); removes their drawers, the shares to them and their sign-in data.",
+        "description": "Admins only. Only a user who owns no documents and whose spaces are empty (409); removes their spaces, the shares to them and their sign-in data.",
         "operationId": "delete_user_api_v1_users__id__delete",
         "parameters": [
           {
@@ -2907,7 +2907,7 @@
           "master data"
         ],
         "summary": "Create a contact",
-        "description": "Admins only. Names are unique regardless of case.",
+        "description": "Admins only. Names are unique regardless of case. A group in `group_ids` (a topic in `topic_ids`) that does not exist is `404`, one of another scope `422`.",
         "operationId": "create_contact_api_v1_contacts_post",
         "requestBody": {
           "required": true,
@@ -2958,6 +2958,22 @@
                   "title": "Forbidden",
                   "status": 403,
                   "detail": "only the owner controls processing of this document"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Not Found",
+                  "status": 404,
+                  "detail": "document 01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b not found"
                 }
               }
             }
@@ -3146,7 +3162,7 @@
           "master data"
         ],
         "summary": "Change a contact",
-        "description": "Admins only.",
+        "description": "Admins only. A group in `group_ids` (a topic in `topic_ids`) that does not exist is `404`, one of another scope `422`.",
         "operationId": "change_contact_api_v1_contacts__id__patch",
         "parameters": [
           {
@@ -3439,7 +3455,7 @@
           "master data"
         ],
         "summary": "Attach an identifier to a contact",
-        "description": "Admins only. Enters one identifier by hand (as found on a document, see `GET /documents/{id}/facts`); the contact's other identifiers stay as they are. One the contact learned or rejected is then entered by hand; one another contact learned or rejected moves here; 409 if another contact has it entered by hand. Documents use it from their next processing on.",
+        "description": "Admins only. Enters one identifier by hand (as found on a document, see `GET /documents/{id}/facts`), with a topic the contact enables (422 otherwise) or none; the contact's other identifiers stay as they are. One the contact learned or rejected is then entered by hand; one another contact learned or rejected moves here; 409 if another contact has it entered by hand. Documents use it from their next processing on.",
         "operationId": "attach_identifier_api_v1_contacts__id__identifiers_post",
         "parameters": [
           {
@@ -3597,6 +3613,561 @@
         ]
       }
     },
+    "/api/v1/contacts/{id}/logo": {
+      "put": {
+        "tags": [
+          "master data"
+        ],
+        "summary": "Upload a contact's logo",
+        "description": "Admins only. One part `file`: a PNG, JPEG or WebP image of at most 1 MiB (413 otherwise); another kind, SVG among them, is 415, an image that cannot be read 422. Papiq keeps it scaled to fit 128 px as WebP, in place of any other logo; a fetched one never replaces it.",
+        "operationId": "upload_logo_api_v1_contacts__id__logo_put",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Bad Request",
+                  "status": 400,
+                  "detail": "expected multipart/form-data with a boundary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Unauthorized",
+                  "status": 401,
+                  "detail": "authentication is required"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Forbidden",
+                  "status": 403,
+                  "detail": "only the owner controls processing of this document"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Not Found",
+                  "status": 404,
+                  "detail": "document 01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b not found"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Content Too Large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Content Too Large",
+                  "status": 413,
+                  "detail": "the request body is larger than 1048576 bytes"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Unsupported Media Type",
+                  "status": 415,
+                  "detail": "unsupported file type"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Content",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Unprocessable Content",
+                  "status": 422,
+                  "detail": "from_node: Input should be 'ocr', 'parse', ..."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Internal Server Error",
+                  "status": 500,
+                  "detail": "an unexpected error occurred"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "PNG, JPEG or WebP, recognised by content; at most 1048576 bytes."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "master data"
+        ],
+        "summary": "Remove a contact's logo",
+        "description": "Admins only. The contact shows its initials again.",
+        "operationId": "remove_logo_api_v1_contacts__id__logo_delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Unauthorized",
+                  "status": 401,
+                  "detail": "authentication is required"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Forbidden",
+                  "status": 403,
+                  "detail": "only the owner controls processing of this document"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Not Found",
+                  "status": 404,
+                  "detail": "document 01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b not found"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Content",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Unprocessable Content",
+                  "status": 422,
+                  "detail": "from_node: Input should be 'ocr', 'parse', ..."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Internal Server Error",
+                  "status": 500,
+                  "detail": "an unexpected error occurred"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "token": []
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "master data"
+        ],
+        "summary": "A contact's logo",
+        "description": "Everyone reads it (master data is global): WebP, up to 128 px. Unlike the API's other answers it may be cached (`Cache-Control: private, max-age=86400`): its URL in `ContactOut.logo.url` carries its version. 404 without a logo.",
+        "operationId": "get_logo_api_v1_contacts__id__logo_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Unauthorized",
+                  "status": 401,
+                  "detail": "authentication is required"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Not Found",
+                  "status": 404,
+                  "detail": "document 01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b not found"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Content",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Unprocessable Content",
+                  "status": 422,
+                  "detail": "from_node: Input should be 'ocr', 'parse', ..."
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Internal Server Error",
+                  "status": 500,
+                  "detail": "an unexpected error occurred"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/contacts/{id}/logo/fetch": {
+      "post": {
+        "tags": [
+          "master data"
+        ],
+        "summary": "Fetch a contact's logo from its website",
+        "description": "Admins only. Only with `PAPIQ_LOGO_FETCH` (503 otherwise; `GET /pipeline` tells, `logo_fetch`). The worker asks the website at each of the contact's domains in turn for its icon (HTTPS to public addresses only), also one whose fetch failed before, and stores the first that fits in place of a fetched logo; `ContactOut.logo` or `logo_failure` tell the outcome. 409 while the contact has an uploaded logo (it is never replaced), 422 without a domain among its identifiers.",
+        "operationId": "fetch_logo_api_v1_contacts__id__logo_fetch_post",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Queued"
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Unauthorized",
+                  "status": 401,
+                  "detail": "authentication is required"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Forbidden",
+                  "status": 403,
+                  "detail": "only the owner controls processing of this document"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Not Found",
+                  "status": 404,
+                  "detail": "document 01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b not found"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Conflict",
+                  "status": 409,
+                  "detail": "duplicate of document 01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Content",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Unprocessable Content",
+                  "status": 422,
+                  "detail": "from_node: Input should be 'ocr', 'parse', ..."
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Service Unavailable",
+                  "status": 503,
+                  "detail": "database: unreachable"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Internal Server Error",
+                  "status": 500,
+                  "detail": "an unexpected error occurred"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "token": []
+          }
+        ]
+      }
+    },
     "/api/v1/document-types": {
       "get": {
         "tags": [
@@ -3725,7 +4296,7 @@
           "master data"
         ],
         "summary": "Create a document type",
-        "description": "Admins only. Names are unique regardless of case.",
+        "description": "Admins only. Names are unique regardless of case. A group in `group_ids` (a topic in `topic_ids`) that does not exist is `404`, one of another scope `422`.",
         "operationId": "create_document_type_api_v1_document_types_post",
         "requestBody": {
           "required": true,
@@ -3776,6 +4347,22 @@
                   "title": "Forbidden",
                   "status": 403,
                   "detail": "only the owner controls processing of this document"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Not Found",
+                  "status": 404,
+                  "detail": "document 01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b not found"
                 }
               }
             }
@@ -3964,7 +4551,7 @@
           "master data"
         ],
         "summary": "Change a document type",
-        "description": "Admins only.",
+        "description": "Admins only. A group in `group_ids` (a topic in `topic_ids`) that does not exist is `404`, one of another scope `422`.",
         "operationId": "change_document_type_api_v1_document_types__id__patch",
         "parameters": [
           {
@@ -4425,9 +5012,25 @@
           "master data"
         ],
         "summary": "List tags",
-        "description": "Everyone reads them. With `document_counts`, each comes with how many documents within the caller's reach have it (a field: a value for it), counted in one query; admins count every document with `all_users` (others: 403).",
+        "description": "Tags of every scope, or of `scope`: document tags, contact groups, type groups, topics. In the order of their trees: each after its parent, siblings by name (scopes in this order). Everyone reads them. With `document_counts`, each comes with how many documents within the caller's reach it stands for (`TagOut.document_count`); admins count every document with `all_users` (others: 403). A contact group or topic comes with its contacts (`contact_count`), a type group with its document types (`document_type_count`), whoever asks.",
         "operationId": "list_tags_api_v1_tags_get",
         "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/TagScope"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          },
           {
             "name": "document_counts",
             "in": "query",
@@ -4461,7 +5064,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/MasterDataOut"
+                    "$ref": "#/components/schemas/TagOut"
                   },
                   "title": "Response List Tags Api V1 Tags Get"
                 }
@@ -4547,14 +5150,14 @@
           "master data"
         ],
         "summary": "Create a tag",
-        "description": "Admins only. Names are unique regardless of case.",
+        "description": "Admins only. Names are unique per scope, regardless of case.",
         "operationId": "create_tag_api_v1_tags_post",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/NameIn"
+                "$ref": "#/components/schemas/TagCreate"
               }
             }
           }
@@ -4565,7 +5168,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MasterDataOut"
+                  "$ref": "#/components/schemas/TagOut"
                 }
               }
             }
@@ -4598,6 +5201,22 @@
                   "title": "Forbidden",
                   "status": 403,
                   "detail": "only the owner controls processing of this document"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Not Found",
+                  "status": 404,
+                  "detail": "document 01999d5e-8a7f-7c1e-b6a3-2f4d5e6f7a8b not found"
                 }
               }
             }
@@ -4702,7 +5321,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MasterDataOut"
+                  "$ref": "#/components/schemas/TagOut"
                 }
               }
             }
@@ -4785,9 +5404,9 @@
         "tags": [
           "master data"
         ],
-        "summary": "Rename a tag",
-        "description": "Admins only.",
-        "operationId": "rename_tag_api_v1_tags__id__patch",
+        "summary": "Change a tag",
+        "description": "Admins only. Name, parent (of the same scope, not below the tag itself; at most five levels), assignment, whether documents show it, icon and colour. The scope stays. A new name or parent brings the search index of the documents concerned up to date. After a new parent, a job leaves documents (for a group: contacts or document types) that carry the tag and one now above it only the one below; a topic needs none.",
+        "operationId": "change_tag_api_v1_tags__id__patch",
         "parameters": [
           {
             "name": "id",
@@ -4805,7 +5424,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/NameIn"
+                "$ref": "#/components/schemas/TagPatch"
               }
             }
           }
@@ -4816,7 +5435,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MasterDataOut"
+                  "$ref": "#/components/schemas/TagOut"
                 }
               }
             }
@@ -4948,7 +5567,7 @@
           "master data"
         ],
         "summary": "Delete a tag",
-        "description": "Admins only. Only while no document uses it (409).",
+        "description": "Admins only. Only a tag without tags below it that nothing uses: no document carries it (as a tag or its topic), no contact or document type is in it, no contact enables it as a topic, no rule refers to it (409).",
         "operationId": "delete_tag_api_v1_tags__id__delete",
         "parameters": [
           {
@@ -5743,14 +6362,14 @@
         ]
       }
     },
-    "/api/v1/drawers": {
+    "/api/v1/spaces": {
       "get": {
         "tags": [
-          "drawers"
+          "spaces"
         ],
-        "summary": "List drawers",
-        "description": "The drawers the caller owns or that are shared with them; every drawer for admins.",
-        "operationId": "list_drawers_api_v1_drawers_get",
+        "summary": "List spaces",
+        "description": "The spaces the caller owns or that are shared with them; every space for admins.",
+        "operationId": "list_spaces_api_v1_spaces_get",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -5758,10 +6377,10 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/DrawerOut"
+                    "$ref": "#/components/schemas/SpaceOut"
                   },
                   "type": "array",
-                  "title": "Response List Drawers Api V1 Drawers Get"
+                  "title": "Response List Spaces Api V1 Spaces Get"
                 }
               }
             }
@@ -5810,16 +6429,16 @@
       },
       "post": {
         "tags": [
-          "drawers"
+          "spaces"
         ],
-        "summary": "Create a drawer",
-        "description": "Names are unique per owner regardless of case. The caller owns the drawer; admins may give `owner_id` to create one for another active user (others: 403, an unknown or deactivated user: 404).",
-        "operationId": "create_drawer_api_v1_drawers_post",
+        "summary": "Create a space",
+        "description": "Names are unique per owner regardless of case. The caller owns the space; admins may give `owner_id` to create one for another active user (others: 403, an unknown or deactivated user: 404).",
+        "operationId": "create_space_api_v1_spaces_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/DrawerCreate"
+                "$ref": "#/components/schemas/SpaceCreate"
               }
             }
           },
@@ -5831,7 +6450,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DrawerOut"
+                  "$ref": "#/components/schemas/SpaceOut"
                 }
               }
             }
@@ -5959,13 +6578,13 @@
         ]
       }
     },
-    "/api/v1/drawers/{id}": {
+    "/api/v1/spaces/{id}": {
       "get": {
         "tags": [
-          "drawers"
+          "spaces"
         ],
-        "summary": "A drawer",
-        "operationId": "get_drawer_api_v1_drawers__id__get",
+        "summary": "A space",
+        "operationId": "get_space_api_v1_spaces__id__get",
         "parameters": [
           {
             "name": "id",
@@ -5984,7 +6603,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DrawerOut"
+                  "$ref": "#/components/schemas/SpaceOut"
                 }
               }
             }
@@ -6065,11 +6684,11 @@
       },
       "patch": {
         "tags": [
-          "drawers"
+          "spaces"
         ],
-        "summary": "Rename a drawer",
+        "summary": "Rename a space",
         "description": "The owner and admins.",
-        "operationId": "rename_drawer_api_v1_drawers__id__patch",
+        "operationId": "rename_space_api_v1_spaces__id__patch",
         "parameters": [
           {
             "name": "id",
@@ -6098,7 +6717,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DrawerOut"
+                  "$ref": "#/components/schemas/SpaceOut"
                 }
               }
             }
@@ -6227,11 +6846,11 @@
       },
       "delete": {
         "tags": [
-          "drawers"
+          "spaces"
         ],
-        "summary": "Delete a drawer",
-        "description": "The owner and admins. Not the default drawer, and only while it is empty (409).",
-        "operationId": "delete_drawer_api_v1_drawers__id__delete",
+        "summary": "Delete a space",
+        "description": "The owner and admins. Not the default space, and only while it is empty (409).",
+        "operationId": "delete_space_api_v1_spaces__id__delete",
         "parameters": [
           {
             "name": "id",
@@ -6355,14 +6974,14 @@
         ]
       }
     },
-    "/api/v1/drawers/{id}/shares/{user_id}": {
+    "/api/v1/spaces/{id}/shares/{user_id}": {
       "put": {
         "tags": [
-          "drawers"
+          "spaces"
         ],
-        "summary": "Share a drawer",
-        "description": "The owner and admins. Sets the user's access: `read` or `read_write`. The default drawer cannot be shared (422); an unknown or deactivated user is not found (404). Other users see documents in it once they are green.",
-        "operationId": "share_drawer_api_v1_drawers__id__shares__user_id__put",
+        "summary": "Share a space",
+        "description": "The owner and admins. Sets the user's access: `read` or `read_write`. The default space cannot be shared (422); an unknown or deactivated user is not found (404). Other users see documents in it once they are green.",
+        "operationId": "share_space_api_v1_spaces__id__shares__user_id__put",
         "parameters": [
           {
             "name": "id",
@@ -6401,7 +7020,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DrawerOut"
+                  "$ref": "#/components/schemas/SpaceOut"
                 }
               }
             }
@@ -6514,11 +7133,11 @@
       },
       "delete": {
         "tags": [
-          "drawers"
+          "spaces"
         ],
-        "summary": "Stop sharing a drawer with a user",
+        "summary": "Stop sharing a space with a user",
         "description": "The owner and admins.",
-        "operationId": "unshare_drawer_api_v1_drawers__id__shares__user_id__delete",
+        "operationId": "unshare_space_api_v1_spaces__id__shares__user_id__delete",
         "parameters": [
           {
             "name": "id",
@@ -6547,7 +7166,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DrawerOut"
+                  "$ref": "#/components/schemas/SpaceOut"
                 }
               }
             }
@@ -6785,7 +7404,7 @@
           "rules"
         ],
         "summary": "Create a rule",
-        "description": "Global rules: admins only (403). The content is checked: operators fit the field and the field's data type, patterns compile, a global rule only tags, sets fields and forces reviews (422, the message names the place, such as `conditions.all[1].any[0]` or `actions[2]`); contacts, types, tags, fields and drawers exist (404); a user rule files only into drawers its owner may write to (403).",
+        "description": "Global rules: admins only (403). The content is checked: operators fit the field and the field's data type, patterns compile, a global rule only tags, sets fields and forces reviews (422, the message names the place, such as `conditions.all[1].any[0]` or `actions[2]`); contacts, types, tags, fields and spaces exist (404); a user rule files only into spaces its owner may write to (403).",
         "operationId": "create_rule_api_v1_rules_post",
         "requestBody": {
           "required": true,
@@ -7025,7 +7644,7 @@
           "rules"
         ],
         "summary": "Change a rule",
-        "description": "Makes a new version; earlier ones stay readable. A user rule: its owner and admins (its references are checked for its owner). A global rule: admins. The content is checked: operators fit the field and the field's data type, patterns compile, a global rule only tags, sets fields and forces reviews (422, the message names the place, such as `conditions.all[1].any[0]` or `actions[2]`); contacts, types, tags, fields and drawers exist (404); a user rule files only into drawers its owner may write to (403).",
+        "description": "Makes a new version; earlier ones stay readable. A user rule: its owner and admins (its references are checked for its owner). A global rule: admins. The content is checked: operators fit the field and the field's data type, patterns compile, a global rule only tags, sets fields and forces reviews (422, the message names the place, such as `conditions.all[1].any[0]` or `actions[2]`); contacts, types, tags, fields and spaces exist (404); a user rule files only into spaces its owner may write to (403).",
         "operationId": "change_rule_api_v1_rules__id__put",
         "parameters": [
           {
@@ -8243,7 +8862,7 @@
           "search"
         ],
         "summary": "Search documents",
-        "description": "Full text and, if the installation has embeddings, meaning in one call. Finds the documents within the caller's reach, the same ones as `GET /documents` lists, with the same filters (they combine; `tag_id` and `lane` may repeat); admins search every document with `all_users` (others: 403). Each hit is checked against the permissions once more before it is returned. The index follows the documents a moment later, so a new document may take a few seconds to turn up. Pages are by `offset`; at most 1000 hits can be reached. `sort`: by relevance (the default), or by a key as in `GET /documents`, relevance breaking ties.",
+        "description": "Full text and, if the installation has embeddings, meaning in one call. Finds the documents within the caller's reach, the same ones as `GET /documents` lists, with the same filters (they combine; `tag_id`, `contact_group_id`, `document_type_group_id`, `topic_id` and `lane` may repeat, a topic takes the topics below it); admins search every document with `all_users` (others: 403). Each hit is checked against the permissions once more before it is returned. The index follows the documents a moment later, so a new document may take a few seconds to turn up. Pages are by `offset`; at most 1000 hits can be reached. `sort`: by relevance (the default), or by a key as in `GET /documents`, relevance breaking ties.",
         "operationId": "search_documents_api_v1_documents_search_get",
         "parameters": [
           {
@@ -8315,7 +8934,7 @@
             }
           },
           {
-            "name": "drawer_id",
+            "name": "space_id",
             "in": "query",
             "required": false,
             "schema": {
@@ -8328,7 +8947,7 @@
                   "type": "null"
                 }
               ],
-              "title": "Drawer Id"
+              "title": "Space Id"
             }
           },
           {
@@ -8366,6 +8985,69 @@
                 }
               ],
               "title": "Field Id"
+            }
+          },
+          {
+            "name": "contact_group_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "maxItems": 50
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Contact Group Id"
+            }
+          },
+          {
+            "name": "document_type_group_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "maxItems": 50
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Document Type Group Id"
+            }
+          },
+          {
+            "name": "topic_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "maxItems": 50
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Topic Id"
             }
           },
           {
@@ -9022,10 +9704,10 @@
                     "format": "binary",
                     "description": "PDF, JPEG, PNG or TIFF; recognised by content."
                   },
-                  "drawer_id": {
+                  "space_id": {
                     "type": "string",
                     "format": "uuid",
-                    "description": "Target drawer; default: the owner's default drawer."
+                    "description": "Target space; default: the owner's default space."
                   },
                   "channel": {
                     "type": "string",
@@ -9037,7 +9719,7 @@
                   "owner": {
                     "type": "string",
                     "format": "uuid",
-                    "description": "Admins only: the active user who owns the document. Default: the caller. The duplicate check, the default drawer and the write access to `drawer_id` are the owner's."
+                    "description": "Admins only: the active user who owns the document. Default: the caller. The duplicate check, the default space and the write access to `space_id` are the owner's."
                   },
                   "metadata": {
                     "type": "string",
@@ -9062,7 +9744,7 @@
           "documents"
         ],
         "summary": "List documents",
-        "description": "The documents within the caller's reach, newest first: their own, and green documents in drawers they own or that are shared with them. Admins may read every document and list them all with `all_users` (others: 403). Filters combine; `tag_id` and `lane` may repeat (all tags, any lane; `processing`: no lane yet); `field_id`: a value for the field is set. `sort` orders by arrival (the default, newest first), document date or title; documents without a date come last. To search by words and meaning use `GET /documents/search`.",
+        "description": "The documents within the caller's reach, newest first: their own, and green documents in spaces they own or that are shared with them. Admins may read every document and list them all with `all_users` (others: 403). Filters combine; `tag_id`, `contact_group_id`, `document_type_group_id`, `topic_id` and `lane` may repeat (all tags and groups, any topic, any lane; `processing`: no lane yet). A tag matches the documents with it or a tag below it; a group those whose contact (type) is in it or a group below it; a topic the documents with it or one below it. `field_id`: a value for the field is set. `sort` orders by arrival (the default, newest first), document date or title; documents without a date come last. To search by words and meaning use `GET /documents/search`.",
         "operationId": "list_documents_api_v1_documents_get",
         "parameters": [
           {
@@ -9121,7 +9803,7 @@
             }
           },
           {
-            "name": "drawer_id",
+            "name": "space_id",
             "in": "query",
             "required": false,
             "schema": {
@@ -9134,7 +9816,7 @@
                   "type": "null"
                 }
               ],
-              "title": "Drawer Id"
+              "title": "Space Id"
             }
           },
           {
@@ -9172,6 +9854,69 @@
                 }
               ],
               "title": "Field Id"
+            }
+          },
+          {
+            "name": "contact_group_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "maxItems": 50
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Contact Group Id"
+            }
+          },
+          {
+            "name": "document_type_group_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "maxItems": 50
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Document Type Group Id"
+            }
+          },
+          {
+            "name": "topic_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "maxItems": 50
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Topic Id"
             }
           },
           {
@@ -9871,8 +10616,8 @@
         "tags": [
           "documents"
         ],
-        "summary": "Move a document to another drawer",
-        "description": "The owner moves into drawers they may write to; an admin moves any document into any drawer. Shares do not allow moving.",
+        "summary": "Move a document to another space",
+        "description": "The owner moves into spaces they may write to; an admin moves any document into any space. Shares do not allow moving.",
         "operationId": "move_document_api_v1_documents__id__move_post",
         "parameters": [
           {
@@ -11894,7 +12639,7 @@
           "documents"
         ],
         "summary": "Confirm a document from the inbox",
-        "description": "The owner and admins, for yellow and red documents that are not being processed. `drawer_id` must be a drawer the owner may write to; an admin chooses any drawer. Every open field of the nodes before `resume_at` (and of `apply_rules` when processing resumes with it) needs a decision: a value or null in `changes`, a value the document already has (it is kept), or its suggestion with `accept_suggestions`. Otherwise 422 lists the open fields in `open_fields`. The rules' fields `drawer`, `title` and `review` always have a value: confirming keeps it, `drawer_id` moves the document. The results before `resume_at` count as confirmed; processing continues from there up to filing, and the rules leave what the owner decided or changed as it is. From `fields` on, the fields read again replace the ones the document has; otherwise the type's title pattern is rendered with the decided values (while the title is the machine's).",
+        "description": "The owner and admins, for yellow and red documents that are not being processed. `space_id` must be a space the owner may write to; an admin chooses any space. Every open field of the nodes before `resume_at` (and of `apply_rules` when processing resumes with it) needs a decision: a value or null in `changes`, a value the document already has (it is kept), or its suggestion with `accept_suggestions`. Otherwise 422 lists the open fields in `open_fields`. The rules' fields `space`, `title` and `review` always have a value: confirming keeps it, `space_id` moves the document. The results before `resume_at` count as confirmed; processing continues from there up to filing, and the rules leave what the owner decided or changed as it is. From `fields` on, the fields read again replace the ones the document has; otherwise the type's title pattern is rendered with the decided values (while the title is the machine's).",
         "operationId": "confirm_api_v1_documents__id__confirm_post",
         "parameters": [
           {
@@ -12197,7 +12942,7 @@
           "pipeline"
         ],
         "summary": "The processing graph",
-        "description": "The nodes a document goes through and what each one needs, in graph order: every node after the nodes it needs. Nodes that do not need each other run side by side. The graph is fixed for a version of Papiq; `processing.nodes` of a document names the state of each node. `vision` names the vision language model documents can be read with, if one is configured.",
+        "description": "The nodes a document goes through and what each one needs, in graph order: every node after the nodes it needs. Nodes that do not need each other run side by side. The graph is fixed for a version of Papiq; `processing.nodes` of a document names the state of each node. `vision` names the vision language model documents can be read with, if one is configured; `logo_fetch` says whether Papiq fetches the logos of contacts from their websites.",
         "operationId": "pipeline_api_v1_pipeline_get",
         "responses": {
           "200": {
@@ -12580,7 +13325,7 @@
           "webhooks"
         ],
         "summary": "Create a webhook",
-        "description": "Papiq sends a signed request to the URL for each event of the chosen types on documents within the owner's reach: their own, and green ones in drawers they own or that are shared with them (an admin's webhooks too; the rights of an admin do not widen them). The answer holds the secret, shown only once. At most 20 webhooks per user (409).",
+        "description": "Papiq sends a signed request to the URL for each event of the chosen types on documents within the owner's reach: their own, and green ones in spaces they own or that are shared with them (an admin's webhooks too; the rights of an admin do not widen them). The answer holds the secret, shown only once. At most 20 webhooks per user (409).",
         "operationId": "create_webhook_api_v1_webhooks_post",
         "requestBody": {
           "required": true,
@@ -13664,7 +14409,8 @@
           "type",
           "tag_ids"
         ],
-        "title": "AddTagsAction"
+        "title": "AddTagsAction",
+        "description": "Document tags (also those set by hand). A tag above one the document keeps or gets is\nnot added; a parent gives way to a child added."
       },
       "AllGroup-Input": {
         "properties": {
@@ -13979,6 +14725,15 @@
             "version": 2
           }
         ]
+      },
+      "Assignment": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "manual"
+        ],
+        "title": "Assignment",
+        "description": "Who sets a value: Papiq's classification (`auto`: the signals propose it, the model is\nasked for it) or only a person or a rule (`manual`: values no document shows, such as the\nnumber stamped on the paper copy)."
       },
       "AuthorizationUrl": {
         "properties": {
@@ -14446,7 +15201,10 @@
         "type": "string",
         "enum": [
           "contact",
+          "contact_group",
           "document_type",
+          "document_type_group",
+          "topic",
           "tags",
           "channel",
           "text",
@@ -14517,7 +15275,7 @@
           "op"
         ],
         "title": "ConditionSchema",
-        "description": "`field` `op` `value`. Operators by field: contact, document_type: `is`, `in`, `present`,\n`missing`; tags: `contains` (this tag), `in` (one of), `present` (any), `missing` (none);\nchannel: `is`, `in`; text: `contains`, `matches` (regular expression); document_date and\nnumber, amount, date fields: `is`, `gt`, `lt`, `present`, `missing`; text and link\nfields: `is`, `in`, `contains`, `matches`, `present`, `missing`; choice: `is`, `in`,\n`present`, `missing`; boolean: `is`, `present`, `missing`; period fields: `is`,\n`overlaps` (shares a day with the given period), `gt` (starts after the date), `lt` (ends\nbefore the date), `present`, `missing`.",
+        "description": "`field` `op` `value`. Operators by field: contact, document_type: `is`, `in`, `present`,\n`missing`; topic: the same, where a topic matches the ones below it too (unknown while the\nmodel set it and nobody confirmed it); tags (document tags), contact_group (the groups of\nthe document's contact),\ndocument_type_group (those of its type): `contains` (this one), `in` (one of), `present`\n(any), `missing` (none), where a tag or group matches the ones below it too; channel:\n`is`, `in`; text: `contains`, `matches` (regular expression); document_date and\nnumber, amount, date fields: `is`, `gt`, `lt`, `present`, `missing`; text and link\nfields: `is`, `in`, `contains`, `matches`, `present`, `missing`; choice: `is`, `in`,\n`present`, `missing`; boolean: `is`, `present`, `missing`; period fields: `is`,\n`overlaps` (shares a day with the given period), `gt` (starts after the date), `lt` (ends\nbefore the date), `present`, `missing`.",
         "examples": [
           {
             "field": "contact",
@@ -14549,7 +15307,7 @@
             "description": "`fields` after correcting the document type, so the fields of the new type are read.",
             "default": "apply_rules"
           },
-          "drawer_id": {
+          "space_id": {
             "anyOf": [
               {
                 "type": "string",
@@ -14559,8 +15317,8 @@
                 "type": "null"
               }
             ],
-            "title": "Drawer Id",
-            "description": "Move the document into this drawer (one the owner may write to); decides the rules' open field `drawer`. Default: it stays where it is."
+            "title": "Space Id",
+            "description": "Move the document into this space (one the owner may write to); decides the rules' open field `space`. Default: it stays where it is."
           }
         },
         "additionalProperties": false,
@@ -14614,6 +15372,26 @@
             "maxItems": 100,
             "title": "Identifiers",
             "description": "Values the contact's documents carry: IBAN, VAT number, customer (or contract) number, the personnel number at an employer (without leading zeros), the domain of its e-mail and web addresses. Unique across contacts; found in a document, they are evidence for the contact. The identifiers entered by hand: a learned one given here becomes one entered by hand."
+          },
+          "group_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Group Ids",
+            "description": "The contact groups it is in (tags of scope `contact`); its documents inherit them. A group set with one below it leaves the one below."
+          },
+          "topic_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Topic Ids",
+            "description": "The topics it enables (tags of scope `topic`): its documents carry one of them at most, and its identifiers may point to one. Taking one away is a conflict (409) while a document of the contact carries it; its identifiers lose it."
           }
         },
         "additionalProperties": false,
@@ -14681,6 +15459,46 @@
             "type": "array",
             "title": "Identifiers",
             "description": "Entered, learned and rejected identifiers, in this order."
+          },
+          "group_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Group Ids",
+            "description": "The contact groups it is in."
+          },
+          "topic_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Topic Ids",
+            "description": "The topics it enables."
+          },
+          "logo": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LogoOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its logo; without one, clients show initials."
+          },
+          "logo_failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LogoFailureOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The domains whose website had no logo that fits; they are tried again only when an admin asks (`POST /contacts/{id}/logo/fetch`), another domain at once."
           }
         },
         "type": "object",
@@ -14689,7 +15507,11 @@
           "name",
           "created_at",
           "aliases",
-          "identifiers"
+          "identifiers",
+          "group_ids",
+          "topic_ids",
+          "logo",
+          "logo_failure"
         ],
         "title": "ContactOut"
       },
@@ -14768,6 +15590,40 @@
               }
             ],
             "title": "Rejected Identifiers"
+          },
+          "group_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array",
+                "maxItems": 100,
+                "description": "The contact groups it is in (tags of scope `contact`); its documents inherit them. A group set with one below it leaves the one below."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Ids"
+          },
+          "topic_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array",
+                "maxItems": 100,
+                "description": "The topics it enables (tags of scope `topic`): its documents carry one of them at most, and its identifiers may point to one. Taking one away is a conflict (409) while a document of the contact carries it; its identifiers lose it."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic Ids"
           }
         },
         "additionalProperties": false,
@@ -14957,10 +15813,10 @@
             "format": "uuid",
             "title": "Owner Id"
           },
-          "drawer_id": {
+          "space_id": {
             "type": "string",
             "format": "uuid",
-            "title": "Drawer Id"
+            "title": "Space Id"
           },
           "access": {
             "$ref": "#/components/schemas/ShareLevel",
@@ -14989,6 +15845,19 @@
               }
             ],
             "title": "Document Type Id"
+          },
+          "topic_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic Id",
+            "description": "A topic (tag of scope `topic`) the contact enables; at most one."
           },
           "tag_ids": {
             "items": {
@@ -15069,7 +15938,7 @@
               }
             ],
             "title": "Confirmed At",
-            "description": "When a person last set or confirmed the metadata (in the inbox, or by changing contact, type, tags, date or fields), or it was taken over with the source system's; null while it is the pipeline's own. Confirmed documents train the classifier."
+            "description": "When a person last set or confirmed the metadata (in the inbox, or by changing contact, type, topic, tags, date or fields; adding or removing tags set by hand alone does not count), or it was taken over with the source system's; null while it is the pipeline's own. Confirmed documents train the classifier."
           },
           "processing": {
             "$ref": "#/components/schemas/Processing"
@@ -15109,10 +15978,11 @@
           "channel",
           "sha256",
           "owner_id",
-          "drawer_id",
+          "space_id",
           "access",
           "contact_id",
           "document_type_id",
+          "topic_id",
           "tag_ids",
           "document_date",
           "fields",
@@ -15131,7 +16001,6 @@
             "contact_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b",
             "created_at": "2026-04-02T08:15:00Z",
             "document_date": "2026-03-31",
-            "drawer_id": "01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b",
             "fields": {
               "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b": {
                 "amount": "84.20",
@@ -15166,6 +16035,7 @@
               "vision": false
             },
             "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            "space_id": "01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b",
             "tag_ids": [],
             "title": "Electricity bill March",
             "updated_at": "2026-04-02T08:16:10Z"
@@ -15211,10 +16081,10 @@
             "format": "uuid",
             "title": "Owner Id"
           },
-          "drawer_id": {
+          "space_id": {
             "type": "string",
             "format": "uuid",
-            "title": "Drawer Id"
+            "title": "Space Id"
           },
           "access": {
             "$ref": "#/components/schemas/ShareLevel",
@@ -15243,6 +16113,19 @@
               }
             ],
             "title": "Document Type Id"
+          },
+          "topic_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic Id",
+            "description": "A topic (tag of scope `topic`) the contact enables; at most one."
           },
           "tag_ids": {
             "items": {
@@ -15323,7 +16206,7 @@
               }
             ],
             "title": "Confirmed At",
-            "description": "When a person last set or confirmed the metadata (in the inbox, or by changing contact, type, tags, date or fields), or it was taken over with the source system's; null while it is the pipeline's own. Confirmed documents train the classifier."
+            "description": "When a person last set or confirmed the metadata (in the inbox, or by changing contact, type, topic, tags, date or fields; adding or removing tags set by hand alone does not count), or it was taken over with the source system's; null while it is the pipeline's own. Confirmed documents train the classifier."
           },
           "processing": {
             "$ref": "#/components/schemas/Processing"
@@ -15348,10 +16231,11 @@
           "channel",
           "sha256",
           "owner_id",
-          "drawer_id",
+          "space_id",
           "access",
           "contact_id",
           "document_type_id",
+          "topic_id",
           "tag_ids",
           "document_date",
           "fields",
@@ -15371,7 +16255,6 @@
             "contact_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b",
             "created_at": "2026-04-02T08:15:00Z",
             "document_date": "2026-03-31",
-            "drawer_id": "01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b",
             "fields": {
               "01999d5e-4444-7c1e-b6a3-2f4d5e6f7a8b": {
                 "amount": "84.20",
@@ -15406,6 +16289,7 @@
               "vision": false
             },
             "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            "space_id": "01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b",
             "tag_ids": [],
             "title": "Electricity bill March",
             "updated_at": "2026-04-02T08:16:10Z"
@@ -15583,6 +16467,18 @@
             ],
             "title": "Document Type Id"
           },
+          "topic_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic Id"
+          },
           "tag_ids": {
             "anyOf": [
               {
@@ -15631,7 +16527,7 @@
         "additionalProperties": false,
         "type": "object",
         "title": "DocumentPatch",
-        "description": "Fields left out stay as they are; null removes a value.",
+        "description": "Fields left out stay as they are; null removes a value. A new contact that does not\nenable the document's topic removes the topic; a topic given must be one the contact\nenables (422), unless an admin gives it: it is then enabled at the contact.",
         "examples": [
           {
             "contact_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b",
@@ -15668,7 +16564,7 @@
             },
             "type": "array",
             "title": "Changed",
-            "description": "Fields that would change: `title`, `contact`, `document_type`, `tags`, `document_date`, `field:<id>`, `drawer`."
+            "description": "Fields that would change: `title`, `contact`, `document_type`, `topic`, `tags`, `document_date`, `field:<id>`, `space`."
           },
           "rules": {
             "anyOf": [
@@ -15799,6 +16695,33 @@
               }
             ],
             "title": "Title Pattern"
+          },
+          "group_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Group Ids",
+            "description": "The document type groups it is in (tags of scope `document_type`); its documents inherit them. A group set with one below it leaves the one below."
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                "description": "The name of a Lucide icon (lucide.dev), as `heart-pulse`. Only the form is checked; clients show a stand-in for a name they do not know. Null removes it.",
+                "examples": [
+                  "receipt-euro"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon"
           }
         },
         "additionalProperties": false,
@@ -15872,6 +16795,30 @@
             "examples": [
               "Lohn {document_date:YYYY-MM}"
             ]
+          },
+          "group_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Group Ids",
+            "description": "The document type groups it is in."
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon",
+            "description": "The name of a Lucide icon.",
+            "examples": [
+              "receipt"
+            ]
           }
         },
         "type": "object",
@@ -15880,7 +16827,9 @@
           "name",
           "created_at",
           "description",
-          "title_pattern"
+          "title_pattern",
+          "group_ids",
+          "icon"
         ],
         "title": "DocumentTypeOut"
       },
@@ -15933,6 +16882,40 @@
               }
             ],
             "title": "Title Pattern"
+          },
+          "group_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array",
+                "maxItems": 100,
+                "description": "The document type groups it is in (tags of scope `document_type`); its documents inherit them. A group set with one below it leaves the one below."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Ids"
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                "description": "The name of a Lucide icon (lucide.dev), as `heart-pulse`. Only the form is checked; clients show a stand-in for a name they do not know. Null removes it.",
+                "examples": [
+                  "receipt-euro"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon"
           }
         },
         "additionalProperties": false,
@@ -15944,103 +16927,6 @@
             "description": "Entgeltbescheinigung"
           }
         ]
-      },
-      "DrawerCreate": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Name",
-            "examples": [
-              "ACME Energy"
-            ]
-          },
-          "owner_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Owner Id",
-            "description": "Admins only: the user who will own the drawer. Default: the caller."
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "name"
-        ],
-        "title": "DrawerCreate",
-        "examples": [
-          {
-            "name": "Household"
-          }
-        ]
-      },
-      "DrawerOut": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Id"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name",
-            "examples": [
-              "Household"
-            ]
-          },
-          "owner_id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Owner Id"
-          },
-          "is_default": {
-            "type": "boolean",
-            "title": "Is Default"
-          },
-          "access": {
-            "$ref": "#/components/schemas/ShareLevel",
-            "description": "The caller's access: owner and admins (read_write), or the share."
-          },
-          "shares": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/components/schemas/ShareOut"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Shares",
-            "description": "Only for the owner and admins."
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "name",
-          "owner_id",
-          "is_default",
-          "access",
-          "shares",
-          "created_at"
-        ],
-        "title": "DrawerOut"
       },
       "ExchangeNode": {
         "type": "string",
@@ -16187,7 +17073,7 @@
           "field": {
             "type": "string",
             "title": "Field",
-            "description": "`contact`, `document_type`, `tags`, `document_date`, or `field:<id>`."
+            "description": "`contact`, `document_type`, `topic`, `tags`, `document_date`, or `field:<id>`. The topic, as the tags, is never uncertain: one not set comes as a `suggestion`."
           },
           "outcome": {
             "$ref": "#/components/schemas/Outcome",
@@ -16208,7 +17094,7 @@
               }
             ],
             "title": "Reason",
-            "description": "Why the field is uncertain."
+            "description": "Why the field is uncertain (for the topic: why it was not set)."
           },
           "proposed": {
             "title": "Proposed",
@@ -16232,7 +17118,7 @@
           },
           "suggestion": {
             "title": "Suggestion",
-            "description": "A value that can be accepted as it is (uncertain fields only)."
+            "description": "A value that can be accepted as it is (uncertain fields, and the topic)."
           },
           "new_name": {
             "anyOf": [
@@ -16272,7 +17158,7 @@
             },
             "type": "array",
             "title": "Candidates",
-            "description": "Contact, document type and tags: the values the signals proposed, best first, with what each signal said; empty for other fields and older checks."
+            "description": "Contact, document type, topic and tags: the values the signals proposed, best first, with what each signal said; empty for other fields and older checks."
           }
         },
         "type": "object",
@@ -16344,7 +17230,7 @@
           "required": {
             "type": "boolean",
             "title": "Required",
-            "description": "A global field: whether extraction must find it in every document.",
+            "description": "A global field: whether every document needs a value (read by the model, or entered by hand for a field set by hand).",
             "default": false
           },
           "required_document_type_ids": {
@@ -16371,6 +17257,11 @@
               }
             ],
             "title": "Description"
+          },
+          "assignment": {
+            "$ref": "#/components/schemas/Assignment",
+            "description": "`auto`: the language model reads it; `manual`: set by hand only, never asked of the model (a required one keeps the document open until a person sets it).",
+            "default": "auto"
           }
         },
         "additionalProperties": false,
@@ -16435,7 +17326,7 @@
           "required": {
             "type": "boolean",
             "title": "Required",
-            "description": "A global field: whether extraction must find it in every document."
+            "description": "A global field: whether every document needs a value (read by the model, or entered by hand for a field set by hand)."
           },
           "required_document_type_ids": {
             "items": {
@@ -16456,6 +17347,10 @@
               }
             ],
             "title": "Description"
+          },
+          "assignment": {
+            "$ref": "#/components/schemas/Assignment",
+            "description": "`auto`: the language model reads it; `manual`: set by hand only, never asked of the model (a required one keeps the document open until a person sets it)."
           },
           "created_at": {
             "type": "string",
@@ -16486,11 +17381,13 @@
           "required",
           "required_document_type_ids",
           "description",
+          "assignment",
           "created_at"
         ],
         "title": "FieldOut",
         "examples": [
           {
+            "assignment": "auto",
             "choices": [],
             "created_at": "2026-01-10T09:00:00Z",
             "data_type": "amount",
@@ -16559,7 +17456,7 @@
             "anyOf": [
               {
                 "type": "boolean",
-                "description": "A global field: whether extraction must find it in every document."
+                "description": "A global field: whether every document needs a value (read by the model, or entered by hand for a field set by hand)."
               },
               {
                 "type": "null"
@@ -16598,6 +17495,17 @@
               }
             ],
             "title": "Description"
+          },
+          "assignment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Assignment"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`auto`: the language model reads it; `manual`: set by hand only, never asked of the model (a required one keeps the document open until a person sets it)."
           }
         },
         "additionalProperties": false,
@@ -16785,6 +17693,19 @@
             "title": "Contact Id",
             "description": "The contact it is an identifier of (entered or learned); null if none."
           },
+          "topic_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic Id",
+            "description": "The topic of the contact it points to, if any."
+          },
           "in_text": {
             "type": "boolean",
             "title": "In Text"
@@ -16970,6 +17891,19 @@
             "examples": [
               "DE89 3704 0044 0532 0130 00"
             ]
+          },
+          "topic_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic Id",
+            "description": "One of the contact's topics it points to (a personnel number to work): found in a document, it is evidence for the contact and the topic. Not for a rejected one."
           }
         },
         "additionalProperties": false,
@@ -17013,13 +17947,27 @@
           "source": {
             "$ref": "#/components/schemas/IdentifierSource",
             "description": "`manual`: entered by an admin; `learned`: found by training in confirmed documents of only this contact; `rejected`: learned, then rejected by an admin (does not count, and training does not learn it again)."
+          },
+          "topic_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic Id",
+            "description": "The topic of the contact it points to; a learned one points to a topic only if all the confirmed documents it stands in carry it."
           }
         },
         "type": "object",
         "required": [
           "kind",
           "value",
-          "source"
+          "source",
+          "topic_id"
         ],
         "title": "IdentifierOut"
       },
@@ -17314,45 +18262,86 @@
           }
         ]
       },
-      "MasterDataOut": {
+      "LogoFailureOut": {
         "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Id"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name",
+          "domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Domains",
+            "description": "The domains whose website had no logo that fits, sorted.",
             "examples": [
-              "ACME Energy"
+              [
+                "acme-energy.example"
+              ]
             ]
           },
-          "created_at": {
+          "failed_at": {
             "type": "string",
             "format": "date-time",
-            "title": "Created At"
+            "title": "Failed At",
+            "description": "When the last of them failed."
+          }
+        },
+        "type": "object",
+        "required": [
+          "domains",
+          "failed_at"
+        ],
+        "title": "LogoFailureOut"
+      },
+      "LogoOut": {
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/LogoSource",
+            "description": "`uploaded` by an admin (a fetched one never replaces it) or `fetched` from the contact's website."
           },
-          "document_count": {
+          "domain": {
             "anyOf": [
               {
-                "type": "integer"
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Document Count",
-            "description": "With `document_counts`: how many documents within the caller's reach (with `all_users`, every document) have it; for a field, a value for it."
+            "title": "Domain",
+            "description": "Of a fetched one: the domain whose website it came from.",
+            "examples": [
+              "acme-energy.example"
+            ]
+          },
+          "stored_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Stored At"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "description": "Where to get it (`GET /contacts/{id}/logo`, WebP up to 128 px), with its version: a new logo has a new URL, so it may be cached.",
+            "examples": [
+              "/api/v1/contacts/01999d5e-1111-7c1e-b6a3-2f4d5e6f7a8b/logo?v=1792200000000000"
+            ]
           }
         },
         "type": "object",
         "required": [
-          "id",
-          "name",
-          "created_at"
+          "source",
+          "domain",
+          "stored_at",
+          "url"
         ],
-        "title": "MasterDataOut"
+        "title": "LogoOut"
+      },
+      "LogoSource": {
+        "type": "string",
+        "enum": [
+          "uploaded",
+          "fetched"
+        ],
+        "title": "LogoSource"
       },
       "Me": {
         "properties": {
@@ -17553,21 +18542,21 @@
       },
       "MoveRequest": {
         "properties": {
-          "drawer_id": {
+          "space_id": {
             "type": "string",
             "format": "uuid",
-            "title": "Drawer Id"
+            "title": "Space Id"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "drawer_id"
+          "space_id"
         ],
         "title": "MoveRequest",
         "examples": [
           {
-            "drawer_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b"
+            "space_id": "01999d5e-3333-7c1e-b6a3-2f4d5e6f7a8b"
           }
         ]
       },
@@ -17847,7 +18836,7 @@
             },
             "type": "array",
             "title": "Fields",
-            "description": "Uncertain fields of classification, field extraction and the rules (also `drawer`, `title`, `review`), and of filing (`drawer`)."
+            "description": "Uncertain fields of classification, field extraction and the rules (also `space`, `title`, `review`), and of filing (`space`)."
           }
         },
         "type": "object",
@@ -18034,16 +19023,23 @@
               }
             ],
             "description": "The vision language model a person can have documents read with (`POST /documents/{id}/vision`); none if it is not configured."
+          },
+          "logo_fetch": {
+            "type": "boolean",
+            "title": "Logo Fetch",
+            "description": "Whether Papiq fetches the logos of contacts from their websites (`PAPIQ_LOGO_FETCH`; `POST /contacts/{id}/logo/fetch`)."
           }
         },
         "type": "object",
         "required": [
           "nodes",
-          "vision"
+          "vision",
+          "logo_fetch"
         ],
         "title": "PipelineOut",
         "examples": [
           {
+            "logo_fetch": false,
             "nodes": [
               {
                 "node": "receive",
@@ -18462,13 +19458,16 @@
             "items": {
               "oneOf": [
                 {
-                  "$ref": "#/components/schemas/SetDrawerAction"
+                  "$ref": "#/components/schemas/SetSpaceAction"
                 },
                 {
                   "$ref": "#/components/schemas/SetContactAction"
                 },
                 {
                   "$ref": "#/components/schemas/SetDocumentTypeAction"
+                },
+                {
+                  "$ref": "#/components/schemas/SetTopicAction"
                 },
                 {
                   "$ref": "#/components/schemas/SetTitleAction"
@@ -18494,9 +19493,10 @@
                   "remove_tags": "#/components/schemas/RemoveTagsAction",
                   "set_contact": "#/components/schemas/SetContactAction",
                   "set_document_type": "#/components/schemas/SetDocumentTypeAction",
-                  "set_drawer": "#/components/schemas/SetDrawerAction",
                   "set_field": "#/components/schemas/SetFieldAction",
-                  "set_title": "#/components/schemas/SetTitleAction"
+                  "set_space": "#/components/schemas/SetSpaceAction",
+                  "set_title": "#/components/schemas/SetTitleAction",
+                  "set_topic": "#/components/schemas/SetTopicAction"
                 }
               }
             },
@@ -18523,8 +19523,8 @@
           {
             "actions": [
               {
-                "drawer_id": "01999d5e-5555-7c1e-b6a3-2f4d5e6f7a8b",
-                "type": "set_drawer"
+                "space_id": "01999d5e-5555-7c1e-b6a3-2f4d5e6f7a8b",
+                "type": "set_space"
               },
               {
                 "tag_ids": [
@@ -18598,13 +19598,16 @@
             "items": {
               "oneOf": [
                 {
-                  "$ref": "#/components/schemas/SetDrawerAction"
+                  "$ref": "#/components/schemas/SetSpaceAction"
                 },
                 {
                   "$ref": "#/components/schemas/SetContactAction"
                 },
                 {
                   "$ref": "#/components/schemas/SetDocumentTypeAction"
+                },
+                {
+                  "$ref": "#/components/schemas/SetTopicAction"
                 },
                 {
                   "$ref": "#/components/schemas/SetTitleAction"
@@ -18630,9 +19633,10 @@
                   "remove_tags": "#/components/schemas/RemoveTagsAction",
                   "set_contact": "#/components/schemas/SetContactAction",
                   "set_document_type": "#/components/schemas/SetDocumentTypeAction",
-                  "set_drawer": "#/components/schemas/SetDrawerAction",
                   "set_field": "#/components/schemas/SetFieldAction",
-                  "set_title": "#/components/schemas/SetTitleAction"
+                  "set_space": "#/components/schemas/SetSpaceAction",
+                  "set_title": "#/components/schemas/SetTitleAction",
+                  "set_topic": "#/components/schemas/SetTopicAction"
                 }
               }
             },
@@ -18655,8 +19659,8 @@
           {
             "actions": [
               {
-                "drawer_id": "01999d5e-5555-7c1e-b6a3-2f4d5e6f7a8b",
-                "type": "set_drawer"
+                "space_id": "01999d5e-5555-7c1e-b6a3-2f4d5e6f7a8b",
+                "type": "set_space"
               },
               {
                 "tag_ids": [
@@ -18693,7 +19697,7 @@
           "field": {
             "type": "string",
             "title": "Field",
-            "description": "`drawer`, `contact`, `document_type`, `title`, `tags`, ..."
+            "description": "`space`, `contact`, `document_type`, `topic`, `title`, `tags`, ..."
           },
           "old": {
             "title": "Old"
@@ -18774,13 +19778,16 @@
             "items": {
               "oneOf": [
                 {
-                  "$ref": "#/components/schemas/SetDrawerAction"
+                  "$ref": "#/components/schemas/SetSpaceAction"
                 },
                 {
                   "$ref": "#/components/schemas/SetContactAction"
                 },
                 {
                   "$ref": "#/components/schemas/SetDocumentTypeAction"
+                },
+                {
+                  "$ref": "#/components/schemas/SetTopicAction"
                 },
                 {
                   "$ref": "#/components/schemas/SetTitleAction"
@@ -18806,9 +19813,10 @@
                   "remove_tags": "#/components/schemas/RemoveTagsAction",
                   "set_contact": "#/components/schemas/SetContactAction",
                   "set_document_type": "#/components/schemas/SetDocumentTypeAction",
-                  "set_drawer": "#/components/schemas/SetDrawerAction",
                   "set_field": "#/components/schemas/SetFieldAction",
-                  "set_title": "#/components/schemas/SetTitleAction"
+                  "set_space": "#/components/schemas/SetSpaceAction",
+                  "set_title": "#/components/schemas/SetTitleAction",
+                  "set_topic": "#/components/schemas/SetTopicAction"
                 }
               }
             },
@@ -19005,13 +20013,16 @@
             "items": {
               "oneOf": [
                 {
-                  "$ref": "#/components/schemas/SetDrawerAction"
+                  "$ref": "#/components/schemas/SetSpaceAction"
                 },
                 {
                   "$ref": "#/components/schemas/SetContactAction"
                 },
                 {
                   "$ref": "#/components/schemas/SetDocumentTypeAction"
+                },
+                {
+                  "$ref": "#/components/schemas/SetTopicAction"
                 },
                 {
                   "$ref": "#/components/schemas/SetTitleAction"
@@ -19037,9 +20048,10 @@
                   "remove_tags": "#/components/schemas/RemoveTagsAction",
                   "set_contact": "#/components/schemas/SetContactAction",
                   "set_document_type": "#/components/schemas/SetDocumentTypeAction",
-                  "set_drawer": "#/components/schemas/SetDrawerAction",
                   "set_field": "#/components/schemas/SetFieldAction",
-                  "set_title": "#/components/schemas/SetTitleAction"
+                  "set_space": "#/components/schemas/SetSpaceAction",
+                  "set_title": "#/components/schemas/SetTitleAction",
+                  "set_topic": "#/components/schemas/SetTopicAction"
                 }
               }
             },
@@ -19274,28 +20286,6 @@
         ],
         "title": "SetDocumentTypeAction"
       },
-      "SetDrawerAction": {
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "set_drawer",
-            "title": "Type"
-          },
-          "drawer_id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Drawer Id",
-            "description": "A drawer the rule's owner may write to (user rules)."
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "type",
-          "drawer_id"
-        ],
-        "title": "SetDrawerAction"
-      },
       "SetFieldAction": {
         "properties": {
           "type": {
@@ -19336,6 +20326,28 @@
         ],
         "title": "SetFieldAction"
       },
+      "SetSpaceAction": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "set_space",
+            "title": "Type"
+          },
+          "space_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Space Id",
+            "description": "A space the rule's owner may write to (user rules)."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "space_id"
+        ],
+        "title": "SetSpaceAction"
+      },
       "SetTitleAction": {
         "properties": {
           "type": {
@@ -19347,7 +20359,7 @@
             "type": "string",
             "maxLength": 500,
             "title": "Template",
-            "description": "A Liquid template (`{{ value }}`, `{% if value %}…{% endif %}`, filters with `|`). Values: `title`, `filename` (the original's name without extension), `original_filename`, `contact`, `document_type`, `document_date`, `added`, `tags` (a list), `drawer`, `owner`, `channel`, `pages`, and `field.<key>` (`FieldOut.key`; an amount has `.amount` and `.currency`, a period `.start` and `.end` and writes itself in ISO 8601 as `2026-09`, `2026-W38`, `2026-Q3` and the like). Besides Liquid's filters: `datetime` (`format: 'MMMM yyyy'`), `currency`, `decimal`, in `PAPIQ_TEMPLATE_LOCALE`. Writing a missing value sets nothing (`| default: ''` or `{% if %}` make it optional).",
+            "description": "A Liquid template (`{{ value }}`, `{% if value %}…{% endif %}`, filters with `|`). Values: `title`, `filename` (the original's name without extension), `original_filename`, `contact`, `document_type`, `topic` (its name), `document_date`, `added`, `tags` (a list, those set), `contact_groups` and `document_type_groups` (lists, the groups the contact and the type are in), `space`, `owner`, `channel`, `pages`, and `field.<key>` (`FieldOut.key`; an amount has `.amount` and `.currency`, a period `.start` and `.end` and writes itself in ISO 8601 as `2026-09`, `2026-W38`, `2026-Q3` and the like). Besides Liquid's filters: `datetime` (`format: 'MMMM yyyy'`), `currency`, `decimal`, in `PAPIQ_TEMPLATE_LOCALE`. Writing a missing value sets nothing (`| default: ''` or `{% if %}` make it optional).",
             "examples": [
               "{{ contact }} {{ document_type }} {{ document_date | date: '%Y-%m' }}"
             ]
@@ -19360,6 +20372,29 @@
           "template"
         ],
         "title": "SetTitleAction"
+      },
+      "SetTopicAction": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "set_topic",
+            "title": "Type"
+          },
+          "topic_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Topic Id",
+            "description": "A tag of scope `topic`."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "topic_id"
+        ],
+        "title": "SetTopicAction",
+        "description": "User rules only, as contact and type. Applied only if the document's contact (as the\nrules leave it) enables the topic; otherwise skipped and noted."
       },
       "ShareIn": {
         "properties": {
@@ -19453,6 +20488,103 @@
         ],
         "title": "SnippetSegment"
       },
+      "SpaceCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "examples": [
+              "ACME Energy"
+            ]
+          },
+          "owner_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Id",
+            "description": "Admins only: the user who will own the space. Default: the caller."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "SpaceCreate",
+        "examples": [
+          {
+            "name": "Household"
+          }
+        ]
+      },
+      "SpaceOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "examples": [
+              "Household"
+            ]
+          },
+          "owner_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Owner Id"
+          },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default"
+          },
+          "access": {
+            "$ref": "#/components/schemas/ShareLevel",
+            "description": "The caller's access: owner and admins (read_write), or the share."
+          },
+          "shares": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ShareOut"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shares",
+            "description": "Only for the owner and admins."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "owner_id",
+          "is_default",
+          "access",
+          "shares",
+          "created_at"
+        ],
+        "title": "SpaceOut"
+      },
       "SpanOut": {
         "properties": {
           "start": {
@@ -19504,13 +20636,370 @@
         ],
         "title": "StoredFileOut"
       },
+      "TagCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "examples": [
+              "ACME Energy"
+            ]
+          },
+          "scope": {
+            "$ref": "#/components/schemas/TagScope",
+            "description": "`document`: a tag of documents; `contact`: a contact group; `document_type`: a type group; `topic`: a topic, enabled at contacts, one per document at most. Fixed once the tag exists.",
+            "default": "document"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
+          "assignment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Assignment",
+                "description": "`auto`: the classification proposes and sets it (document tags and topics); `manual`: only a person or a rule sets it (a status such as 'to pay'). Groups are always `manual`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "shown": {
+            "anyOf": [
+              {
+                "type": "boolean",
+                "description": "Whether documents show it (the chips of lists and the document; filters, search, rules and templates see it either way). Default: on for document tags and topics, off for groups."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shown"
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                "description": "The name of a Lucide icon (lucide.dev), as `heart-pulse`. Only the form is checked; clients show a stand-in for a name they do not know. Null removes it.",
+                "examples": [
+                  "receipt-euro"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(gray|red|orange|amber|lime|green|teal|sky|blue|violet|fuchsia|pink|#[0-9a-fA-F]{6})$",
+                "description": "One of the twelve colours of the palette, which clients tune for light and dark themes, or an own colour as `#rrggbb` (stored in lower case; clients mix it with their background and text colours so the text stays readable). Null removes it.",
+                "examples": [
+                  "teal",
+                  "#b45309"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "TagCreate",
+        "description": "Names are unique per scope. `parent_id`: a tag of the same scope; at most five levels.\n`assignment` and `shown` follow the scope unless given.",
+        "examples": [
+          {
+            "name": "Health insurance",
+            "parent_id": "01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b"
+          },
+          {
+            "name": "Insurer",
+            "scope": "contact"
+          }
+        ]
+      },
+      "TagOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "examples": [
+              "ACME Energy"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "document_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Count",
+            "description": "With `document_counts`: how many documents within the caller's reach (with `all_users`, every document) it stands for: those with it or a tag below it, each once; for a group, those whose contact (type) is in it or a group below it; for a topic, those with it or a topic below it."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/TagScope"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
+          "path": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Path",
+            "description": "The names from the top-level tag down to its own; documents show the last, its path tells where it stands."
+          },
+          "assignment": {
+            "$ref": "#/components/schemas/Assignment",
+            "description": "`auto`: the classification proposes and sets it (document tags and topics); `manual`: only a person or a rule sets it (a status such as 'to pay'). Groups are always `manual`."
+          },
+          "shown": {
+            "type": "boolean",
+            "title": "Shown",
+            "description": "Whether documents show it (the chips of lists and the document; filters, search, rules and templates see it either way). Default: on for document tags and topics, off for groups."
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon",
+            "description": "The name of a Lucide icon."
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color",
+            "description": "A colour of the palette or `#rrggbb`."
+          },
+          "contact_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Count",
+            "description": "With `document_counts`, for a contact group or a topic (else null): how many contacts are in it or a group below it (enable it or a topic below it), each once."
+          },
+          "document_type_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Type Count",
+            "description": "With `document_counts`, for a type group (else null): how many document types are in it or a group below it, each once."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "created_at",
+          "scope",
+          "parent_id",
+          "path",
+          "assignment",
+          "shown",
+          "icon",
+          "color"
+        ],
+        "title": "TagOut",
+        "examples": [
+          {
+            "assignment": "auto",
+            "color": "pink",
+            "created_at": "2026-01-10T09:00:00Z",
+            "icon": "heart-pulse",
+            "id": "01999d5e-2223-7c1e-b6a3-2f4d5e6f7a8b",
+            "name": "Health insurance",
+            "parent_id": "01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b",
+            "path": [
+              "Insurance",
+              "Health insurance"
+            ],
+            "scope": "document",
+            "shown": true
+          }
+        ]
+      },
+      "TagPatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1,
+                "examples": [
+                  "ACME Energy"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
+          "assignment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Assignment",
+                "description": "`auto`: the classification proposes and sets it (document tags and topics); `manual`: only a person or a rule sets it (a status such as 'to pay'). Groups are always `manual`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "shown": {
+            "anyOf": [
+              {
+                "type": "boolean",
+                "description": "Whether documents show it (the chips of lists and the document; filters, search, rules and templates see it either way). Default: on for document tags and topics, off for groups."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shown"
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                "description": "The name of a Lucide icon (lucide.dev), as `heart-pulse`. Only the form is checked; clients show a stand-in for a name they do not know. Null removes it.",
+                "examples": [
+                  "receipt-euro"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(gray|red|orange|amber|lime|green|teal|sky|blue|violet|fuchsia|pink|#[0-9a-fA-F]{6})$",
+                "description": "One of the twelve colours of the palette, which clients tune for light and dark themes, or an own colour as `#rrggbb` (stored in lower case; clients mix it with their background and text colours so the text stays readable). Null removes it.",
+                "examples": [
+                  "teal",
+                  "#b45309"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TagPatch",
+        "description": "Fields left out stay; a `parent_id` of null makes it a top-level tag. The scope stays.",
+        "examples": [
+          {
+            "shown": false
+          }
+        ]
+      },
+      "TagScope": {
+        "type": "string",
+        "enum": [
+          "document",
+          "contact",
+          "document_type",
+          "topic"
+        ],
+        "title": "TagScope",
+        "description": "What a tag describes, fixed when it is made: a document (`document`, as tags were\nbefore 0.3), contacts (`contact`: a contact group, \"insurance\"), document types\n(`document_type`: a type group, \"invoice\" over \"medical bill\") or what a document is about\nwith its contact (`topic`: \"work\", \"health insurance\"; a global catalogue, enabled at\ncontacts, at most one per document). Names are unique per scope."
+      },
       "TemplatePreviewIn": {
         "properties": {
           "template": {
             "type": "string",
             "maxLength": 500,
             "title": "Template",
-            "description": "A Liquid template (`{{ value }}`, `{% if value %}…{% endif %}`, filters with `|`). Values: `title`, `filename` (the original's name without extension), `original_filename`, `contact`, `document_type`, `document_date`, `added`, `tags` (a list), `drawer`, `owner`, `channel`, `pages`, and `field.<key>` (`FieldOut.key`; an amount has `.amount` and `.currency`, a period `.start` and `.end` and writes itself in ISO 8601 as `2026-09`, `2026-W38`, `2026-Q3` and the like). Besides Liquid's filters: `datetime` (`format: 'MMMM yyyy'`), `currency`, `decimal`, in `PAPIQ_TEMPLATE_LOCALE`. Writing a missing value sets nothing (`| default: ''` or `{% if %}` make it optional)."
+            "description": "A Liquid template (`{{ value }}`, `{% if value %}…{% endif %}`, filters with `|`). Values: `title`, `filename` (the original's name without extension), `original_filename`, `contact`, `document_type`, `topic` (its name), `document_date`, `added`, `tags` (a list, those set), `contact_groups` and `document_type_groups` (lists, the groups the contact and the type are in), `space`, `owner`, `channel`, `pages`, and `field.<key>` (`FieldOut.key`; an amount has `.amount` and `.currency`, a period `.start` and `.end` and writes itself in ISO 8601 as `2026-09`, `2026-W38`, `2026-Q3` and the like). Besides Liquid's filters: `datetime` (`format: 'MMMM yyyy'`), `currency`, `decimal`, in `PAPIQ_TEMPLATE_LOCALE`. Writing a missing value sets nothing (`| default: ''` or `{% if %}` make it optional)."
           },
           "document_id": {
             "anyOf": [
@@ -19994,12 +21483,12 @@
             "title": "Owner Id",
             "description": "The document's owner."
           },
-          "drawer_id": {
+          "space_id": {
             "type": "string",
             "format": "uuid",
-            "title": "Drawer Id"
+            "title": "Space Id"
           },
-          "drawer_owner_id": {
+          "space_owner_id": {
             "anyOf": [
               {
                 "type": "string",
@@ -20009,7 +21498,7 @@
                 "type": "null"
               }
             ],
-            "title": "Drawer Owner Id",
+            "title": "Space Owner Id",
             "description": "None unless the document is green."
           },
           "shares": {
@@ -20025,18 +21514,18 @@
               }
             ],
             "title": "Shares",
-            "description": "The drawer's shares, if the document is green and the caller owns the drawer or is an admin; otherwise not shown."
+            "description": "The space's shares, if the document is green and the caller owns the space or is an admin; otherwise not shown."
           }
         },
         "type": "object",
         "required": [
           "owner_id",
-          "drawer_id",
-          "drawer_owner_id",
+          "space_id",
+          "space_owner_id",
           "shares"
         ],
         "title": "VisibilityOut",
-        "description": "Who sees the document. Its owner always; while it is green also the drawer's owner and\nthe users the drawer is shared with."
+        "description": "Who sees the document. Its owner always; while it is green also the space's owner and\nthe users the space is shared with."
       },
       "VisionAdvice": {
         "type": "string",
@@ -20460,6 +21949,20 @@
             "default": null,
             "description": "For a duplicate: the document that has the same file.",
             "title": "Existing Document Id"
+          },
+          "space_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Filing or moving refused: the space the caller may not write to.",
+            "title": "Space Id"
           },
           "open_fields": {
             "anyOf": [

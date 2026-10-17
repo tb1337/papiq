@@ -21,6 +21,15 @@ class PermissionDeniedError(DomainError):
     """The caller may see the entity but not perform the action."""
 
 
+class SpaceWriteDeniedError(PermissionDeniedError):
+    """Filing into a space or moving a document there needs write access to it; `space_id`
+    names the space, so a caller can tell which of its choices was refused."""
+
+    def __init__(self, space_id: object, label: str) -> None:
+        super().__init__(f"no write access to space {label}")
+        self.space_id = space_id
+
+
 class ValidationError(DomainError):
     """A value or a change breaks a rule of the domain model."""
 
@@ -60,6 +69,20 @@ class UnprocessableDocumentError(DomainError):
 
 class UnsupportedMediaTypeError(ValidationError):
     """The file type is not supported."""
+
+
+class ImageError(ValidationError):
+    """An image of a supported type cannot be read: it is damaged, or it would be too large
+    once decoded (a decompression bomb)."""
+
+
+class LogoFetchError(DomainError):
+    """No logo could be fetched from a website: none it declares fits, or the site cannot be
+    reached safely (an address that is not public, no HTTPS, too slow, too large)."""
+
+
+class LogoFetchDisabledError(DomainError):
+    """Papiq does not fetch logos (`PAPIQ_LOGO_FETCH` is off)."""
 
 
 class AuthenticationError(DomainError):

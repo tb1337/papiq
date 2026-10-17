@@ -1,11 +1,13 @@
-"""Edge cases found in review: inactive owners, shares with the executing admin, drawers that
-cannot be made, lost answers, big values, what the check says about default drawers."""
+"""Edge cases found in review: inactive owners, shares with the executing admin, spaces that
+cannot be made, lost answers, big values, what the check says about default spaces."""
 
 import json
+from pathlib import Path
 from typing import Any
 
 from papiq_migration.config import public
 from papiq_migration.fake_paperless import pdf
+from papiq_migration.state import State
 from tests.conftest import PDF, Setup
 from tests.fake_papiq import ADMIN
 
@@ -43,7 +45,7 @@ async def test_documents_of_an_inactive_user_are_taken_over_and_the_user_deactiv
     document = titled(setup, "Extra 30")
     gone = next(u for u in setup.papiq.users.values() if u["username"] == "gone")
     assert document["owner_id"] == gone["id"] and gone["active"] is False
-    assert setup.papiq.drawers[document["drawer_id"]]["owner_id"] == gone["id"]
+    assert setup.papiq.spaces[document["space_id"]]["owner_id"] == gone["id"]
     # A second run wakes nobody up and writes nothing.
     writes = len(setup.papiq.writes())
     assert await setup.run("run") == 0
@@ -88,20 +90,20 @@ async def test_a_share_with_the_executing_admin_is_dropped_not_fatal(setup: Setu
     assert await setup.run("run") == 0
     document = titled(setup, "Extra 31")
     assert document["owner_id"] == ADMIN["id"]
-    drawer = setup.papiq.drawers[document["drawer_id"]]
-    assert [s["level"] for s in drawer["shares"]] == ["read"]  # bob only
+    space = setup.papiq.spaces[document["space_id"]]
+    assert [s["level"] for s in space["shares"]] == ["read"]  # bob only
     row = next(d for d in setup.report("run")["documents"] if d["id"] == 31)
     assert any("owns the document" in note for note in row["notes"])
 
 
-async def test_a_drawer_that_cannot_be_made_fails_its_documents_only(setup: Setup) -> None:
-    setup.papiq.refuse["POST /drawers"] = 422
+async def test_a_space_that_cannot_be_made_fails_its_documents_only(setup: Setup) -> None:
+    setup.papiq.refuse["POST /spaces"] = 422
     assert await setup.run("run") == 1
     report = setup.report("run")
     failed = [d for d in report["documents"] if d["status"] == "failed"]
-    assert [d["id"] for d in failed] == [13] and "drawer" in failed[0]["reason"]
+    assert [d["id"] for d in failed] == [13] and "space" in failed[0]["reason"]
     assert len(setup.papiq.documents) == 7
-    assert [d["status"] for d in report["objects"]["drawer"]] == ["failed"]
+    assert [d["status"] for d in report["objects"]["space"]] == ["failed"]
     setup.papiq.refuse.clear()
     assert await setup.run("run") == 0
     assert len(setup.papiq.documents) == 8
@@ -151,13 +153,13 @@ async def test_further_versions_of_a_file_are_reported(setup: Setup) -> None:
     assert any("further versions" in note for note in row["notes"])
 
 
-async def test_the_check_looks_at_the_default_drawer_too(setup: Setup) -> None:
+async def test_the_check_looks_at_the_default_space_too(setup: Setup) -> None:
     assert await setup.run("run") == 0
-    document = titled(setup, "Document 12")  # anna's, in her default drawer
+    document = titled(setup, "Document 12")  # anna's, in her default space
     assert await setup.run("verify") == 0
-    document["drawer_id"] = f"default:{ADMIN['id']}"  # a rule or a person filed it elsewhere
+    document["space_id"] = f"default:{ADMIN['id']}"  # a rule or a person filed it elsewhere
     assert await setup.run("verify") == 1
-    assert "drawer differs" in {d["what"] for d in setup.report("verify")["deviations"]}
+    assert "space differs" in {d["what"] for d in setup.report("verify")["deviations"]}
 
 
 async def test_a_duplicate_gets_its_lane_too(setup: Setup) -> None:
@@ -183,3 +185,19 @@ async def test_a_run_notes_that_a_document_was_repaired_since(setup: Setup) -> N
     report = setup.report("run")
     assert report["lanes"] == {"green": 8}
     assert next(d for d in report["documents"] if d["id"] == 12)["reason"] is None
+
+
+def test_a_state_from_before_spaces_reads_its_drawers_as_spaces(tmp_path: Path) -> None:
+    path = tmp_path / "state.sqlite"
+    state = State(path)
+    state.put_object("drawer", "anna|bob", "Shared", "id-1", "new", [])
+    state.put_document(7, "done", detail={"title": "T", "drawer": "Shared", "owner": "anna"})
+    state.close()
+
+    state = State(path)
+    assert state.object("space", "anna|bob") == ("id-1", "new")
+    assert state.object("drawer", "anna|bob") is None
+    row = state.document(7)
+    assert row is not None
+    assert row.detail == {"title": "T", "space": "Shared", "owner": "anna"}
+    state.close()

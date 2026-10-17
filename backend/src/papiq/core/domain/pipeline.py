@@ -166,28 +166,28 @@ rules it set off)."""
 RULES_APPLY = "rules:apply"
 """`model_version` of the `apply_rules` log entry of a rule applied to an existing document on
 request."""
-PERSON_DRAWER = "person:drawer"
-"""`model_version` of a log entry in which a person chose the drawer outside the inbox (an
-upload into a given drawer, a move); rules leave the drawer then."""
-CHOSEN_DRAWER = "drawer_id"
-"""Key of the drawer a person chose, in the input of a `PERSON_DRAWER` entry and the output of a
+PERSON_SPACE = "person:space"
+"""`model_version` of a log entry in which a person chose the space outside the inbox (an
+upload into a given space, a move); rules leave the space then."""
+CHOSEN_SPACE = "space_id"
+"""Key of the space a person chose, in the input of a `PERSON_SPACE` entry and the output of a
 `PERSON` entry."""
-OUTSIDE_PIPELINE = frozenset({RULES_CHANGE, RULES_APPLY, PERSON_DRAWER})
+OUTSIDE_PIPELINE = frozenset({RULES_CHANGE, RULES_APPLY, PERSON_SPACE})
 """Log entries written outside processing; they say nothing about a node's state."""
 
 
-def drawer_chooser(log: Sequence[NodeRun], drawer: UUID) -> UUID | None:
-    """Who last put the document into `drawer` by hand (confirming, uploading into a given
-    drawer, moving), if anyone. Entries written before the drawer was recorded name none."""
+def space_chooser(log: Sequence[NodeRun], space: UUID) -> UUID | None:
+    """Who last put the document into `space` by hand (confirming, uploading into a given
+    space, moving), if anyone. Entries written before the space was recorded name none."""
     for entry in reversed(log):
         result = entry.result
-        if result.model_version == PERSON_DRAWER:
-            actor, chosen = result.input.get("actor"), result.input.get(CHOSEN_DRAWER)
+        if result.model_version == PERSON_SPACE:
+            actor, chosen = result.input.get("actor"), result.input.get(CHOSEN_SPACE)
         elif result.model_version == PERSON:
-            actor, chosen = result.output.get("confirmed_by"), result.output.get(CHOSEN_DRAWER)
+            actor, chosen = result.output.get("confirmed_by"), result.output.get(CHOSEN_SPACE)
         else:
             continue
-        if chosen == str(drawer):
+        if chosen == str(space):
             return UUID(actor) if isinstance(actor, str) else None
     return None
 

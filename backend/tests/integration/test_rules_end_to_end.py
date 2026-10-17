@@ -1,5 +1,5 @@
 """Milestone M7 end to end: a user rule made over the REST API files arriving documents into
-another drawer of the owner and tags them; the processing log names the rule and its version.
+another space of the owner and tags them; the processing log names the rule and its version.
 Real API server (Uvicorn) and worker; OCR and parser are fakes that bring the text of the test.
 Two set-ups: SQLite with the filesystem, Postgres with S3 (Garage)."""
 
@@ -75,7 +75,7 @@ class System:
         user = builders.user(role=role)
         async with self.container.unit_of_work() as uow:
             await uow.users.add(user)
-            await uow.drawers.add(builders.default_drawer(user))
+            await uow.spaces.add(builders.default_space(user))
             await uow.commit()
         await issue_token(self.services.auth, user)
         return user
@@ -150,7 +150,7 @@ async def system(stores: tuple[Database, ObjectStore]) -> AsyncIterator[System]:
 async def test_a_user_rule_files_and_tags_arriving_documents(system: System) -> None:
     admin, owner = await system.user(Role.ADMIN), await system.user()
     energy = await system.post(admin, "/tags", {"name": "Energie"})
-    drawer = await system.post(owner, "/drawers", {"name": "Strom"})
+    space = await system.post(owner, "/spaces", {"name": "Strom"})
     body: dict[str, Any] = {
         "name": "Stromrechnungen",
         "triggers": ["ingest"],
@@ -161,7 +161,7 @@ async def test_a_user_rule_files_and_tags_arriving_documents(system: System) -> 
             ]
         },
         "actions": [
-            {"type": "set_drawer", "drawer_id": drawer["id"]},
+            {"type": "set_space", "space_id": space["id"]},
             {"type": "add_tags", "tag_ids": [energy["id"]]},
         ],
     }
@@ -171,14 +171,14 @@ async def test_a_user_rule_files_and_tags_arriving_documents(system: System) -> 
     bill = await system.upload(owner, "Stromrechnung der Stadtwerke, Nr. 4711")
     reminder = await system.upload(owner, "Mahnung zur Stromrechnung Nr. 4711")
 
-    # The bill is filed into the rule's drawer and tagged, without a review.
+    # The bill is filed into the rule's space and tagged, without a review.
     filed = await system.settled(owner, bill)
     assert filed["lane"] == "green", filed
     assert filed["processing"]["status"] == "completed"
     outcomes = {n["node"]: n["outcome"] for n in filed["processing"]["nodes"]}
     assert outcomes["apply_rules"] == "ok"
     assert outcomes["file"] == "ok"
-    assert filed["drawer_id"] == drawer["id"]
+    assert filed["space_id"] == space["id"]
     assert filed["tag_ids"] == [energy["id"]]
     entry = await system.rules_entry(owner, bill)
     assert entry["outcome"] == "ok", entry
@@ -189,12 +189,12 @@ async def test_a_user_rule_files_and_tags_arriving_documents(system: System) -> 
     assert (report["rule_id"], report["version"], report["scope"]) == (rule["id"], 1, "user")
     assert report["name"] == "Stromrechnungen"
     applied = {(effect["field"], effect["new"]) for effect in report["applied"]}
-    assert applied == {("drawer", drawer["id"]), ("tags", energy["id"])}
+    assert applied == {("space", space["id"]), ("tags", energy["id"])}
 
     # The negated group keeps the reminder where it arrived.
     kept = await system.settled(owner, reminder)
     assert kept["lane"] == "green", kept
-    assert kept["drawer_id"] != drawer["id"]
+    assert kept["space_id"] != space["id"]
     assert kept["tag_ids"] == []
     entry = await system.rules_entry(owner, reminder)
     assert {"id": rule["id"], "version": 1} in entry["input"]["rules"]
@@ -209,7 +209,7 @@ async def test_a_user_rule_files_and_tags_arriving_documents(system: System) -> 
     assert changed.json()["version"] == 2
     gas = await system.upload(owner, "Gasrechnung der Stadtwerke, Nr. 4712")
     filed = await system.settled(owner, gas)
-    assert (filed["lane"], filed["drawer_id"]) == ("green", drawer["id"]), filed
+    assert (filed["lane"], filed["space_id"]) == ("green", space["id"]), filed
     entry = await system.rules_entry(owner, gas)
     assert {"id": rule["id"], "version": 2} in entry["input"]["rules"]
     assert [(item["rule_id"], item["version"]) for item in entry["output"]["rules"]] == [

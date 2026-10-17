@@ -60,6 +60,9 @@ def test_the_prediction_is_scikit_learns(text: str) -> None:
     assert {str(key): value for key, value in prediction.document_types} == pytest.approx(kinds)
     for tag, model in fitted.tags.items():
         assert prediction.tags[tag] == pytest.approx(model.predict_proba(vector)[0][1], abs=1e-5)
+    assert fitted.topic is not None
+    topics = dict(zip(fitted.topic.classes_, fitted.topic.predict_proba(vector)[0], strict=True))
+    assert {str(key): value for key, value in prediction.topics} == pytest.approx(topics)
 
 
 def test_a_model_is_plain_arrays() -> None:
@@ -68,7 +71,17 @@ def test_a_model_is_plain_arrays() -> None:
         assert str(archive["format"]) == FORMAT
         # Two classes: one row, for the second one (as scikit-learn keeps it).
         assert archive["contact_coef"].shape == (1, len(archive["terms"]))
-    assert summary["classes"] == {"contact": 2, "document_type": 2, "tags": 2}
+    assert summary["classes"] == {"contact": 2, "document_type": 2, "topic": 2, "tags": 2}
+
+
+def test_a_model_from_before_topics_knows_none() -> None:
+    data, _, _ = fit(corpus())
+    with np.load(io.BytesIO(data), allow_pickle=False) as archive:
+        arrays = {name: archive[name] for name in archive.files if not name.startswith("topic_")}
+    buffer = io.BytesIO()
+    np.savez_compressed(buffer, **arrays)
+    prediction = _Model.load(buffer.getvalue()).predict("Stadtwerke Musterstadt Zählerstand")
+    assert prediction.topics == [] and prediction.contacts
 
 
 def test_a_model_of_another_format() -> None:

@@ -9,6 +9,7 @@ const problem = (status: number, detail: string | null = null): Problem => ({
 	status,
 	detail,
 	existing_document_id: null,
+	space_id: null,
 	open_fields: null,
 	second_factor_required: null
 });

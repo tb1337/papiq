@@ -1,5 +1,5 @@
 """`/users`: accounts. Admins manage them; everyone reads the active users' names, to share
-drawers with them."""
+spaces with them."""
 
 from uuid import UUID
 
@@ -62,7 +62,7 @@ async def list_users(principal: Authenticated, context: Context) -> list[UserOut
     status_code=201,
     summary="Create a user",
     description=(
-        ADMINS_ONLY + " Creates the user's private default drawer, too. A user with the role "
+        ADMINS_ONLY + " Creates the user's private default space, too. A user with the role "
         "`user` and no password can be created with an admin's API token (`read_write`), e.g. "
         "by a migration; a password or the role `admin` needs a session, as for `/auth/*`."
     ),
@@ -161,8 +161,8 @@ async def unlink(id: UUID, admin: SessionPrincipal, context: Context) -> Removed
     status_code=204,
     summary="Delete a user",
     description=(
-        ADMINS_ONLY + " Only a user who owns no documents and whose drawers are empty (409); "
-        "removes their drawers, the shares to them and their sign-in data."
+        ADMINS_ONLY + " Only a user who owns no documents and whose spaces are empty (409); "
+        "removes their spaces, the shares to them and their sign-in data."
     ),
     responses=problem_responses(401, 403, 404, 409, 422),
 )

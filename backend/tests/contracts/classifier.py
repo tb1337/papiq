@@ -9,6 +9,7 @@ from papiq.core.ports import Classifier, TrainingExample
 UTILITY, BANK, INSURER = (ContactId(new_id()) for _ in range(3))
 INVOICE, STATEMENT = DocumentTypeId(new_id()), DocumentTypeId(new_id())
 ENERGY, MONEY = TagId(new_id()), TagId(new_id())
+HOME, FINANCE = TagId(new_id()), TagId(new_id())  # topics
 
 UTILITY_TEXTS = [
     "Stadtwerke Musterstadt Stromrechnung Zählerstand Kilowattstunden Abschlag {}",
@@ -24,11 +25,11 @@ BANK_TEXTS = [
 
 def corpus() -> list[TrainingExample]:
     utility = [
-        TrainingExample(text.format(number), UTILITY, INVOICE, frozenset({ENERGY}))
+        TrainingExample(text.format(number), UTILITY, INVOICE, frozenset({ENERGY}), HOME)
         for number, text in enumerate(UTILITY_TEXTS)
     ]
     bank = [
-        TrainingExample(text.format(number), BANK, STATEMENT, frozenset({MONEY}))
+        TrainingExample(text.format(number), BANK, STATEMENT, frozenset({MONEY}), FINANCE)
         for number, text in enumerate(BANK_TEXTS)
     ]
     return [*utility, *bank]
@@ -45,6 +46,20 @@ class ClassifierContract:
         assert prediction.document_types[0][0] == INVOICE
         assert prediction.tags[ENERGY] > prediction.tags[MONEY]
         assert prediction.known_contacts == {UTILITY, BANK}
+        assert prediction.topics[0][0] == HOME
+        assert prediction.known_topics == {HOME, FINANCE}
+
+    async def test_a_topic_needs_two_examples_and_two_classes(self, classifier: Classifier) -> None:
+        """As the type: documents without a topic are left out of its target."""
+        examples = [
+            TrainingExample(item.text, item.contact, item.document_type, item.tags, HOME)
+            if item.contact == UTILITY
+            else TrainingExample(item.text, item.contact, item.document_type, item.tags)
+            for item in corpus()
+        ]
+        model = await classifier.train(examples)
+        prediction = await classifier.predict(model.data, "Stadtwerke Strom Zählerstand")
+        assert prediction.topics == []
 
     async def test_probabilities(self, classifier: Classifier) -> None:
         model = await classifier.train(corpus())

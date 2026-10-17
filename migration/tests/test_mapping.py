@@ -8,9 +8,9 @@ from papiq_migration.mapping import (
     convert_value,
     document_date,
     document_title,
-    drawer_name,
     field_spec,
     notes_text,
+    space_name,
 )
 
 
@@ -179,11 +179,11 @@ def test_missing_permission_data_is_no_permission() -> None:
     assert access_of({"owner": 1}, USERS).shares == ()
 
 
-def test_drawer_names_name_the_users_and_stay_in_bounds() -> None:
-    assert drawer_name((("anna", "read_write"), ("bob", "read"))) == (
+def test_space_names_name_the_users_and_stay_in_bounds() -> None:
+    assert space_name((("anna", "read_write"), ("bob", "read"))) == (
         "Geteilt: anna (schreiben), bob (lesen)"
     )
     many = tuple((f"user-{n:03d}-" + "x" * 20, "read") for n in range(30))
-    name = drawer_name(many)
-    assert len(name) <= 200 and name != drawer_name(many[:-1])
-    assert drawer_name(many) == name
+    name = space_name(many)
+    assert len(name) <= 200 and name != space_name(many[:-1])
+    assert space_name(many) == name

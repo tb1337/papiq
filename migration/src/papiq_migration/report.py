@@ -17,7 +17,7 @@ KINDS = (
     ("tag", "Tags"),
     ("field", "Fields (Paperless: custom fields, ASN, notes)"),
     ("storage_path", "Storage paths"),
-    ("drawer", "Drawers"),
+    ("space", "Spaces"),
     ("other", "Other Paperless objects"),
 )
 
@@ -38,7 +38,7 @@ def build(
                 "id": row.source_id,
                 "title": row.detail.get("title"),
                 "owner": row.detail.get("owner"),
-                "drawer": row.detail.get("drawer"),
+                "space": row.detail.get("space"),
                 "status": row.status,
                 "papiq_id": row.papiq_id,
                 "lane": row.lane,
@@ -200,13 +200,13 @@ def _summary(report: dict[str, Any]) -> list[str]:
         )
     out += ["## All documents", ""]
     out += _table(
-        ["Paperless", "Title", "Owner", "Drawer", "Papiq", "Result", "Lane"],
+        ["Paperless", "Title", "Owner", "Space", "Papiq", "Result", "Lane"],
         [
             [
                 d["id"],
                 d["title"],
                 d["owner"] or "(executing admin)",
-                d["drawer"],
+                d["space"],
                 d["papiq_id"],
                 d["status"],
                 d["lane"],

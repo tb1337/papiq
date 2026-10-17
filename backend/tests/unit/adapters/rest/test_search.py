@@ -7,10 +7,10 @@ from uuid import UUID
 import pytest
 
 from papiq.adapters.inbound.rest import PREFIX
-from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import SearchUnavailableError
 from papiq.core.domain.ids import DocumentId
 from papiq.core.domain.pipeline import Node
+from papiq.core.domain.spaces import ShareLevel
 from tests.api import auth
 from tests.unit.adapters.rest.conftest import Api
 from tests.unit.adapters.rest.test_permission_matrix import ACTORS, DENIED, Scene, build_scene
@@ -54,10 +54,10 @@ async def test_search_shows_only_what_the_caller_may_read(api: Api) -> None:
         assert await found(scene, actor) == {scene.green}
         assert await found(scene, actor, lane="yellow") == set()
         assert await found(scene, actor, lane="processing") == set()
-        assert await found(scene, actor, drawer_id=str(scene.shared.id)) == {scene.green}
+        assert await found(scene, actor, space_id=str(scene.shared.id)) == {scene.green}
     for actor in ("stranger", "admin"):
         assert await found(scene, actor) == set()
-        assert await found(scene, actor, drawer_id=str(scene.shared.id)) == set()
+        assert await found(scene, actor, space_id=str(scene.shared.id)) == set()
     assert await found(scene, "owner", lane=["yellow", "processing"]) == {
         scene.yellow,
         scene.processing,
@@ -80,10 +80,10 @@ def test_every_actor_is_covered() -> None:
 async def test_a_withdrawn_share_ends_the_search_at_once(api: Api) -> None:
     scene = await indexed_scene(api)
     assert await found(scene, "reader") == {scene.green}
-    owner_drawers = api.services.drawers
-    shared = await owner_drawers.get(scene.owner.id, scene.shared.id)
+    owner_spaces = api.services.spaces
+    shared = await owner_spaces.get(scene.owner.id, scene.shared.id)
     reader_id = next(user for user, level in shared.shares.items() if level is ShareLevel.READ)
-    await owner_drawers.unshare(scene.owner.id, scene.shared.id, reader_id)
+    await owner_spaces.unshare(scene.owner.id, scene.shared.id, reader_id)
     assert await found(scene, "reader") == set()
     assert await found(scene, "writer") == {scene.green}
 

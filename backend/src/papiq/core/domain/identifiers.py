@@ -6,6 +6,10 @@ Admins enter identifiers by hand. Training learns more from confirmed documents 
 `mine_identifiers`): a value that stands in at least two of them, all of one contact. A value
 in documents of several contacts (the owner's own IBAN on every direct debit) is never learned.
 An admin can reject a learned one; it is then not learned again.
+
+An identifier may point to one of its contact's topics (a personnel number to "work", a policy
+number to "health insurance"): found in a document, it is evidence for the pair of contact and
+topic. A learned one gets a topic only if all the confirmed documents it stands in carry it.
 """
 
 import re
@@ -17,7 +21,7 @@ from enum import StrEnum
 
 from papiq.core.domain.errors import ValidationError
 from papiq.core.domain.evidence import normalise
-from papiq.core.domain.ids import ContactId
+from papiq.core.domain.ids import ContactId, TagId
 
 MAX_IDENTIFIERS = 100
 """Identifiers of one contact, entered and learned."""
@@ -42,17 +46,23 @@ class IdentifierSource(StrEnum):
 @dataclass(frozen=True)
 class Identifier:
     """`value` is normalised (see `normalise_identifier`); kind and value are unique across
-    all contacts."""
+    all contacts. `topic_id`: the topic of its contact it points to, if any (the contact checks
+    that it enables it)."""
 
     kind: IdentifierKind
     value: str
     source: IdentifierSource = IdentifierSource.MANUAL
+    topic_id: TagId | None = None
 
     @classmethod
     def parse(
-        cls, kind: IdentifierKind, raw: str, source: IdentifierSource = IdentifierSource.MANUAL
+        cls,
+        kind: IdentifierKind,
+        raw: str,
+        source: IdentifierSource = IdentifierSource.MANUAL,
+        topic_id: TagId | None = None,
     ) -> "Identifier":
-        return cls(kind, normalise_identifier(kind, raw), source)
+        return cls(kind, normalise_identifier(kind, raw), source, topic_id)
 
     @property
     def key(self) -> tuple[IdentifierKind, str]:
@@ -209,24 +219,31 @@ def matches(identifier: Identifier, found: tuple[IdentifierKind, str]) -> bool:
 
 
 def mine_identifiers(
-    documents: Iterable[tuple[ContactId | None, Iterable[tuple[IdentifierKind, str]]]],
+    documents: Iterable[
+        tuple[ContactId | None, TagId | None, Iterable[tuple[IdentifierKind, str]]]
+    ],
     taken: Iterable[tuple[IdentifierKind, str]] = (),
 ) -> Mapping[ContactId, list[Identifier]]:
-    """The identifiers to learn from confirmed documents (each its contact and the identifiers
-    in its text): a value that stands in at least `LEARN_FROM` documents, all with the same
-    contact. A document without a contact counts as another contact. `taken` (entered by
-    hand or rejected anywhere) is never learned."""
-    holders: dict[tuple[IdentifierKind, str], list[ContactId | None]] = defaultdict(list)
-    for contact, found in documents:
+    """The identifiers to learn from confirmed documents (each its contact, its topic and the
+    identifiers in its text): a value that stands in at least `LEARN_FROM` documents, all with
+    the same contact. A document without a contact counts as another contact. `taken` (entered
+    by hand or rejected anywhere) is never learned. A learned value points to a topic if all
+    its documents carry that one; otherwise to none."""
+    holders: dict[tuple[IdentifierKind, str], list[tuple[ContactId | None, TagId | None]]] = (
+        defaultdict(list)
+    )
+    for contact, topic, found in documents:
         for key in set(found):
-            holders[key].append(contact)
+            holders[key].append((contact, topic))
     skip = set(taken)
     learned: dict[ContactId, list[Identifier]] = defaultdict(list)
-    for (kind, value), contacts in sorted(holders.items()):
-        owners = set(contacts)
-        if (kind, value) in skip or len(contacts) < LEARN_FROM or len(owners) != 1:
+    for (kind, value), pairs in sorted(holders.items()):
+        owners = {contact for contact, _ in pairs}
+        if (kind, value) in skip or len(pairs) < LEARN_FROM or len(owners) != 1:
             continue
         (owner,) = owners
+        topics = {topic for _, topic in pairs}
+        topic = next(iter(topics)) if len(topics) == 1 else None
         if owner is not None:
-            learned[owner].append(Identifier(kind, value, IdentifierSource.LEARNED))
+            learned[owner].append(Identifier(kind, value, IdentifierSource.LEARNED, topic))
     return {owner: found[:MAX_IDENTIFIERS] for owner, found in learned.items()}

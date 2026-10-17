@@ -21,6 +21,10 @@ class Problem(BaseModel):
     existing_document_id: UUID | None = Field(
         default=None, description="For a duplicate: the document that has the same file."
     )
+    space_id: UUID | None = Field(
+        default=None,
+        description="Filing or moving refused: the space the caller may not write to.",
+    )
     open_fields: list[str] | None = Field(
         default=None, description="Confirming a document: the fields that need a decision."
     )

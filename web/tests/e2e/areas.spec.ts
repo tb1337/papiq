@@ -30,7 +30,7 @@ test('every area opens, and the dialogs create things', async ({ page }) => {
 		['/ui/inbox', 'Inbox'],
 		['/ui/documents?q=invoice', 'Documents'],
 		['/ui/rules', 'Rules'],
-		['/ui/drawers', 'Drawers'],
+		['/ui/spaces', 'Spaces'],
 		['/ui/webhooks', 'Webhooks'],
 		['/ui/admin/users', 'Users'],
 		['/ui/admin/master-data', 'Master data'],
@@ -41,16 +41,20 @@ test('every area opens, and the dialogs create things', async ({ page }) => {
 		await expect(page.getByRole('heading', { name: heading, level: 1 })).toBeVisible();
 	}
 
-	// Master data: a contact.
+	// Master data: a contact, deleted from its editor.
 	await page.goto('/ui/admin/master-data');
 	await page.getByRole('button', { name: 'New contact' }).click();
 	await page.getByRole('textbox', { name: 'Name' }).fill(NAME);
 	await page.getByRole('button', { name: 'Create' }).click();
 	await expect(page.getByText(NAME)).toBeVisible();
+	await page.getByRole('button', { name: `Edit ${NAME}` }).click();
+	await page.getByRole('button', { name: `Delete ${NAME}` }).click();
+	await page.getByRole('alertdialog').getByRole('button', { name: 'Delete' }).click();
+	await expect(page.getByText(NAME)).toHaveCount(0);
 
-	// Drawers: a drawer.
-	await page.goto('/ui/drawers');
-	await page.getByRole('button', { name: 'New drawer' }).click();
+	// Spaces: a space.
+	await page.goto('/ui/spaces');
+	await page.getByRole('button', { name: 'New space' }).click();
 	await page.getByRole('textbox', { name: 'Name' }).fill(NAME);
 	await page.getByRole('button', { name: 'Create' }).click();
 	await expect(page.getByText(NAME).first()).toBeVisible();

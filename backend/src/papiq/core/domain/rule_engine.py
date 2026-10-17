@@ -2,25 +2,38 @@
 change, with conflicts instead of silent overwrites.
 
 Conditions are evaluated against the state before any rule acts (a rule's action never makes
-another rule match in the same run). The result of a condition is three-valued: with
-`distrust`, a condition on a contact, type or tag that the model set and no person confirmed is
-unknown. A rule that matches only with such values does not file into a drawer that others see
-(the accepted risk of M5: a text can name a wrong contact and make it green).
+another rule match in the same run). A condition on a tag, a group or a topic matches the ones
+below it too (the document has the tag set and its ancestors; its contact and type have their
+groups and theirs; its topic has its ancestors). The result of a condition is three-valued: with
+`distrust`, a condition on a contact, type, topic or tag that the model set and no person
+confirmed is unknown, and so is one on the groups of such a contact or type. A rule that matches
+only with such values does not file into a space that others see (the accepted risk of M5: a
+text can name a wrong contact and make it green).
 
 How the actions of all matching rules come together (`plan`):
 
-- A single field (drawer, contact, type, title, a field) set by one rule, or by several to
-  the same value, is set. Several different values are a conflict: nothing is set.
+- A single field (space, contact, type, topic, title, a field) set by one rule, or by several
+  to the same value, is set. Several different values are a conflict: nothing is set.
+- A topic is set only if the contact the rules leave enables it (otherwise the action is
+  skipped and noted); a contact set that does not enable the document's topic clears it,
+  unless a person chose that topic: then the contact is overruled.
 - A value a person decided (confirming in the inbox, or changing the document) is never
   replaced: the rule is overruled and that is logged.
 - A value the model set and no person confirmed is not replaced either: a conflict.
 - Tags added and removed by rules are combined; a tag added by one rule and removed by another
-  is a conflict. Removing a tag the model set is no conflict (tags are unchecked proposals).
+  is a conflict. Removing a tag the model set is no conflict (tags are unchecked proposals). Only
+  document tags are added (also those set by hand); the result is normalised: a tag above one
+  the document keeps is not added, and a parent gives way to its child.
 - On arrival (`ingest`) conflicts, refused actions and forced reviews make the node uncertain:
   the document waits in the inbox. On a change by a person (`change`) nothing turns yellow (a
   filed document would disappear for everyone else): what cannot be applied is only reported.
 - Applied to existing documents on request (`retroactive`), one rule: a field that has another
   value already is a conflict, applied only where the person accepted it.
+
+Reasons name what they are about as a person reads it: contacts, types, topics, spaces, tags
+and fields by their names, a field's value as written (`_Planner._shown`); the ids stay in the
+structured parts (values, suggestions, effects). Only something that no longer exists is named
+by its id.
 """
 
 import re
@@ -37,6 +50,7 @@ from papiq.core.domain.classification import (
     DOCUMENT_TYPE,
     TAGS,
     TITLE,
+    TOPIC,
     FieldCheck,
     field_key,
 )
@@ -49,18 +63,20 @@ from papiq.core.domain.fields import (
     FieldValue,
     Money,
     Url,
+    decimal_text,
     field_from_json,
     field_to_json,
 )
 from papiq.core.domain.ids import (
     ContactId,
     DocumentTypeId,
-    DrawerId,
     FieldId,
     RuleId,
+    SpaceId,
     TagId,
 )
 from papiq.core.domain.json_value import JsonObject, JsonValue
+from papiq.core.domain.master_data import TagScope
 from papiq.core.domain.periods import Period
 from papiq.core.domain.pipeline import Outcome
 from papiq.core.domain.rules import (
@@ -75,14 +91,16 @@ from papiq.core.domain.rules import (
     RuleScope,
     SetContact,
     SetDocumentType,
-    SetDrawer,
     SetField,
+    SetSpace,
     SetTitle,
+    SetTopic,
     condition_value,
 )
+from papiq.core.domain.tag_tree import TagTree
 from papiq.core.domain.templates import Render, TemplateValue, template_values
 
-DRAWER = "drawer"
+SPACE = "space"
 REVIEW = "review"
 TEXT_TARGET = "text"
 
@@ -99,14 +117,33 @@ class Mode(StrEnum):
 # --- facts and evaluation ---------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class Taxonomy:
+    """The tags as trees, the groups of the contacts and types a run looks at (by the
+    contact's or type's id), and the topics those contacts enable."""
+
+    tree: TagTree = field(default_factory=lambda: TagTree.of(()))
+    groups: Mapping[UUID, frozenset[TagId]] = field(default_factory=dict)
+    topics: Mapping[UUID, frozenset[TagId]] = field(default_factory=dict)
+
+    def groups_of(self, id: UUID | None) -> frozenset[TagId]:
+        return frozenset() if id is None else self.groups.get(id, frozenset())
+
+    def topics_of(self, contact: UUID | None) -> frozenset[TagId]:
+        return frozenset() if contact is None else self.topics.get(contact, frozenset())
+
+
 @dataclass(frozen=True, kw_only=True)
 class Facts:
     """A document's state as conditions see it.
 
     `patterns`: results of the regular expressions, by (target, pattern, case setting), target
     `text` or a field id; computed beforehand with a time limit. A missing result (no
-    text, time out) does not match. `unverified`: the fields `contact` and `document_type` if
-    they hold a value the model set and no person confirmed; `unverified_tags` likewise."""
+    text, time out) does not match. `unverified`: the fields `contact`, `document_type` and
+    `topic` if they hold a value the model set and no person confirmed; `unverified_tags`
+    likewise.
+    `taxonomy`: the tag trees; `contact_groups` and `document_type_groups` the groups of the
+    contact and the type."""
 
     contact_id: ContactId | None
     document_type_id: DocumentTypeId | None
@@ -114,10 +151,14 @@ class Facts:
     channel: Channel
     document_date: date | None
     fields: Mapping[FieldId, FieldValue]
+    topic_id: TagId | None = None
     text: DocumentText | None = None
     patterns: Mapping[tuple[str, str, bool], bool] = field(default_factory=dict)
     unverified: frozenset[str] = frozenset()
     unverified_tags: frozenset[TagId] = frozenset()
+    taxonomy: Taxonomy = field(default_factory=Taxonomy)
+    contact_groups: frozenset[TagId] = frozenset()
+    document_type_groups: frozenset[TagId] = frozenset()
 
     @classmethod
     def of(
@@ -128,7 +169,9 @@ class Facts:
         patterns: Mapping[tuple[str, str, bool], bool] | None = None,
         unverified: frozenset[str] = frozenset(),
         unverified_tags: frozenset[TagId] = frozenset(),
+        taxonomy: Taxonomy | None = None,
     ) -> "Facts":
+        taxonomy = taxonomy or Taxonomy()
         return cls(
             contact_id=document.contact_id,
             document_type_id=document.document_type_id,
@@ -136,10 +179,14 @@ class Facts:
             channel=document.channel,
             document_date=document.document_date,
             fields=dict(document.fields),
+            topic_id=document.topic_id,
             text=text,
             patterns=patterns or {},
             unverified=unverified,
             unverified_tags=unverified_tags & frozenset(document.tag_ids),
+            taxonomy=taxonomy,
+            contact_groups=taxonomy.groups_of(document.contact_id),
+            document_type_groups=taxonomy.groups_of(document.document_type_id),
         )
 
 
@@ -176,6 +223,12 @@ def distrusted_fields(group: Group, facts: Facts) -> tuple[str, ...]:
                 found.append(CONTACT)
             case ConditionField.DOCUMENT_TYPE if DOCUMENT_TYPE in facts.unverified:
                 found.append(DOCUMENT_TYPE)
+            case ConditionField.CONTACT_GROUP if CONTACT in facts.unverified:
+                found.append(CONTACT)
+            case ConditionField.DOCUMENT_TYPE_GROUP if DOCUMENT_TYPE in facts.unverified:
+                found.append(DOCUMENT_TYPE)
+            case ConditionField.TOPIC if TOPIC in facts.unverified:
+                found.append(TOPIC)
             case ConditionField.TAGS if facts.unverified_tags:
                 found.append(TAGS)
     return tuple(dict.fromkeys(found))
@@ -197,6 +250,17 @@ def _condition(
             return _reference(op, None if current is None else str(current), values)
         case ConditionField.TAGS:
             return _tags(op, values, facts, distrust)
+        case ConditionField.CONTACT_GROUP | ConditionField.DOCUMENT_TYPE_GROUP:
+            owner = CONTACT if condition.field is ConditionField.CONTACT_GROUP else DOCUMENT_TYPE
+            if distrust and owner in facts.unverified:
+                return None
+            groups = facts.contact_groups if owner == CONTACT else facts.document_type_groups
+            return _held(op, values, facts.taxonomy.tree.with_ancestors(groups))
+        case ConditionField.TOPIC:
+            if distrust and TOPIC in facts.unverified:
+                return None
+            topic = () if facts.topic_id is None else (facts.topic_id,)
+            return _held(op, values, facts.taxonomy.tree.with_ancestors(topic))
         case ConditionField.CHANNEL:
             return facts.channel.value in values
         case ConditionField.TEXT:
@@ -226,17 +290,29 @@ def _reference(op: Operator, current: str | None, values: list[JsonValue]) -> bo
 
 
 def _tags(op: Operator, values: list[JsonValue], facts: Facts, distrust: bool) -> Truth:
+    """A tag wanted matches the tags set below it: the document has it as an ancestor."""
     unverified = facts.unverified_tags if distrust else frozenset()
     verified = facts.tag_ids - unverified
+    tree = facts.taxonomy.tree
     wanted = {TagId(UUID(str(value))) for value in values}
     match op:
         case Operator.PRESENT:
             return True if verified else (None if unverified else False)
         case Operator.MISSING:
             return False if verified else (None if unverified else True)
-    if wanted & verified:
+    if wanted & tree.with_ancestors(verified):
         return True
-    return None if wanted & unverified else False
+    return None if wanted & tree.with_ancestors(unverified) else False
+
+
+def _held(op: Operator, values: list[JsonValue], held: frozenset[TagId]) -> bool:
+    """A condition on groups (or the topic), against the groups held with their ancestors."""
+    match op:
+        case Operator.PRESENT:
+            return bool(held)
+        case Operator.MISSING:
+            return not held
+    return bool({TagId(UUID(str(value))) for value in values} & held)
 
 
 def _ordered[T: (date, Decimal)](op: Operator, current: T | None, values: list[T]) -> bool:
@@ -379,8 +455,8 @@ def matches(
 
 
 @dataclass(frozen=True)
-class DrawerTarget:
-    """What the rules need to know about a drawer they file into, from the owner's view.
+class SpaceTarget:
+    """What the rules need to know about a space they file into, from the owner's view.
     `shared`: other users can see documents in it (it belongs to someone else or is shared)."""
 
     name: str
@@ -392,9 +468,9 @@ class DrawerTarget:
 class Situation:
     """Everything `plan` needs besides the matching rules.
 
-    - `drawers`: the drawers the rules file into that exist.
+    - `spaces`: the spaces the rules file into that exist.
     - `existing`: ids of the contacts, types, tags and fields that exist.
-    - `names`: names of contacts, types, tags and drawers, for templates; `owner_name` that of
+    - `names`: names of contacts, types, tags and spaces, for templates; `owner_name` that of
       the document's owner.
     - `render`: renders the templates of titles, text fields and review reasons (the port
       `TemplateRenderer`).
@@ -405,15 +481,17 @@ class Situation:
       likewise for tags.
     - `reviewed`: rules whose forced review a person confirmed in this processing run.
     - `accept_conflicts` (retroactive): the person accepted the rule's values over others.
+    - `taxonomy`: the tag trees (tags added are document tags, the result is normalised) and
+      the groups of the contacts and types the rules may leave (for templates).
     """
 
     mode: Mode
     document: Document
-    default_drawer: DrawerId
+    default_space: SpaceId
     definitions: Mapping[FieldId, FieldDefinition]
     render: Render
     owner_name: str | None = None
-    drawers: Mapping[DrawerId, DrawerTarget] = field(default_factory=dict)
+    spaces: Mapping[SpaceId, SpaceTarget] = field(default_factory=dict)
     existing: frozenset[object] = frozenset()
     names: Mapping[object, str] = field(default_factory=dict)
     model_values: Mapping[str, JsonValue] = field(default_factory=dict)
@@ -423,6 +501,7 @@ class Situation:
     person_removed_tags: frozenset[TagId] = frozenset()
     reviewed: frozenset[RuleId] = frozenset()
     accept_conflicts: bool = False
+    taxonomy: Taxonomy = field(default_factory=Taxonomy)
 
 
 @dataclass(frozen=True)
@@ -476,13 +555,15 @@ class RulePlan:
 
     `checks`: per single field the rules touched, as in the model nodes: OK if applied,
     uncertain (on arrival) if a person has to decide; the inbox reads them. `reviews`:
-    reasons of forced reviews that hold."""
+    reasons of forced reviews that hold. `labels`: how `reasons` names a field (`field:<id>`)
+    of a check, by its name."""
 
     changes: DocumentChanges
-    drawer: DrawerId | None
+    space: SpaceId | None
     reports: list[RuleReport]
     checks: list[FieldCheck]
     reviews: list[str]
+    labels: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def uncertain(self) -> bool:
@@ -491,7 +572,9 @@ class RulePlan:
     @property
     def reasons(self) -> list[str]:
         return [
-            f"{check.field}: {check.reason}" for check in self.checks if not check.ok
+            f"{self.labels.get(check.field, check.field)}: {check.reason}"
+            for check in self.checks
+            if not check.ok
         ] + self.reviews
 
     @property
@@ -546,8 +629,10 @@ class _Planner:
             for action in match.rule.definition.actions:
                 self._collect(match, report, action)
         result: dict[str, JsonValue] = {}
-        for field_name in (DOCUMENT_TYPE, CONTACT, DRAWER):
+        self._person_topic()
+        for field_name in (DOCUMENT_TYPE, CONTACT, SPACE):
             self._single(field_name, result)
+        self._topic(result)
         type_after = self._type_after(result)
         self._text_fields(result, type_after)
         fields: dict[FieldId, object] = {}
@@ -575,17 +660,26 @@ class _Planner:
             changes = replace(
                 changes, document_type_id=DocumentTypeId(UUID(str(result[DOCUMENT_TYPE])))
             )
+        if TOPIC in result:
+            topic = result[TOPIC]
+            changes = replace(changes, topic_id=None if topic is None else TagId(UUID(str(topic))))
         if TITLE in result:
             changes = replace(changes, title=str(result[TITLE]))
         if tags is not None:
             changes = replace(changes, tag_ids=tags)
-        drawer = DrawerId(UUID(str(result[DRAWER]))) if DRAWER in result else None
+        space = SpaceId(UUID(str(result[SPACE]))) if SPACE in result else None
+        definitions = self._s.definitions
         return RulePlan(
             changes=changes,
-            drawer=drawer,
+            space=space,
             reports=self._reports,
             checks=list(self._checks.values()),
             reviews=self._reviews,
+            labels={
+                name: f"'{definitions[id].name}'"
+                for name in self._checks
+                if (id := _field_id(name)) is not None and id in definitions
+            },
         )
 
     # --- collecting ---------------------------------------------------------------------------
@@ -593,19 +687,25 @@ class _Planner:
     def _collect(self, match: Match, report: RuleReport, action: object) -> None:
         s = self._s
         match action:
-            case SetDrawer(drawer_id=drawer):
-                self._drawer(match, report, drawer)
+            case SetSpace(space_id=space):
+                self._space(match, report, space)
             case SetContact(contact_id=contact):
                 self._candidate(CONTACT, str(contact), contact, match, report)
             case SetDocumentType(document_type_id=document_type):
                 self._candidate(DOCUMENT_TYPE, str(document_type), document_type, match, report)
+            case SetTopic(topic_id=topic):
+                self._candidate(TOPIC, str(topic), topic, match, report)
             case SetTitle():
                 self._titles.append((report, action, match))
             case AddTags(tag_ids=tags) | RemoveTags(tag_ids=tags):
                 target = self._adds if isinstance(action, AddTags) else self._removes
+                tree = s.taxonomy.tree
                 for tag in sorted(tags):
                     if tag not in s.existing:
                         report.notes.append(Note(TAGS, "skipped", f"tag {tag} no longer exists"))
+                    elif tag in tree and tree.tags[tag].scope is not TagScope.DOCUMENT:
+                        reason = f"tag {self._tag(tag)} is a group, not a document tag"
+                        report.notes.append(Note(TAGS, "skipped", reason))
                     else:
                         target.setdefault(tag, []).append(report)
             case SetField(field_id=field, value=value):
@@ -638,37 +738,35 @@ class _Planner:
         else:
             self._candidates.setdefault(field_name, []).append(_Candidate(report, value, match))
 
-    def _drawer(self, match: Match, report: RuleReport, drawer: DrawerId) -> None:
+    def _space(self, match: Match, report: RuleReport, space: SpaceId) -> None:
         s = self._s
-        target = s.drawers.get(drawer)
+        target = s.spaces.get(space)
         if match.rule.scope is RuleScope.GLOBAL:
-            report.notes.append(Note(DRAWER, "refused", "global rules never change visibility"))
+            report.notes.append(Note(SPACE, "refused", "global rules never change visibility"))
         elif match.rule.owner_id != self._document.owner_id:
-            report.notes.append(Note(DRAWER, "refused", "the rule's owner does not own it"))
+            report.notes.append(Note(SPACE, "refused", "the rule's owner does not own it"))
         elif target is None:
-            report.notes.append(Note(DRAWER, "skipped", f"drawer {drawer} no longer exists"))
+            report.notes.append(Note(SPACE, "skipped", f"space {space} no longer exists"))
         elif not target.writable:
-            reason = f"no write access to drawer {drawer} (any more)"
-            report.notes.append(Note(DRAWER, "refused", reason))
-            if s.mode is Mode.INGEST and DRAWER not in s.locked:
-                self._uncertain(DRAWER, f"rule '{report.name}': {reason}", suggestion=None)
+            reason = f"no write access to space '{target.name}' (any more)"
+            report.notes.append(Note(SPACE, "refused", reason))
+            if s.mode is Mode.INGEST and SPACE not in s.locked:
+                self._uncertain(SPACE, f"rule '{report.name}': {reason}", suggestion=None)
         elif target.shared and not match.trusted and s.mode is Mode.RETROACTIVE:
             # The person sees the move in the preview and may accept it, as any conflict.
             fields = ", ".join(match.distrusted)
             if s.accept_conflicts:
-                self._candidates.setdefault(DRAWER, []).append(
-                    _Candidate(report, str(drawer), match)
-                )
+                self._candidates.setdefault(SPACE, []).append(_Candidate(report, str(space), match))
             else:
                 reason = (
-                    f"files into the shared drawer '{target.name}' with an unconfirmed "
+                    f"files into the shared space '{target.name}' with an unconfirmed "
                     f"{fields}; not accepted"
                 )
-                report.notes.append(Note(DRAWER, "conflict", reason))
+                report.notes.append(Note(SPACE, "conflict", reason))
         elif target.shared and not match.trusted:
             fields = ", ".join(match.distrusted)
-            reason = f"files into the shared drawer '{target.name}' only with a confirmed {fields}"
-            report.notes.append(Note(DRAWER, "refused", reason))
+            reason = f"files into the shared space '{target.name}' only with a confirmed {fields}"
+            report.notes.append(Note(SPACE, "refused", reason))
             if s.mode is Mode.INGEST:
                 for name in match.distrusted:
                     self._uncertain(
@@ -677,7 +775,7 @@ class _Planner:
                         suggestion=self._current(name),
                     )
         else:
-            self._candidates.setdefault(DRAWER, []).append(_Candidate(report, str(drawer), match))
+            self._candidates.setdefault(SPACE, []).append(_Candidate(report, str(space), match))
 
     def _review(self, report: RuleReport, reason: str) -> None:
         s = self._s
@@ -701,7 +799,8 @@ class _Planner:
         values = list(dict.fromkeys(_key(candidate.value) for candidate in candidates))
         if len(values) > 1:
             listed = ", ".join(
-                f"'{candidate.report.name}': {candidate.value}" for candidate in candidates
+                f"'{candidate.report.name}': {self._shown(field_name, candidate.value)}"
+                for candidate in candidates
             )
             disagree = f"rules set different values ({listed})"
             for candidate in candidates:
@@ -716,11 +815,14 @@ class _Planner:
         kind = "conflict"
         if s.mode is Mode.RETROACTIVE:
             if not self._empty(field_name, current) and not s.accept_conflicts:
-                reason = f"the document has another value ({current}); not accepted"
+                reason = (
+                    f"the document has another value ({self._shown(field_name, current)}); "
+                    "not accepted"
+                )
         elif field_name in s.locked:
             kind, reason = "overruled", "a person decided this field"
         elif field_name in s.model_values and _key(s.model_values[field_name]) == _key(current):
-            reason = f"the model set another value ({current})"
+            reason = f"the model set another value ({self._shown(field_name, current)})"
             if s.mode is Mode.INGEST:
                 self._uncertain(field_name, f"rules: {reason}", suggestion=value)
         if reason is not None:
@@ -738,12 +840,60 @@ class _Planner:
                 ),
             )
 
+    def _person_topic(self) -> None:
+        """A contact a rule sets that does not enable the topic a person chose is overruled:
+        the person's topic stays, and so does the contact that enables it."""
+        topic = self._document.topic_id
+        if TOPIC not in self._s.locked or topic is None or CONTACT not in self._candidates:
+            return
+        kept = []
+        for candidate in self._candidates[CONTACT]:
+            if topic in self._s.taxonomy.topics_of(UUID(str(candidate.value))):
+                kept.append(candidate)
+            else:
+                reason = f"a person chose the topic {self._tag(topic)}, which it does not enable"
+                candidate.report.notes.append(Note(CONTACT, "overruled", reason))
+        if kept:
+            self._candidates[CONTACT] = kept
+        else:
+            del self._candidates[CONTACT]
+
+    def _topic(self, result: dict[str, JsonValue]) -> None:
+        """The topic the rules set, if the contact they leave enables it; a contact set that
+        does not enable the document's topic clears it (an effect of the rules that set the
+        contact)."""
+        contact = result.get(CONTACT, self._current(CONTACT))
+        contact_id = None if contact is None else UUID(str(contact))
+        enabled = self._s.taxonomy.topics_of(contact_id)
+        candidates = self._candidates.get(TOPIC, [])
+        for candidate in candidates:
+            if TagId(UUID(str(candidate.value))) not in enabled:
+                named = self._shown(TOPIC, candidate.value)
+                reason = (
+                    "the document has no contact"
+                    if contact_id is None
+                    else f"its contact does not enable the topic {named}"
+                )
+                candidate.report.notes.append(Note(TOPIC, "skipped", reason))
+        kept = [item for item in candidates if TagId(UUID(str(item.value))) in enabled]
+        if kept:
+            self._candidates[TOPIC] = kept
+        else:
+            self._candidates.pop(TOPIC, None)
+        self._single(TOPIC, result)
+        topic = self._document.topic_id
+        if TOPIC in result or CONTACT not in result or topic is None or topic in enabled:
+            return
+        result[TOPIC] = None
+        for candidate in self._candidates.get(CONTACT, []):
+            candidate.report.applied.append(Effect(TOPIC, str(topic), None))
+
     def _tags(self) -> frozenset[TagId] | None:
         s = self._s
         current = frozenset(self._document.tag_ids)
         both = set(self._adds) & set(self._removes)
         for tag in sorted(both):
-            reason = f"tag {tag} is added and removed by rules"
+            reason = f"tag {self._tag(tag)} is added and removed by rules"
             for report in self._adds[tag] + self._removes[tag]:
                 report.notes.append(Note(TAGS, "conflict", reason))
             if s.mode is Mode.INGEST and TAGS not in s.locked:
@@ -755,24 +905,33 @@ class _Planner:
                 continue
             if tag in s.person_removed_tags:
                 for report in reports:
-                    report.notes.append(Note(TAGS, "overruled", f"a person removed tag {tag}"))
+                    reason = f"a person removed tag {self._tag(tag)}"
+                    report.notes.append(Note(TAGS, "overruled", reason))
                 continue
             added.add(tag)
-            for report in reports:
-                report.applied.append(Effect(TAGS, None, str(tag)))
         for tag, reports in self._removes.items():
             if tag in both or tag not in current:
                 continue
             if tag in s.person_added_tags:
                 for report in reports:
-                    report.notes.append(Note(TAGS, "overruled", f"a person set tag {tag}"))
+                    reason = f"a person set tag {self._tag(tag)}"
+                    report.notes.append(Note(TAGS, "overruled", reason))
                 continue
             removed.add(tag)
             for report in reports:
                 report.applied.append(Effect(TAGS, str(tag), None))
         if not added and not removed:
             return None
-        return frozenset((current | added) - removed)
+        # A tag above one the document keeps or gets says nothing more: it is not added.
+        result = s.taxonomy.tree.normalise((current | added) - removed)
+        for tag in sorted(added):
+            for report in self._adds[tag]:
+                if tag in result:
+                    report.applied.append(Effect(TAGS, None, str(tag)))
+                else:
+                    reason = f"tag {self._tag(tag)} is above a tag the document has"
+                    report.notes.append(Note(TAGS, "skipped", reason))
+        return None if result == current else result
 
     def _title(self, result: dict[str, JsonValue], values: Mapping[str, TemplateValue]) -> None:
         if not self._titles:
@@ -806,7 +965,7 @@ class _Planner:
     def _text_fields(
         self, result: Mapping[str, JsonValue], type_after: DocumentTypeId | None
     ) -> None:
-        """The templates of text fields, with the contact, type and drawer the rules set (the
+        """The templates of text fields, with the contact, type and space the rules set (the
         fields as they were: rules do not see each other's fields)."""
         if not self._texts:
             return
@@ -837,19 +996,30 @@ class _Planner:
         """What templates see: the document as the rules leave it."""
         document, s = self._document, self._s
         contact = result.get(CONTACT, self._current(CONTACT))
-        drawer = DrawerId(UUID(str(result[DRAWER]))) if DRAWER in result else document.drawer_id
+        contact_id = None if contact is None else ContactId(UUID(str(contact)))
+        topic = result.get(TOPIC, self._current(TOPIC))
+        topic_id = None if topic is None else TagId(UUID(str(topic)))
+        space = SpaceId(UUID(str(result[SPACE]))) if SPACE in result else document.space_id
         current: dict[FieldId, object] = {**document.fields, **fields}
+        tree = s.taxonomy.tree
+
+        def group_names(id: UUID | None) -> list[str]:
+            return [tree.tags[tag].name for tag in s.taxonomy.groups_of(id) if tag in tree]
+
         return template_values(
             document,
-            contact=None if contact is None else s.names.get(ContactId(UUID(str(contact)))),
+            contact=None if contact_id is None else s.names.get(contact_id),
             document_type=None if type_after is None else s.names.get(type_after),
-            drawer=s.names.get(drawer),
+            space=s.names.get(space),
             owner=s.owner_name,
             tags=[
                 s.names[tag]
                 for tag in (document.tag_ids if tags is None else tags)
                 if tag in s.names
             ],
+            contact_groups=group_names(contact_id),
+            document_type_groups=group_names(type_after),
+            topic=tree.tags[topic_id].name if topic_id is not None and topic_id in tree else None,
             document_date=document.document_date,
             fields=[
                 (definition, _field_value(current.get(definition.id)))
@@ -882,6 +1052,34 @@ class _Planner:
 
     # --- helpers ------------------------------------------------------------------------------
 
+    def _shown(self, field_name: str, value: JsonValue) -> str:
+        """`value` of `field_name` as a reason names it: a contact, type, topic or space by its
+        name, a title quoted, a field's value as written (`_value_text`); the id where no name
+        is known."""
+        s = self._s
+        if value is None:
+            return "none"
+        if field_name in (CONTACT, DOCUMENT_TYPE, SPACE, TOPIC):
+            try:
+                id = UUID(str(value))
+            except ValueError:
+                return str(value)
+            if field_name == TOPIC:
+                return self._tag(TagId(id))
+            name = s.names.get(id)
+            return str(value) if name is None else f"'{name}'"
+        if field_name == TITLE:
+            return f"'{value}'"
+        field = _field_id(field_name)
+        definition = None if field is None else s.definitions.get(field)
+        return str(value) if definition is None else _value_text(definition, value)
+
+    def _tag(self, tag: TagId) -> str:
+        """A tag (of any scope) as a reason names it: its name quoted; its id if it is gone."""
+        tree = self._s.taxonomy.tree
+        name = tree.tags[tag].name if tag in tree else self._s.names.get(tag)
+        return str(tag) if name is None else f"'{name}'"
+
     def _type_after(self, result: Mapping[str, JsonValue]) -> DocumentTypeId | None:
         if DOCUMENT_TYPE in result:
             return DocumentTypeId(UUID(str(result[DOCUMENT_TYPE])))
@@ -894,8 +1092,10 @@ class _Planner:
                 return None if document.contact_id is None else str(document.contact_id)
             case "document_type":
                 return None if document.document_type_id is None else str(document.document_type_id)
-            case "drawer":
-                return str(document.drawer_id)
+            case "topic":
+                return None if document.topic_id is None else str(document.topic_id)
+            case "space":
+                return str(document.space_id)
             case "title":
                 return document.title
             case "tags":
@@ -907,11 +1107,11 @@ class _Planner:
         return None
 
     def _empty(self, field_name: str, current: JsonValue) -> bool:
-        """For applying to existing documents: the field has no value of its own (a drawer
-        counts as empty in the owner's default drawer, a title as long as it is the file
+        """For applying to existing documents: the field has no value of its own (a space
+        counts as empty in the owner's default space, a title as long as it is the file
         name or the machine's)."""
-        if field_name == DRAWER:
-            return current == str(self._s.default_drawer)
+        if field_name == SPACE:
+            return current == str(self._s.default_space)
         if field_name == TITLE:
             return current in (_default_title(self._document), self._s.machine_title)
         return current is None
@@ -935,6 +1135,40 @@ def _key(value: JsonValue) -> str:
     return repr(value)
 
 
+def _field_id(field_name: str) -> FieldId | None:
+    """The field a check of `field:<id>` is about; None for the others."""
+    if not field_name.startswith("field:"):
+        return None
+    try:
+        return FieldId(UUID(field_name.removeprefix("field:")))
+    except ValueError:
+        return None
+
+
+def _value_text(definition: FieldDefinition, value: JsonValue) -> str:
+    """A field's value (its JSON form) as written: text and choices quoted, numbers as they
+    are, an amount with its currency, a date and a period in ISO 8601, yes or no."""
+    try:
+        parsed = field_from_json(definition, value)
+    except ValidationError:
+        return str(value)
+    match parsed:
+        case bool():
+            return "yes" if parsed else "no"
+        case str():
+            return f"'{parsed}'"
+        case Decimal():
+            return decimal_text(parsed)
+        case Money():
+            return f"{decimal_text(parsed.amount)} {parsed.currency}"
+        case Url():
+            return parsed.value
+        case Period():
+            return parsed.notation
+        case date():
+            return parsed.isoformat()
+
+
 def _field_value(value: object) -> FieldValue | None:
     match value:
         case str() | bool() | Decimal() | date() | Money() | Url() | Period():
@@ -952,6 +1186,7 @@ def changed_fields(changes: DocumentChanges) -> frozenset[str]:
         "title": TITLE,
         "contact_id": CONTACT,
         "document_type_id": DOCUMENT_TYPE,
+        "topic_id": TOPIC,
         "tag_ids": TAGS,
         "document_date": "document_date",
     }

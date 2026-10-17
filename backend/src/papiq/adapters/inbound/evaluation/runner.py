@@ -15,7 +15,7 @@ import secrets
 import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
 
@@ -33,6 +33,7 @@ from papiq.core.domain.classification import (
     DOCUMENT_TYPE,
     TAGS,
     TITLE,
+    TOPIC,
     FieldCheck,
     field_key,
 )
@@ -42,6 +43,7 @@ from papiq.core.domain.identifiers import Identifier, IdentifierKind
 from papiq.core.domain.ids import ContactId, DocumentId, DocumentTypeId, FieldId, TagId, UserId
 from papiq.core.domain.imports import ImportedMetadata
 from papiq.core.domain.json_value import JsonValue
+from papiq.core.domain.master_data import TagScope
 from papiq.core.domain.pipeline import Lane, Node, NodeRun, ProcessingStatus
 from papiq.core.domain.users import Role, User
 from papiq.core.ports import ObjectStore
@@ -89,6 +91,7 @@ class MasterData:
     document_types: dict[DocumentTypeId, str]
     tags: dict[TagId, str]
     fields: dict[FieldId, FieldDefinition]
+    topics: dict[TagId, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -114,6 +117,8 @@ class CaseResult:
     run: Run = Run.COLD
     automatic: frozenset[str] = frozenset()  # fields set without a person, by name as `checks`
     corrected: frozenset[str] = frozenset()  # fields the person changed afterwards, likewise
+    by_hand: frozenset[str] = frozenset()  # fields set by hand only: no model checks, not scored
+    topic: str | None = None
 
 
 async def evaluate(
@@ -152,15 +157,29 @@ async def _accounts(environment: Environment) -> tuple[User, User]:
 
 async def _seed(environment: Environment, spec: MasterDataSpec, admin: User) -> MasterData:
     master_data = environment.master_data
+    topics: dict[str, TagId] = {}
+    for name, parent in spec.topics:
+        topic = await master_data.create_tag(
+            admin.id,
+            name,
+            scope=TagScope.TOPIC,
+            parent_id=None if parent is None else topics[parent],
+        )
+        topics[name] = topic.id
     contacts = [
         await master_data.create_contact(
             admin.id,
             name,
             spec.contact_aliases.get(name, ()),
             [
-                Identifier.parse(IdentifierKind(kind), value)
-                for kind, value in spec.contact_identifiers.get(name, ())
+                Identifier.parse(
+                    IdentifierKind(item.kind),
+                    item.value,
+                    topic_id=None if item.topic is None else topics[item.topic],
+                )
+                for item in spec.contact_identifiers.get(name, ())
             ],
+            topic_ids=[topics[topic] for topic in spec.contact_topics.get(name, ())],
         )
         for name in spec.contacts
     ]
@@ -189,6 +208,7 @@ async def _seed(environment: Environment, spec: MasterDataSpec, admin: User) -> 
             required=item.required,
             required_document_type_ids=[type_ids[name] for name in item.required_types],
             description=item.description,
+            assignment=item.assignment,
         )
         for item in spec.fields
     ]
@@ -197,6 +217,7 @@ async def _seed(environment: Environment, spec: MasterDataSpec, admin: User) -> 
         document_types={item.id: item.name for item in types},
         tags={item.id: item.name for item in tags},
         fields={item.id: item for item in fields},
+        topics={id: name for name, id in topics.items()},
     )
 
 
@@ -208,7 +229,8 @@ async def _take_over(
     owner: User,
 ) -> None:
     """Take the corpus over with its metadata (as the migration does: it counts as confirmed),
-    index it and train the classifier on it."""
+    a topic set by a person afterwards (Paperless knows none), index it and train the
+    classifier on it."""
     assert environment.indexing is not None and environment.classifier is not None
     pipeline = environment.pipeline_for(None)
     contacts = _ids(master.contacts)
@@ -234,6 +256,11 @@ async def _take_over(
             imported=imported,
         )
         await _drain(pipeline)
+        if item.topic is not None:
+            topic = _ids(master.topics)[item.topic]
+            await environment.documents.change_metadata(
+                owner.id, received.id, DocumentChanges(topic_id=topic)
+            )
         await environment.indexing.index_document(received.id)
     await environment.classifier.train()
 
@@ -298,7 +325,11 @@ async def _corrected(
     """A person sets the expected values: confirming a yellow document in the inbox, or
     changing a green one. A red one is left alone. What they corrected is read from the log,
     as `corrected` of their entry."""
-    automatic = frozenset(name for name, check in result.checks.items() if check.ok)
+    automatic = frozenset(
+        name
+        for name, check in result.checks.items()
+        if check.ok and (name != TOPIC or check.value is not None)  # a topic may be suggested
+    )
     result = replace(result, automatic=automatic)
     if result.lane not in (Lane.GREEN, Lane.YELLOW):
         return result
@@ -312,8 +343,11 @@ async def _corrected(
         resume = Node.APPLY_RULES
         if changes.document_type_id is not UNSET:
             # As the web UI does: the fields of the corrected type are read again, so no
-            # value is given for them.
-            changes, resume = replace(changes, fields={}), Node.FIELDS
+            # value is given for them, except those set by hand (never read).
+            kept = {
+                id: value for id, value in changes.fields.items() if not master.fields[id].is_read
+            }
+            changes, resume = replace(changes, fields=kept), Node.FIELDS
         await pipeline.confirm(owner.id, id, changes, resume_at=resume)
         await _drain(pipeline)
     else:
@@ -346,6 +380,7 @@ def _expected_changes(
         else _ids(master.document_types)[expected.document_type]
     )
     tags = frozenset(_ids(master.tags)[name] for name in expected.tags)
+    topic = None if expected.topic is None else _ids(master.topics)[expected.topic]
     dated = _date(expected.document_date)
     fields: dict[FieldId, object] = {}
     for definition in master.fields.values():
@@ -358,6 +393,8 @@ def _expected_changes(
         changes = replace(changes, contact_id=contact)
     if document.document_type_id != kind or DOCUMENT_TYPE in decide:
         changes = replace(changes, document_type_id=kind)
+    if document.topic_id != topic or TOPIC in decide:
+        changes = replace(changes, topic_id=topic)
     if frozenset(document.tag_ids) != tags or TAGS in decide:
         changes = replace(changes, tag_ids=tags)
     if document.document_date != dated or DOCUMENT_DATE in decide:
@@ -381,7 +418,12 @@ def _result(
     master: MasterData,
     seconds: float,
 ) -> CaseResult:
-    checks = {_field_label(field, master): check for field, check in field_checks(log).items()}
+    by_hand = {field_key(item.id) for item in master.fields.values() if not item.is_read}
+    checks = {
+        _field_label(field, master): check
+        for field, check in field_checks(log).items()
+        if field not in by_hand
+    }
     truncated = any(
         entry.result.input.get("truncated") is True
         for entry in log
@@ -400,6 +442,7 @@ def _result(
             else master.document_types[after.document_type_id]
         ),
         tags=frozenset(master.tags[tag] for tag in after.tag_ids),
+        topic=None if after.topic_id is None else master.topics[after.topic_id],
         document_date=None if after.document_date is None else after.document_date.isoformat(),
         fields={master.fields[id].name: field_to_json(value) for id, value in after.fields.items()},
         checks=checks,
@@ -408,18 +451,22 @@ def _result(
         seconds=seconds,
         violations=_violations(before, after, field_checks(log)),
         truncated=truncated,
+        by_hand=frozenset(item.name for item in master.fields.values() if not item.is_read),
     )
 
 
 def _resolved(check: FieldCheck, master: MasterData) -> JsonValue:
-    """The checked value, or else the suggestion, with contact, type and tag ids as names."""
-    value = check.value if check.ok else check.suggestion
+    """The checked value, or else the suggestion (a topic's too: it is always OK), with
+    contact, type, topic and tag ids as names."""
+    value = check.value if check.ok and check.value is not None else check.suggestion
     names: dict[str, str]
     match check.field:
         case "contact":
             names = {str(id): name for id, name in master.contacts.items()}
         case "document_type":
             names = {str(id): name for id, name in master.document_types.items()}
+        case "topic":
+            names = {str(id): name for id, name in master.topics.items()}
         case "tags":
             names = {str(id): name for id, name in master.tags.items()}
             tags: list[JsonValue] = []
@@ -441,9 +488,9 @@ def _violations(
     before: Document, after: Document, checks: dict[str, FieldCheck]
 ) -> tuple[str, ...]:
     """Changes the checks do not back: every changed field must have an OK check with the
-    applied value; drawer and owner must stay."""
+    applied value; space and owner must stay."""
     problems = []
-    for name in ("owner_id", "drawer_id"):
+    for name in ("owner_id", "space_id"):
         if getattr(before, name) != getattr(after, name):
             problems.append(f"{name} changed")
 
@@ -461,6 +508,10 @@ def _violations(
         "document_type", None if after.document_type_id is None else str(after.document_type_id)
     ):
         problems.append("document type changed without a passed check")
+    if after.topic_id != before.topic_id and not backed(
+        "topic", None if after.topic_id is None else str(after.topic_id)
+    ):
+        problems.append("topic changed without a passed check")
     if after.tag_ids != before.tag_ids:
         check = checks.get("tags")
         if (

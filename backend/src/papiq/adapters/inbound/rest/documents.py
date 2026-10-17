@@ -53,20 +53,20 @@ from papiq.adapters.inbound.rest.schemas.inbox import (
 from papiq.adapters.inbound.rest.upload import FILE_FIELD, read_upload
 from papiq.adapters.inbound.schemas import RuleReportOut
 from papiq.core.domain.documents import UNSET, Channel, Document, DocumentChanges
-from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import ValidationError
 from papiq.core.domain.fields import field_from_json
 from papiq.core.domain.ids import (
     ContactId,
     DocumentId,
     DocumentTypeId,
-    DrawerId,
     FieldId,
+    SpaceId,
     TagId,
     UserId,
 )
 from papiq.core.domain.imports import ImportedMetadata
 from papiq.core.domain.pipeline import Lane, Node
+from papiq.core.domain.spaces import ShareLevel
 from papiq.core.ports import DocumentFilter, DocumentOrder, SortKey
 from papiq.core.services.documents import MAX_PAGE, DocumentFile, MetadataChange
 
@@ -105,7 +105,7 @@ class DocumentSort(StrEnum):
         return DocumentOrder(SortKey(self.value.lstrip("-")), ascending=not self.startswith("-"))
 
 
-DRAWER_FIELD = "drawer_id"
+SPACE_FIELD = "space_id"
 CHANNEL_FIELD = "channel"
 OWNER_FIELD = "owner"
 METADATA_FIELD = "metadata"
@@ -116,16 +116,28 @@ def document_filter(
     contact_id: UUID | None,
     document_type_id: UUID | None,
     tag_id: list[UUID] | None,
-    drawer_id: UUID | None,
+    space_id: UUID | None,
     lane: list[LaneFilter] | None,
     field_id: UUID | None = None,
+    contact_group_id: list[UUID] | None = None,
+    document_type_group_id: list[UUID] | None = None,
+    topic_id: list[UUID] | None = None,
 ) -> DocumentFilter:
-    """The query parameters of the document list as a filter (also used by the search)."""
+    """The query parameters of the document list as a filter (also used by the search). Each
+    tag or group is one set, the topics one more (a document has one topic: one of them); the
+    service adds the tags below them."""
+
+    def sets(ids: list[UUID] | None) -> tuple[frozenset[TagId], ...]:
+        return tuple(frozenset({TagId(id)}) for id in dict.fromkeys(ids or ()))
+
     return DocumentFilter(
         contact=None if contact_id is None else ContactId(contact_id),
         document_type=None if document_type_id is None else DocumentTypeId(document_type_id),
-        tags=frozenset(TagId(tag) for tag in tag_id or ()),
-        drawer=None if drawer_id is None else DrawerId(drawer_id),
+        tags=sets(tag_id),
+        contact_groups=sets(contact_group_id),
+        document_type_groups=sets(document_type_group_id),
+        topics=frozenset(TagId(id) for id in topic_id) if topic_id else None,
+        space=None if space_id is None else SpaceId(space_id),
         lanes=None if not lane else frozenset(_LANES[item] for item in lane),
         field=None if field_id is None else FieldId(field_id),
     )
@@ -145,10 +157,10 @@ _UPLOAD_BODY: dict[str, Any] = {
                             "format": "binary",
                             "description": "PDF, JPEG, PNG or TIFF; recognised by content.",
                         },
-                        DRAWER_FIELD: {
+                        SPACE_FIELD: {
                             "type": "string",
                             "format": "uuid",
-                            "description": "Target drawer; default: the owner's default drawer.",
+                            "description": "Target space; default: the owner's default space.",
                         },
                         CHANNEL_FIELD: {
                             "type": "string",
@@ -164,8 +176,8 @@ _UPLOAD_BODY: dict[str, Any] = {
                             "format": "uuid",
                             "description": (
                                 "Admins only: the active user who owns the document. Default: "
-                                "the caller. The duplicate check, the default drawer and the "
-                                "write access to `drawer_id` are the owner's."
+                                "the caller. The duplicate check, the default space and the "
+                                "write access to `space_id` are the owner's."
                             ),
                         },
                         METADATA_FIELD: {
@@ -224,11 +236,11 @@ async def upload(
     received = await read_upload(
         request,
         max_size=context.max_upload_size,
-        fields=[DRAWER_FIELD, CHANNEL_FIELD, OWNER_FIELD, METADATA_FIELD],
+        fields=[SPACE_FIELD, CHANNEL_FIELD, OWNER_FIELD, METADATA_FIELD],
         limits={METADATA_FIELD: METADATA_LIMIT},
     )
     try:
-        drawer = _drawer(received.fields.get(DRAWER_FIELD))
+        space = _space(received.fields.get(SPACE_FIELD))
         channel = _channel(received.fields.get(CHANNEL_FIELD), session=principal.session)
         owner = _owner(received.fields.get(OWNER_FIELD))
         imported = await _imported(received.fields.get(METADATA_FIELD), principal.id, context)
@@ -236,7 +248,7 @@ async def upload(
             principal.id,
             received.file,
             filename=received.filename,
-            drawer=drawer,
+            space=space,
             channel=channel,
             owner=owner,
             imported=imported,
@@ -253,10 +265,14 @@ async def upload(
     summary="List documents",
     description=(
         "The documents within the caller's reach, newest first: their own, and green "
-        "documents in drawers they own or that are shared with them. Admins may read every "
-        "document and list them all with `all_users` (others: 403). Filters combine; `tag_id` "
-        "and `lane` may repeat (all tags, any lane; `processing`: no lane yet); `field_id`: a "
-        "value for the field is set. `sort` orders by arrival (the default, newest first), "
+        "documents in spaces they own or that are shared with them. Admins may read every "
+        "document and list them all with `all_users` (others: 403). Filters combine; `tag_id`, "
+        "`contact_group_id`, `document_type_group_id`, `topic_id` and `lane` may repeat (all "
+        "tags and groups, any topic, any lane; `processing`: no lane yet). A tag matches the "
+        "documents with it or a tag below it; a group those whose contact (type) is in it or a "
+        "group below it; a topic the documents with it or one below it. "
+        "`field_id`: a value for the field is set. `sort` orders by arrival (the default, "
+        "newest first), "
         "document date or title; documents without a date come last. To search by words and "
         "meaning use `GET /documents/search`."
     ),
@@ -269,9 +285,12 @@ async def list_documents(
     contact_id: UUID | None = None,
     document_type_id: UUID | None = None,
     tag_id: Annotated[list[UUID] | None, Query(max_length=50)] = None,
-    drawer_id: UUID | None = None,
+    space_id: UUID | None = None,
     lane: Annotated[list[LaneFilter] | None, Query(max_length=4)] = None,
     field_id: UUID | None = None,
+    contact_group_id: Annotated[list[UUID] | None, Query(max_length=50)] = None,
+    document_type_group_id: Annotated[list[UUID] | None, Query(max_length=50)] = None,
+    topic_id: Annotated[list[UUID] | None, Query(max_length=50)] = None,
     sort: DocumentSort = DocumentSort.CREATED_DESC,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE)] = 50,
     cursor: Annotated[str | None, Query(max_length=64, description="`next_cursor`.")] = None,
@@ -279,7 +298,17 @@ async def list_documents(
         bool, Query(description="Every user's documents instead of the caller's reach (admins).")
     ] = False,
 ) -> DocumentPage:
-    filter = document_filter(contact_id, document_type_id, tag_id, drawer_id, lane, field_id)
+    filter = document_filter(
+        contact_id,
+        document_type_id,
+        tag_id,
+        space_id,
+        lane,
+        field_id,
+        contact_group_id,
+        document_type_group_id,
+        topic_id,
+    )
     views = await context.documents.query(
         user,
         filter,
@@ -358,7 +387,7 @@ async def preview_change(
             else [RuleReportOut.of(report) for report in change.rules.plan.reports]
         ),
         visibility=(
-            VisibilityOut.of(change.document, change.drawer, principal.user) if readable else None
+            VisibilityOut.of(change.document, change.space, principal.user) if readable else None
         ),
     )
 
@@ -366,15 +395,15 @@ async def preview_change(
 @router.post(
     "/{id}/move",
     status_code=204,
-    summary="Move a document to another drawer",
+    summary="Move a document to another space",
     description=(
-        "The owner moves into drawers they may write to; an admin moves any document into any "
-        "drawer. Shares do not allow moving."
+        "The owner moves into spaces they may write to; an admin moves any document into any "
+        "space. Shares do not allow moving."
     ),
     responses=problem_responses(401, 403, 404, 422),
 )
 async def move_document(id: UUID, body: MoveRequest, user: CurrentUser, context: Context) -> None:
-    await context.documents.move(user, DocumentId(id), DrawerId(body.drawer_id))
+    await context.documents.move(user, DocumentId(id), SpaceId(body.space_id))
 
 
 @router.delete(
@@ -672,12 +701,12 @@ async def review(id: UUID, user: CurrentUser, context: Context) -> ReviewOut:
     summary="Confirm a document from the inbox",
     description=(
         "The owner and admins, for yellow and red documents that are not being processed. "
-        "`drawer_id` must be a drawer the owner may write to; an admin chooses any drawer. "
+        "`space_id` must be a space the owner may write to; an admin chooses any space. "
         "Every open field of the nodes before `resume_at` (and of `apply_rules` when processing "
         "resumes with it) needs a decision: a value or null in `changes`, a value the document "
         "already has (it is kept), or its suggestion with `accept_suggestions`. Otherwise 422 "
-        "lists the open fields in `open_fields`. The rules' fields `drawer`, `title` and "
-        "`review` always have a value: confirming keeps it, `drawer_id` moves the document. The "
+        "lists the open fields in `open_fields`. The rules' fields `space`, `title` and "
+        "`review` always have a value: confirming keeps it, `space_id` moves the document. The "
         "results before `resume_at` count as confirmed; processing continues from there up to "
         "filing, and the rules leave what the owner decided or changed as it is. From "
         "`fields` on, the fields read again replace the ones the document has; otherwise the "
@@ -697,7 +726,7 @@ async def confirm(
         changes,
         accept_suggestions=body.accept_suggestions,
         resume_at=Node(body.resume_at.value),
-        drawer=None if body.drawer_id is None else DrawerId(body.drawer_id),
+        space=None if body.space_id is None else SpaceId(body.space_id),
     )
     return _details(document)
 
@@ -734,9 +763,10 @@ def _differences(before: Document, after: Document) -> list[str]:
         "title": (before.title, after.title),
         "contact": (before.contact_id, after.contact_id),
         "document_type": (before.document_type_id, after.document_type_id),
+        "topic": (before.topic_id, after.topic_id),
         "tags": (before.tag_ids, after.tag_ids),
         "document_date": (before.document_date, after.document_date),
-        "drawer": (before.drawer_id, after.drawer_id),
+        "space": (before.space_id, after.space_id),
     }
     for field in sorted(set(before.fields) | set(after.fields)):
         fields[f"field:{field}"] = (
@@ -777,6 +807,7 @@ async def _changes(body: DocumentPatch, user: UserId, context: Context) -> Docum
         title=body.title if body.title is not None else UNSET,
         contact_id=_given(given, "contact_id", body.contact_id, ContactId),
         document_type_id=_given(given, "document_type_id", body.document_type_id, DocumentTypeId),
+        topic_id=_given(given, "topic_id", body.topic_id, TagId),
         tag_ids=(
             frozenset(TagId(tag) for tag in body.tag_ids or ()) if "tag_ids" in given else UNSET
         ),
@@ -804,13 +835,13 @@ def _decode_cursor(cursor: str | None) -> DocumentId | None:
         raise ValidationError("cursor: invalid") from None
 
 
-def _drawer(value: str | None) -> DrawerId | None:
+def _space(value: str | None) -> SpaceId | None:
     if value is None or not value.strip():
         return None
     try:
-        return DrawerId(UUID(value.strip()))
+        return SpaceId(UUID(value.strip()))
     except ValueError:
-        raise ValidationError(f"drawer_id: not a UUID: {value!r}") from None
+        raise ValidationError(f"space_id: not a UUID: {value!r}") from None
 
 
 def _owner(value: str | None) -> UserId | None:

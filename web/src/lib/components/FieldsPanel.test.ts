@@ -1,7 +1,9 @@
-import { render, screen } from '@testing-library/svelte';
+import { render, screen, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { masterDataDialogs } from '#lib/masterdata-dialog.svelte.ts';
 import { m } from '#lib/paraglide/messages.js';
+import { phone } from '#lib/phone.svelte.ts';
 import { session } from '#lib/session.svelte.ts';
 import WithDialogs from '#lib/testing/WithDialogs.svelte';
 import FieldsPanel from './FieldsPanel.svelte';
@@ -33,6 +35,7 @@ beforeEach(() => {
 				{
 					id: 'f1',
 					name: 'Rechnungsnummer',
+					key: 'rechnungsnummer',
 					data_type: 'text',
 					document_type_ids: [INVOICE, REMINDER],
 					choices: [],
@@ -55,6 +58,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	masterDataDialogs.close();
+	phone.override(null);
 	session.clear();
 	vi.unstubAllGlobals();
 	// A dialog makes the page unclickable until it has closed; the next test must not wait.
@@ -70,8 +75,9 @@ describe('FieldsPanel', () => {
 
 	it('makes a field required for one of its types', async () => {
 		render(WithDialogs, { component: FieldsPanel });
-		await userEvent.click(await screen.findByRole('button', { name: m.master_add_field() }));
-		await userEvent.type(screen.getByLabelText(m.field_name()), 'Betrag');
+		await screen.findByText('Rechnungsnummer');
+		masterDataDialogs.open('fields');
+		await userEvent.type(await screen.findByLabelText(m.field_name()), 'Betrag');
 		await userEvent.click(screen.getByLabelText(m.field_def_scope_global()));
 		expect(screen.getByText(m.field_def_no_type())).toBeTruthy();
 		// The types come from a search, each then required or not.
@@ -92,10 +98,21 @@ describe('FieldsPanel', () => {
 			name: 'Betrag',
 			data_type: 'text',
 			description: null,
+			assignment: 'auto',
 			document_type_ids: [REMINDER],
 			required: false,
 			required_document_type_ids: [REMINDER]
 		});
+	});
+
+	it('makes a field one that is set by hand only', async () => {
+		render(WithDialogs, { component: FieldsPanel });
+		masterDataDialogs.open('fields');
+		await userEvent.type(await screen.findByLabelText(m.field_name()), 'ASN');
+		await userEvent.click(screen.getByLabelText(m.field_def_manual()));
+		await userEvent.click(screen.getByRole('button', { name: m.save() }));
+		const post = fetchMock.mock.calls.map((call) => call[0]).find((call) => call.method === 'POST');
+		expect(await post?.json()).toMatchObject({ name: 'ASN', assignment: 'manual' });
 	});
 
 	it('shows what belongs in a field and lets an admin change it', async () => {
@@ -103,8 +120,10 @@ describe('FieldsPanel', () => {
 		const hint = 'Die Nummer, unter der die Rechnung geführt wird';
 		expect(await screen.findByText(hint)).toBeTruthy();
 		await userEvent.click(
-			screen.getByRole('button', { name: m.master_rename({ name: 'Rechnungsnummer' }) })
+			screen.getByRole('button', { name: m.master_edit({ name: 'Rechnungsnummer' }) })
 		);
+		// The key templates use stands in the editor.
+		expect(within(screen.getByRole('dialog')).getByText('field.rechnungsnummer')).toBeTruthy();
 		const description = screen.getByLabelText(m.field_def_description()) as HTMLTextAreaElement;
 		expect(description.value).toBe(hint);
 		await userEvent.clear(description);
@@ -116,5 +135,49 @@ describe('FieldsPanel', () => {
 		expect(await patch?.json()).toMatchObject({
 			description: 'Rechnungsnummer, nicht die Kundennummer'
 		});
+	});
+
+	it('finds a field by its name, key or description', async () => {
+		const { rerender } = render(FieldsPanel, { query: 'kundennummer' });
+		expect(await screen.findByText(m.assignment_none_found())).toBeTruthy();
+		await rerender({ query: 'geführt' });
+		expect(screen.getByText('Rechnungsnummer')).toBeTruthy();
+		await rerender({ query: 'field.rechnungs' });
+		expect(screen.getByText('Rechnungsnummer')).toBeTruthy();
+	});
+
+	it('on a phone opens the editor with a tap on the row, which has no buttons of its own', async () => {
+		phone.override(true);
+		render(WithDialogs, { component: FieldsPanel });
+		const name = await screen.findByText('Rechnungsnummer');
+		// No pencil, no bin: the row is the button.
+		expect(
+			screen.queryByRole('button', { name: m.master_edit({ name: 'Rechnungsnummer' }) })
+		).toBeNull();
+		expect(
+			screen.queryByRole('button', { name: m.master_delete({ name: 'Rechnungsnummer' }) })
+		).toBeNull();
+		// The key stays in the editor; the row leaves it out.
+		expect(screen.queryByText('field.rechnungsnummer')).toBeNull();
+		await userEvent.click(name.closest('button')!);
+		expect(await screen.findByDisplayValue('Rechnungsnummer')).toBeTruthy();
+		expect(screen.getByRole('button', { name: m.editor_save_short() })).toBeTruthy();
+	});
+
+	it('deletes a field from its editor, after asking', async () => {
+		render(WithDialogs, { component: FieldsPanel });
+		await screen.findByText('Rechnungsnummer');
+		await userEvent.click(
+			screen.getByRole('button', { name: m.master_edit({ name: 'Rechnungsnummer' }) })
+		);
+		await userEvent.click(
+			await screen.findByRole('button', { name: m.master_delete({ name: 'Rechnungsnummer' }) })
+		);
+		const confirm = await screen.findByRole('alertdialog');
+		await userEvent.click(within(confirm).getByRole('button', { name: m.delete_title() }));
+		const deleted = fetchMock.mock.calls
+			.map((call) => call[0])
+			.find((call) => call.method === 'DELETE');
+		expect(new URL(deleted!.url).pathname).toBe('/api/v1/fields/f1');
 	});
 });

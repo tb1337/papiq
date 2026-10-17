@@ -24,7 +24,8 @@ router = APIRouter(tags=["pipeline"], dependencies=PROTECTED)
         "node after the nodes it needs. Nodes that do not need each other run side by side. "
         "The graph is fixed for a version of Papiq; `processing.nodes` of a document names the "
         "state of each node. `vision` names the vision language model documents can be read "
-        "with, if one is configured."
+        "with, if one is configured; `logo_fetch` says whether Papiq fetches the logos of "
+        "contacts from their websites."
     ),
     response_model=PipelineOut,
     responses=problem_responses(401),
@@ -34,6 +35,7 @@ async def pipeline(user: CurrentUser, context: Context) -> PipelineOut:
     return PipelineOut(
         nodes=[GraphNodeOut(node=node, requires=sorted(node.requires)) for node in NODES],
         vision=None if vision is None else VisionOut(model=vision.model, endpoint=vision.endpoint),
+        logo_fetch=context.logos.fetching,
     )
 
 

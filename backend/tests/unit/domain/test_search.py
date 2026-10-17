@@ -2,7 +2,6 @@ import itertools
 
 import pytest
 
-from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.permissions import can_read_document, in_reach
 from papiq.core.domain.pipeline import Lane
 from papiq.core.domain.search import (
@@ -11,6 +10,7 @@ from papiq.core.domain.search import (
     Visibility,
     lane_value,
 )
+from papiq.core.domain.spaces import ShareLevel
 from tests import builders
 
 LANES = [None, Lane.GREEN, Lane.YELLOW, Lane.RED]
@@ -21,7 +21,7 @@ def test_lane_values() -> None:
 
 
 @pytest.mark.parametrize(
-    ("lane", "reader_is_owner", "drawer_owner_is_reader", "share", "admin"),
+    ("lane", "reader_is_owner", "space_owner_is_reader", "share", "admin"),
     list(
         itertools.product(LANES, [False, True], [False, True], [None, *ShareLevel], [False, True])
     ),
@@ -29,35 +29,35 @@ def test_lane_values() -> None:
 def test_visibility_is_the_read_rule_of_permissions(
     lane: Lane | None,
     reader_is_owner: bool,
-    drawer_owner_is_reader: bool,
+    space_owner_is_reader: bool,
     share: ShareLevel | None,
     admin: bool,
 ) -> None:
     """`Visibility.allows` agrees with `in_reach` for every combination of lane, ownership of
-    the document and of the drawer, share and role; and with `can_read_document` for an admin
+    the document and of the space, share and role; and with `can_read_document` for an admin
     who searches everything."""
     reader = builders.admin("reader") if admin else builders.user("reader")
     other = builders.user("other")
-    drawer = builders.drawer(reader if drawer_owner_is_reader else other)
-    if share is not None and not drawer_owner_is_reader:
-        drawer.share(reader.id, share)
-    document = builders.document(reader if reader_is_owner else other, drawer)
+    space = builders.space(reader if space_owner_is_reader else other)
+    if share is not None and not space_owner_is_reader:
+        space.share(reader.id, share)
+    document = builders.document(reader if reader_is_owner else other, space)
     document.lane = lane
 
-    accessible = frozenset({drawer.id}) if drawer.owner_id == reader.id or share else frozenset()
+    accessible = frozenset({space.id}) if space.owner_id == reader.id or share else frozenset()
     index_document = builders.index_document(
-        id=document.id, owner_id=document.owner_id, drawer_id=drawer.id, lane=lane
+        id=document.id, owner_id=document.owner_id, space_id=space.id, lane=lane
     )
 
     assert Visibility(reader.id, accessible).allows(index_document) == in_reach(
-        reader, document, drawer
+        reader, document, space
     )
     if admin:
         everything = Visibility(reader.id, accessible, everything=True)
-        assert everything.allows(index_document) == can_read_document(reader, document, drawer)
+        assert everything.allows(index_document) == can_read_document(reader, document, space)
 
 
-def test_no_drawers_leave_only_own_documents() -> None:
+def test_no_spaces_leave_only_own_documents() -> None:
     me = builders.user()
     visibility = Visibility(me.id, frozenset())
     assert visibility.allows(builders.index_document(owner_id=me.id, lane=None))

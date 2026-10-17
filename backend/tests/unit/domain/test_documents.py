@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-from papiq.core.domain.documents import UNSET, Document, DocumentChanges, Sha256
+from papiq.core.domain.documents import UNSET, Document, DocumentChanges, Sha256, confirms
 from papiq.core.domain.errors import NotFoundError, ValidationError
 from papiq.core.domain.events import (
     DocumentDeleted,
@@ -33,7 +33,7 @@ def test_receive_records_received_and_step_completed() -> None:
     owner = builders.user()
     document = Document.receive(
         owner_id=owner.id,
-        drawer_id=builders.default_drawer(owner).id,
+        space_id=builders.default_space(owner).id,
         sha256=builders.sha256(),
         original_filename="2026-10 Invoice.pdf",
         media_type="application/pdf",
@@ -52,7 +52,7 @@ def test_receive_cannot_fail() -> None:
     with pytest.raises(ValidationError):
         Document.receive(
             owner_id=owner.id,
-            drawer_id=builders.default_drawer(owner).id,
+            space_id=builders.default_space(owner).id,
             sha256=builders.sha256(),
             original_filename="a.pdf",
             media_type="application/pdf",
@@ -62,7 +62,7 @@ def test_receive_cannot_fail() -> None:
 
 
 def test_metadata_change_records_changed_fields() -> None:
-    document = builders.document(builders.user(), builders.drawer(builders.user()))
+    document = builders.document(builders.user(), builders.space(builders.user()))
     contact, tag = ContactId(new_id()), TagId(new_id())
     changed = document.apply_changes(
         DocumentChanges(
@@ -86,11 +86,25 @@ def test_metadata_change_records_changed_fields() -> None:
 
 
 def test_unchanged_metadata_records_nothing() -> None:
-    document = builders.document(builders.user(), builders.drawer(builders.user()))
+    document = builders.document(builders.user(), builders.space(builders.user()))
     assert document.apply_changes(DocumentChanges(title="scan", contact_id=None), {}, LATER) == ()
     assert document.pull_events() == []
     assert document.updated_at == NOW
     assert DocumentChanges().title is UNSET
+
+
+def test_tags_set_by_hand_alone_confirm_nothing() -> None:
+    """A status tag says nothing about contact and type; any other confirming change does."""
+    paid, due, invoice = TagId(new_id()), TagId(new_id()), TagId(new_id())
+    manual = {paid, due}
+    assert not confirms(("tag_ids",), {invoice}, {invoice, paid}, manual)
+    assert not confirms(("tag_ids",), {paid}, {due}, manual)
+    assert not confirms(("tag_ids", "title"), {paid}, set(), manual)
+    assert confirms(("tag_ids",), {paid}, {paid, invoice}, manual)
+    assert confirms(("tag_ids",), {invoice}, {paid}, manual)
+    assert confirms(("tag_ids", "contact_id"), set(), {paid}, manual)
+    assert confirms(("document_date",), set(), set(), manual)
+    assert not confirms(("title",), set(), set(), manual)
 
 
 def test_field_values_are_validated_and_scoped() -> None:
@@ -100,7 +114,7 @@ def test_field_values_are_validated_and_scoped() -> None:
     )
     note = FieldDefinition.create(name="Note", data_type=FieldType.TEXT, now=NOW)
     definitions = {total.id: total, note.id: note}
-    document = builders.document(builders.user(), builders.drawer(builders.user()))
+    document = builders.document(builders.user(), builders.space(builders.user()))
 
     with pytest.raises(ValidationError, match="does not apply"):
         document.apply_changes(DocumentChanges(fields={total.id: 10}), definitions, LATER)
@@ -134,7 +148,7 @@ def test_field_values_are_validated_and_scoped() -> None:
 
 def test_failed_validation_changes_nothing() -> None:
     note = FieldDefinition.create(name="Note", data_type=FieldType.TEXT, now=NOW)
-    document = builders.document(builders.user(), builders.drawer(builders.user()))
+    document = builders.document(builders.user(), builders.space(builders.user()))
     with pytest.raises(ValidationError):
         document.apply_changes(
             DocumentChanges(title="New", fields={note.id: 5}), {note.id: note}, LATER
@@ -146,18 +160,18 @@ def test_failed_validation_changes_nothing() -> None:
 
 def test_move_records_filed() -> None:
     owner = builders.user()
-    document = builders.document(owner, builders.drawer(owner))
-    target = builders.drawer(owner)
+    document = builders.document(owner, builders.space(owner))
+    target = builders.space(owner)
     document.move_to(target.id, LATER)
     document.move_to(target.id, LATER)
     (event,) = document.pull_events()
     assert isinstance(event, DocumentFiled)
-    assert event.drawer_id == target.id
-    assert document.drawer_id == target.id
+    assert event.space_id == target.id
+    assert document.space_id == target.id
 
 
 def test_delete_records_deleted() -> None:
-    document = builders.document(builders.user(), builders.drawer(builders.user()))
+    document = builders.document(builders.user(), builders.space(builders.user()))
     document.delete(LATER)
     (event,) = document.pull_events()
     assert isinstance(event, DocumentDeleted)

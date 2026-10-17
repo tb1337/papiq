@@ -19,7 +19,7 @@ const lookup = {
 	documentTypes: [],
 	tags: [],
 	fields: [{ id: FIELD, name: 'Rechnungsbetrag' }],
-	drawers: [],
+	spaces: [],
 	users: []
 } as unknown as Lookup;
 

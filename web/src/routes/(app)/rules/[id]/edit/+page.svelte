@@ -12,7 +12,7 @@
 	import { describeError } from '#lib/errors.ts';
 	import { loadLookup, type Lookup } from '#lib/masterdata.svelte.ts';
 	import { m } from '#lib/paraglide/messages.js';
-	import { drawersFor } from '#lib/permissions.ts';
+	import { spacesFor } from '#lib/permissions.ts';
 	import { problemText } from '#lib/rules/describe.ts';
 	import { saveErrors } from '#lib/rules/errors.ts';
 	import { fromApi, toApi, validate, type RuleModel } from '#lib/rules/model.ts';
@@ -31,12 +31,12 @@
 	let busy = $state(false);
 
 	// A user rule files only where its owner may write, also when an admin changes it.
-	const drawers = $derived.by(() => {
+	const spaces = $derived.by(() => {
 		const owner =
 			rule?.owner_id === session.user?.id
 				? session.user
 				: (lookup?.users.find((user) => user.id === rule?.owner_id) ?? null);
-		return drawersFor(lookup?.drawers ?? [], owner, session.user);
+		return spacesFor(lookup?.spaces ?? [], owner, session.user);
 	});
 
 	$effect(() => {
@@ -106,7 +106,7 @@
 			{model}
 			scope={rule.scope}
 			{lookup}
-			{drawers}
+			{spaces}
 			{errors}
 			{general}
 			{busy}

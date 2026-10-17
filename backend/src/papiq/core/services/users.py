@@ -9,11 +9,11 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
-from papiq.core.domain.drawers import Drawer
 from papiq.core.domain.errors import ConflictError, NotFoundError, PermissionDeniedError
 from papiq.core.domain.identity import Credential, ExternalIdentity, check_new_password
 from papiq.core.domain.ids import UserId
 from papiq.core.domain.permissions import can_manage_users
+from papiq.core.domain.spaces import Space
 from papiq.core.domain.users import Role, User
 from papiq.core.ports import Clock, PasswordHasher, UnitOfWork, UnitOfWorkFactory
 from papiq.core.services._access import load_actor
@@ -43,7 +43,7 @@ class UserService:
     # --- reading --------------------------------------------------------------------------------
 
     async def list(self, actor: UserId) -> list[User]:
-        """Admins see all users; others see the active ones (to share drawers with them)."""
+        """Admins see all users; others see the active ones (to share spaces with them)."""
         async with self._uow() as uow:
             user = await load_actor(uow, actor)
             users = await uow.users.list_all()
@@ -75,7 +75,7 @@ class UserService:
     async def create_user(
         self, actor: UserId, username: str, role: Role, password: str | None = None
     ) -> User:
-        """Admins only. Creates the user together with their private default drawer and, if
+        """Admins only. Creates the user together with their private default space and, if
         given, a password (which must meet the policy)."""
         password_hash = await self._hash(username, password)
         now = self._clock.now()
@@ -197,9 +197,9 @@ class UserService:
         return removed
 
     async def delete_user(self, actor: UserId, id: UserId) -> None:
-        """Admins only, and only for a user who owns no documents and whose drawers are empty.
-        Removes their drawers, the shares to them, their rules and webhooks and all their sign-in
-        data. Other users' rules that file into the removed drawers are disabled."""
+        """Admins only, and only for a user who owns no documents and whose spaces are empty.
+        Removes their spaces, the shares to them, their rules and webhooks and all their sign-in
+        data. Other users' rules that file into the removed spaces are disabled."""
         async with self._uow() as uow:
             await _require_admin(uow, actor)
             user = await uow.users.get(id)
@@ -207,24 +207,24 @@ class UserService:
                 await _keep_an_admin(uow, user)
             if await uow.documents.exists(owner=id):
                 raise ConflictError("the user owns documents; delete or move them first")
-            removed: list[Drawer] = []
-            for drawer in await uow.drawers.list_accessible(id):
-                if drawer.owner_id == id:
-                    if await uow.documents.exists(drawer=drawer.id):
-                        raise ConflictError(f"the user's drawer '{drawer.name}' is not empty")
-                    await uow.drawers.remove(drawer.id)
-                    removed.append(drawer)
+            removed: list[Space] = []
+            for space in await uow.spaces.list_accessible(id):
+                if space.owner_id == id:
+                    if await uow.documents.exists(space=space.id):
+                        raise ConflictError(f"the user's space '{space.name}' is not empty")
+                    await uow.spaces.remove(space.id)
+                    removed.append(space)
                 else:
-                    drawer.unshare(id)
-                    await uow.drawers.update(drawer)
+                    space.unshare(id)
+                    await uow.spaces.update(space)
             await uow.rules.remove_for_owner(id)
             await uow.webhooks.remove_for_owner(id)
-            for drawer in removed:
+            for space in removed:
                 await disable_rules(
                     uow,
                     self._clock.now(),
-                    f"drawer '{drawer.name}' was deleted",
-                    refers_to(lambda refs: refs.drawers, drawer.id),
+                    f"space '{space.name}' was deleted",
+                    refers_to(lambda refs: refs.spaces, space.id),
                 )
             await uow.sessions.remove_for_user(id)
             await uow.api_tokens.remove_for_user(id)
@@ -281,12 +281,12 @@ async def _require_admin(uow: UnitOfWork, actor: UserId) -> User:
 
 
 async def add_user(uow: UnitOfWork, username: str, role: Role, now: datetime) -> User:
-    """Add a user with their default drawer; ConflictError if the name is taken."""
+    """Add a user with their default space; ConflictError if the name is taken."""
     user = User.create(username=username, role=role, now=now)
     if await uow.users.find_by_username(user.username) is not None:
         raise ConflictError(f"username '{user.username}' is taken")
     await uow.users.add(user)
-    await uow.drawers.add(Drawer.create_default(owner_id=user.id, now=user.created_at))
+    await uow.spaces.add(Space.create_default(owner_id=user.id, now=user.created_at))
     return user
 
 

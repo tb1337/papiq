@@ -4,19 +4,30 @@ import { apiQuery, isFiltered, NO_FILTERS, parseFilters, writeFilters } from './
 describe('filters in the URL', () => {
 	it('reads and writes all of them', () => {
 		const params = new URLSearchParams(
-			'contact=c1&type=t1&tag=a&tag=b&drawer=d1&lane=red&lane=bogus&field=f1&q=x'
+			'contact=c1&type=t1&tag=a&tag=b&contact_group=g1&type_group=g2&type_group=g3&space=d1' +
+				'&lane=red&lane=bogus&field=f1&topic=p1&topic=p2&q=x'
 		);
 		const filters = parseFilters(params);
 		expect(filters).toEqual({
 			contact: 'c1',
 			type: 't1',
 			tags: ['a', 'b'],
-			drawer: 'd1',
+			contactGroups: ['g1'],
+			typeGroups: ['g2', 'g3'],
+			topics: ['p1', 'p2'],
+			space: 'd1',
 			lanes: ['red'],
 			field: 'f1'
 		});
-		const out = writeFilters(new URLSearchParams('q=x&tag=old'), filters);
+		const out = writeFilters(new URLSearchParams('q=x&tag=old&contact_group=old'), filters);
 		expect(out.getAll('tag')).toEqual(['a', 'b']);
+		expect(out.getAll('contact_group')).toEqual(['g1']);
+		expect(out.getAll('type_group')).toEqual(['g2', 'g3']);
+		expect(apiQuery(filters).contact_group_id).toEqual(['g1']);
+		expect(apiQuery(filters).document_type_group_id).toEqual(['g2', 'g3']);
+		// Several topics: one of them (a document has one).
+		expect(out.getAll('topic')).toEqual(['p1', 'p2']);
+		expect(apiQuery(filters).topic_id).toEqual(['p1', 'p2']);
 		expect(out.get('q')).toBe('x');
 		expect(out.getAll('lane')).toEqual(['red']);
 		// Whom the list covers is a setting, not part of the link.
@@ -31,7 +42,10 @@ describe('filters in the URL', () => {
 			contact_id: undefined,
 			document_type_id: undefined,
 			tag_id: undefined,
-			drawer_id: undefined,
+			contact_group_id: undefined,
+			document_type_group_id: undefined,
+			topic_id: undefined,
+			space_id: undefined,
 			lane: undefined,
 			field_id: undefined,
 			all_users: undefined
@@ -39,5 +53,7 @@ describe('filters in the URL', () => {
 		expect(isFiltered(NO_FILTERS)).toBe(false);
 		expect(isFiltered({ ...NO_FILTERS, tags: ['a'] })).toBe(true);
 		expect(isFiltered({ ...NO_FILTERS, field: 'f1' })).toBe(true);
+		expect(isFiltered({ ...NO_FILTERS, typeGroups: ['g1'] })).toBe(true);
+		expect(isFiltered({ ...NO_FILTERS, topics: ['p1'] })).toBe(true);
 	});
 });

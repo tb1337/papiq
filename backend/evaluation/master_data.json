@@ -31,7 +31,8 @@
     "Mahnung",
     "Kassenbon",
     "Mitteilung",
-    "Zeitnachweis"
+    "Zeitnachweis",
+    "Quittung"
   ],
   "tags": [
     "Strom",
@@ -50,11 +51,48 @@
     "Krankenversicherung",
     "Wichtig"
   ],
+  "topics": [
+    "Arbeit",
+    "Versicherung",
+    {
+      "name": "Hausratversicherung",
+      "parent": "Versicherung"
+    },
+    {
+      "name": "Haftpflichtversicherung",
+      "parent": "Versicherung"
+    },
+    {
+      "name": "Krankenversicherung",
+      "parent": "Versicherung"
+    }
+  ],
+  "contact_topics": {
+    "Hanse Versicherung AG": [
+      "Arbeit",
+      "Hausratversicherung",
+      "Haftpflichtversicherung",
+      "Krankenversicherung"
+    ],
+    "Gesundkasse BKK": [
+      "Krankenversicherung"
+    ]
+  },
   "contact_identifiers": {
     "Hanse Versicherung AG": [
       {
         "kind": "customer_number",
         "value": "88-123-45"
+      },
+      {
+        "kind": "personnel_number",
+        "value": "52318",
+        "topic": "Arbeit"
+      },
+      {
+        "kind": "customer_number",
+        "value": "KV-2026-77310",
+        "topic": "Krankenversicherung"
       }
     ]
   },
@@ -198,6 +236,18 @@
         "Zeitnachweis"
       ],
       "description": "Der Monat oder Zeitraum, für den das Dokument gilt (Abrechnungsmonat, erfasste Woche), nicht das Erstell- oder Druckdatum"
+    },
+    {
+      "name": "Ablagenummer",
+      "data_type": "number",
+      "document_types": [
+        "Quittung"
+      ],
+      "required": [
+        "Quittung"
+      ],
+      "assignment": "manual",
+      "description": "Die Nummer, die auf die Papierablage gestempelt ist"
     }
   ]
 }

@@ -152,7 +152,7 @@ async def test_changes_with_a_session_need_the_csrf_token(api: Api) -> None:
     user = await api.user("alice")
     async with api.sign_in(user) as session:
         client = session.client
-        url = f"{PREFIX}/drawers"
+        url = f"{PREFIX}/spaces"
         assert (await client.get(url)).status_code == 200  # reading needs none
         missing = await client.post(url, json={"name": "A"})
         assert missing.status_code == 403
@@ -269,8 +269,8 @@ async def test_tokens_over_http(api: Api) -> None:
         me = (await api.client.get(f"{PREFIX}/auth/me", headers=read)).json()
         assert me["authenticated_with"] == "token" and me["token_scope"] == "read"
         assert me["csrf_token"] is None
-        assert (await api.client.get(f"{PREFIX}/drawers", headers=read)).status_code == 200
-        denied = await api.client.post(f"{PREFIX}/drawers", json={"name": "A"}, headers=read)
+        assert (await api.client.get(f"{PREFIX}/spaces", headers=read)).status_code == 200
+        denied = await api.client.post(f"{PREFIX}/spaces", json={"name": "A"}, headers=read)
         assert denied.status_code == 403
 
         id = created.json()["id"]
@@ -417,7 +417,7 @@ async def test_auth_answers_are_not_stored(api: Api) -> None:
         await api.client.get(f"{PREFIX}/auth/tokens", headers=auth(user)),  # 403
     ]
     answers += [
-        await api.client.get(f"{PREFIX}/drawers", headers=auth(user)),
+        await api.client.get(f"{PREFIX}/spaces", headers=auth(user)),
         await api.client.get(f"{PREFIX}/documents/search", params={"q": "x"}, headers=auth(user)),
         await api.client.get(f"{PREFIX}/users/{UUID(int=7)}", headers=auth(user)),  # 404
     ]

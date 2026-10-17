@@ -28,7 +28,7 @@ function document(outcome: 'ok' | 'failed' = 'ok'): Document {
 		title: 'Scan',
 		original_filename: 'scan.pdf',
 		owner_id: OWNER,
-		drawer_id: 'drawer-1',
+		space_id: 'space-1',
 		access: 'read_write',
 		lane: outcome === 'failed' ? 'red' : 'yellow',
 		page_count: 1,

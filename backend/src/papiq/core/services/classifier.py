@@ -1,5 +1,5 @@
 """The classifier (see `ports.classifier`): trained from the documents a person confirmed, and
-asked for a new document's contact, type and tags (the signal `signal_classifier`).
+asked for a new document's contact, type, topic and tags (the signal `signal_classifier`).
 
 A recurring check queues a training once enough documents were confirmed since the last one
 (or, without a model, once there are enough at all); an admin can ask for one. Training also
@@ -29,7 +29,7 @@ from papiq.core.domain.identifiers import (
     identifiers_in,
     mine_identifiers,
 )
-from papiq.core.domain.ids import ClassifierModelId, ContactId, UserId
+from papiq.core.domain.ids import ClassifierModelId, ContactId, TagId, UserId
 from papiq.core.domain.jobs import Job
 from papiq.core.domain.json_value import JsonObject
 from papiq.core.ports import (
@@ -99,7 +99,12 @@ class ClassifierService:
         clock: Clock,
         classifier: Classifier,
         policy: ClassifierPolicy | None = None,
+        *,
+        fetch_logos: bool = False,
     ) -> None:
+        """`fetch_logos`: a contact without a logo, or with a fetched one, that learns a new
+        domain gets its logo fetched (`logos.queue_logo_fetch`)."""
+        self._fetch_logos = fetch_logos
         self._uow = uow
         self._store = store
         self._clock = clock
@@ -193,7 +198,10 @@ class ClassifierService:
             (item.document.confirmed_at for item in examples if item.document.confirmed_at),
             default=None,
         )
-        found = [(item.document.contact_id, identifiers_in(item.example.text)) for item in examples]
+        found = [
+            (item.document.contact_id, item.document.topic_id, identifiers_in(item.example.text))
+            for item in examples
+        ]
         for attempt in range(1, _COMMIT_ATTEMPTS + 1):
             try:
                 model, learned, old = await self._store_model(
@@ -219,7 +227,7 @@ class ClassifierService:
     async def _store_model(
         self,
         trained: TrainedModel,
-        found: list[tuple[ContactId | None, set[tuple[IdentifierKind, str]]]],
+        found: list[tuple[ContactId | None, TagId | None, set[tuple[IdentifierKind, str]]]],
         accuracy: JsonObject | None,
         examples: int,
         until: datetime | None,
@@ -239,7 +247,11 @@ class ClassifierService:
                 for item in contact.identifiers
                 if item.source is not IdentifierSource.LEARNED
             ]
-            learned = await replace_learned_identifiers(uow, mine_identifiers(found, taken))
+            learned = await replace_learned_identifiers(
+                uow,
+                mine_identifiers(found, taken),
+                fetch_logos_at=self._clock.now() if self._fetch_logos else None,
+            )
             summary: JsonObject = {
                 **trained.summary,
                 "method": self._classifier.name,
@@ -269,6 +281,12 @@ class ClassifierService:
         """The confirmed documents with their texts (one without a text yet is left out)."""
         documents: list[Document] = []
         after: DocumentPosition | None = None
+        async with self._uow() as uow:
+            # Only the tags and topics the classification sets are learned, not those set by
+            # hand.
+            tags = await uow.tags.list_all()
+            targets = {tag.id for tag in tags if tag.is_target}
+            topics = {tag.id for tag in tags if tag.is_topic_target}
         while True:
             async with self._uow() as uow:
                 page = await uow.documents.query(
@@ -289,7 +307,8 @@ class ClassifierService:
                 text=text,
                 contact=document.contact_id,
                 document_type=document.document_type_id,
-                tags=frozenset(document.tag_ids),
+                tags=frozenset(document.tag_ids & targets),
+                topic=document.topic_id if document.topic_id in topics else None,
             )
             examples.append(_Example(document, example))
         return examples

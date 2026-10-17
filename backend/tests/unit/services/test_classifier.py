@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Mapping
 from datetime import timedelta
+from typing import Any
 
 import pytest
 
@@ -13,7 +14,7 @@ from papiq.core.domain.errors import ConflictError, NotFoundError, PermissionDen
 from papiq.core.domain.events import ClassifierTrained
 from papiq.core.domain.identifiers import Identifier, IdentifierKind, IdentifierSource
 from papiq.core.domain.ids import ContactId
-from papiq.core.domain.master_data import Contact
+from papiq.core.domain.master_data import Assignment, Contact, Tag, TagScope
 from papiq.core.domain.users import Role, User
 from papiq.core.ports import UnitOfWork
 from papiq.core.services.classifier import (
@@ -43,8 +44,8 @@ def service(world: World, **policy: object) -> ClassifierService:
 
 
 async def confirmed(world: World, owner: User, contact: Contact, text: str) -> Document:
-    drawer = await world.default_drawer(owner)
-    document = builders.processed(owner, drawer, content=text)
+    space = await world.default_space(owner)
+    document = builders.processed(owner, space, content=text)
     document.apply_changes(DocumentChanges(contact_id=contact.id), {}, world.clock.now())
     document.mark_confirmed(world.clock.now())
     async with world.uow() as uow:
@@ -95,6 +96,61 @@ async def test_training_learns_from_the_confirmed_documents(world: World) -> Non
     assert predicted[1].contacts[0][0] == utility.id
 
 
+async def test_only_the_tags_the_classification_sets_are_learned(world: World) -> None:
+    owner, utility, _ = await corpus(world)
+    electricity = Tag.create(name="Strom", now=builders.NOW)
+    paid = Tag.create(name="Bezahlt", now=builders.NOW, assignment=Assignment.MANUAL)
+    async with world.uow() as uow:
+        await uow.tags.add(electricity)
+        await uow.tags.add(paid)
+        for document in await uow.documents.list_all():
+            if document.contact_id == utility.id:
+                tags = frozenset({electricity.id, paid.id})
+                document.apply_changes(DocumentChanges(tag_ids=tags), {}, world.clock.now())
+                await uow.documents.update(document)
+        await uow.commit()
+    classifier = service(world)
+    await classifier.train()
+    predicted = await classifier.predict("Stadtwerke Zählerstand Stromrechnung")
+    assert predicted is not None
+    assert set(predicted[1].tags) == {electricity.id}
+    del owner
+
+
+async def test_topics_are_learned_and_given_to_the_identifiers_of_one_topic(
+    world: World,
+) -> None:
+    """The utility's documents carry "Strom", the bank's "Girokonto" (set by hand: not
+    learned as a class). The utility's IBAN stands only in documents of "Strom": it points to
+    it."""
+    _, utility, bank = await corpus(world)
+    power = Tag.create(name="Strom", now=builders.NOW, scope=TagScope.TOPIC)
+    account = Tag.create(
+        name="Girokonto", now=builders.NOW, scope=TagScope.TOPIC, assignment=Assignment.MANUAL
+    )
+    async with world.uow() as uow:
+        await uow.tags.add(power)
+        await uow.tags.add(account)
+        for contact, topic in ((utility, power), (bank, account)):
+            stored = await uow.contacts.get(contact.id)
+            stored.set_topics([topic.id])
+            await uow.contacts.update(stored)
+        for document in await uow.documents.list_all():
+            topic = power if document.contact_id == utility.id else account
+            document.apply_changes(DocumentChanges(topic_id=topic.id), {}, world.clock.now())
+            await uow.documents.update(document)
+        await uow.commit()
+    classifier = service(world)
+    await classifier.train()
+    async with world.uow() as uow:
+        (learned,) = (await uow.contacts.get(utility.id)).identifiers
+        assert (learned.kind, learned.topic_id) == (IdentifierKind.IBAN, power.id)
+    predicted = await classifier.predict("Stadtwerke Zählerstand Stromrechnung")
+    assert predicted is not None
+    # One topic the classification sets is no target to tell apart.
+    assert predicted[1].topics == []
+
+
 async def test_two_trainings_at_once_take_two_numbers(world: World) -> None:
     """The worker's job and the command at the same time: one stores after the other."""
     await corpus(world)
@@ -111,11 +167,13 @@ async def test_a_contact_changed_meanwhile_stores_the_model_again(
     admin = await world.user(role=Role.ADMIN)
     calls = 0
 
-    async def meanwhile(uow: UnitOfWork, learned: Mapping[ContactId, list[Identifier]]) -> int:
+    async def meanwhile(
+        uow: UnitOfWork, learned: Mapping[ContactId, list[Identifier]], **options: Any
+    ) -> int:
         """The learned identifiers are staged; then the admin's change commits first."""
         nonlocal calls
         calls += 1
-        staged = await replace_learned_identifiers(uow, learned)
+        staged = await replace_learned_identifiers(uow, learned, **options)
         if calls == 1:
             await world.master_data.change_contact(admin.id, utility.id, aliases=["SWM"])
         return staged

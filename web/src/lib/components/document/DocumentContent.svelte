@@ -34,6 +34,7 @@
 		vision = false,
 		facts = null,
 		lookup = null,
+		topicId = null,
 		admin = false,
 		onshowcode = () => {},
 		onfactschanged = () => {}
@@ -45,6 +46,8 @@
 		/** What the document shows of its contact; beside the text when there. */
 		facts?: Facts | null;
 		lookup?: Lookup | null;
+		/** The document's topic: identifiers attached point to it by default. */
+		topicId?: string | null;
 		/** Admins attach identifiers to contacts. */
 		admin?: boolean;
 		/** Show a code where it stands on its page (the details). */
@@ -229,6 +232,7 @@
 					{facts}
 					{documentId}
 					{lookup}
+					{topicId}
 					{admin}
 					onmark={mark}
 					{onshowcode}

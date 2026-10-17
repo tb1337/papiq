@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from papiq.adapters.outbound.memory import FakeOcr, FakeParser, MemorySearchIndex
+from papiq.adapters.outbound.memory import FakeLogoFetcher, FakeOcr, FakeParser, MemorySearchIndex
 from papiq.composition import container
 from papiq.composition.__main__ import main
 from tests.builders import PASSWORD, SECRET_KEY, TRUSTED_PROXY
@@ -132,6 +132,25 @@ def test_read_codes_queues_the_documents_to_read_the_facts_of(
 
     events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
     assert [e["documents"] for e in events if e["event"] == "read-codes queued"] == [0]
+
+
+def test_fetch_logos_queues_the_contacts_without_a_logo(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    monkeypatch.setenv("PAPIQ_DB_SQLITE_PATH", str(tmp_path / "papiq.db"))
+    monkeypatch.setitem(container.OCR_ENGINES, "ocrmypdf", lambda _: FakeOcr())
+    monkeypatch.setitem(container.PARSERS, "layout", lambda _: FakeParser())
+    monkeypatch.setitem(container.LOGO_FETCHERS, "httpx2", lambda _: FakeLogoFetcher())
+    assert main(["migrate"]) == 0
+
+    # Off by default: Papiq asks no website.
+    assert main(["fetch-logos"]) == 1
+    assert "set PAPIQ_LOGO_FETCH=true" in capsys.readouterr().err
+
+    monkeypatch.setenv("PAPIQ_LOGO_FETCH", "true")
+    assert main(["fetch-logos"]) == 0
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert [e["contacts"] for e in events if e["event"] == "fetch-logos queued"] == [0]
 
 
 def test_reparse_queues_the_documents_to_read_again(

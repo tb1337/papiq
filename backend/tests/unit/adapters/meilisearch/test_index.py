@@ -20,7 +20,7 @@ from papiq.adapters.outbound.meilisearch.index import (
     segments,
 )
 from papiq.core.domain.errors import SearchIndexError, SearchUnavailableError
-from papiq.core.domain.ids import ContactId, DocumentId, DocumentTypeId, DrawerId, TagId, UserId
+from papiq.core.domain.ids import ContactId, DocumentId, DocumentTypeId, SpaceId, TagId, UserId
 from papiq.core.domain.pipeline import Lane
 from papiq.core.domain.search import EmbeddingStamp, Segment, Visibility
 from papiq.core.ports import DocumentFilter, SearchQuery
@@ -222,7 +222,7 @@ async def test_a_document_is_sent_whole() -> None:
         id=DocumentId(uid(10)),
         version=5,
         owner_id=UserId(uid(11)),
-        drawer_id=DrawerId(uid(12)),
+        space_id=SpaceId(uid(12)),
         lane=None,
         title="Rechnung",
         text="Text",
@@ -515,28 +515,32 @@ def _query(**fields: Any) -> SearchQuery:
     return SearchQuery(text="Zahlung", visibility=visibility, **fields)
 
 
-def test_the_filter_for_a_user_without_drawers() -> None:
+def test_the_filter_for_a_user_without_spaces() -> None:
     assert filter_expression(_query().visibility, _query().filter) == f'(owner_id = "{uid(100)}")'
 
 
-def test_the_filter_for_a_user_with_drawers_and_criteria() -> None:
-    visibility = Visibility(UserId(uid(100)), frozenset({DrawerId(uid(2)), DrawerId(uid(1))}))
+def test_the_filter_for_a_user_with_spaces_and_criteria() -> None:
+    visibility = Visibility(UserId(uid(100)), frozenset({SpaceId(uid(2)), SpaceId(uid(1))}))
     query = SearchQuery(
         text="x",
         visibility=visibility,
         filter=DocumentFilter(
             contact=ContactId(uid(3)),
             document_type=DocumentTypeId(uid(4)),
-            tags=frozenset({TagId(uid(6)), TagId(uid(5))}),
-            drawer=DrawerId(uid(1)),
+            tags=(frozenset({TagId(uid(6)), TagId(uid(5))}), frozenset({TagId(uid(7))})),
+            contact_groups=(frozenset({TagId(uid(8))}),),
+            document_type_groups=(frozenset({TagId(uid(9))}),),
+            space=SpaceId(uid(1)),
             lanes=frozenset({Lane.GREEN, None}),
         ),
     )
     assert filter_expression(query.visibility, query.filter) == (
-        f'(owner_id = "{uid(100)}" OR (lane = "green" AND drawer_id IN '
+        f'(owner_id = "{uid(100)}" OR (lane = "green" AND space_id IN '
         f'["{uid(1)}", "{uid(2)}"])) '
         f'AND contact_id = "{uid(3)}" AND document_type_id = "{uid(4)}" '
-        f'AND tag_ids = "{uid(5)}" AND tag_ids = "{uid(6)}" AND drawer_id = "{uid(1)}" '
+        f'AND tag_ids IN ["{uid(5)}", "{uid(6)}"] AND tag_ids IN ["{uid(7)}"] '
+        f'AND contact_group_ids IN ["{uid(8)}"] AND document_type_group_ids IN ["{uid(9)}"] '
+        f'AND space_id = "{uid(1)}" '
         'AND lane IN ["green", "processing"]'
     )
 

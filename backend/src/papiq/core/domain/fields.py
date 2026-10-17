@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 from papiq.core.domain.errors import ValidationError
 from papiq.core.domain.ids import DocumentTypeId, FieldId, new_id
 from papiq.core.domain.json_value import JsonValue
-from papiq.core.domain.master_data import MasterData, checked_description
+from papiq.core.domain.master_data import Assignment, MasterData, checked_description
 from papiq.core.domain.periods import Period
 from papiq.core.domain.validation import require_name
 
@@ -79,6 +79,9 @@ class FieldDefinition(MasterData):
 
     `description` tells the language model what belongs in the field (its name is often an
     internal one no document shows): it goes into the prompts.
+
+    `assignment`: a `manual` field is never asked of the language model; a person or a rule
+    sets it. Required, it keeps the document open until a person has set it (issue #52).
     """
 
     id: FieldId
@@ -88,6 +91,7 @@ class FieldDefinition(MasterData):
     required: bool = False
     required_types: frozenset[DocumentTypeId] = frozenset()
     description: str | None = None
+    assignment: Assignment = Assignment.AUTO
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -123,6 +127,7 @@ class FieldDefinition(MasterData):
         required: bool = False,
         required_types: Collection[DocumentTypeId] = (),
         description: str | None = None,
+        assignment: Assignment = Assignment.AUTO,
     ) -> Self:
         return cls(
             id=FieldId(new_id()),
@@ -133,6 +138,7 @@ class FieldDefinition(MasterData):
             required=required,
             required_types=frozenset(required_types),
             description=description,
+            assignment=assignment,
             created_at=now,
         )
 
@@ -189,6 +195,11 @@ class FieldDefinition(MasterData):
     @property
     def is_global(self) -> bool:
         return self.document_type_ids is None
+
+    @property
+    def is_read(self) -> bool:
+        """Whether the language model reads it (not a field set by hand)."""
+        return self.assignment is Assignment.AUTO
 
     @property
     def key(self) -> str:

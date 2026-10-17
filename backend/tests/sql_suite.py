@@ -13,7 +13,6 @@ from typing import Any
 
 import pytest
 import sqlalchemy as sa
-from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from sqlalchemy import Connection, insert, inspect, select
@@ -21,7 +20,7 @@ from sqlalchemy import Connection, insert, inspect, select
 from papiq.adapters.outbound.memory import ManualClock, MemoryObjectStore
 from papiq.adapters.outbound.sql import Database, SqlUnitOfWorkFactory, migrate, schema_state
 from papiq.adapters.outbound.sql import tables as t
-from papiq.adapters.outbound.sql.migrations import alembic_config
+from papiq.adapters.outbound.sql.migrations import downgrade
 from papiq.adapters.outbound.sql.types import UtcDateTime, json_type
 from papiq.core.domain.documents import Document, DocumentChanges
 from papiq.core.domain.errors import ConflictError, DuplicateDocumentError
@@ -29,14 +28,18 @@ from papiq.core.domain.events import DomainEvent
 from papiq.core.domain.fields import FieldDefinition, FieldType, Money
 from papiq.core.domain.ids import new_id
 from papiq.core.domain.jobs import Job
-from papiq.core.domain.pipeline import NODES, Node
+from papiq.core.domain.master_data import TagScope
+from papiq.core.domain.pipeline import NODES, Lane, Node
 from papiq.core.domain.users import User
 from papiq.core.ports import DeliveryRetry, EventBus, UnitOfWorkFactory
+from papiq.core.services import master_data
+from papiq.core.services.documents import DocumentService
+from papiq.core.services.master_data import MasterDataService
 from papiq.core.services.pipeline import PipelineService, PlaceholderNode
 from tests import builders
 from tests.builders import NOW, incoming
 from tests.contracts.event_bus import EventBusFactory, Recorder, publish, received
-from tests.contracts.unit_of_work import owner_with_drawer
+from tests.contracts.unit_of_work import owner_with_space
 
 LEASE = timedelta(minutes=5)
 
@@ -47,12 +50,12 @@ class SqlAdapterSuite:
     async def test_decimals_keep_their_exact_value_and_scale(
         self, uow_factory: UnitOfWorkFactory
     ) -> None:
-        owner, drawer = await owner_with_drawer(uow_factory)
+        owner, space = await owner_with_space(uow_factory)
         number = FieldDefinition.create(name="n", data_type=FieldType.NUMBER, now=NOW)
         amount = FieldDefinition.create(name="a", data_type=FieldType.AMOUNT, now=NOW)
         precise = Decimal("12345678901234567890.123456789012345678")
         money = Money(Decimal("0.10"), "EUR")
-        document = builders.document(owner, drawer)
+        document = builders.document(owner, space)
         document.apply_changes(
             DocumentChanges(fields={number.id: precise, amount.id: money}),
             {number.id: number, amount.id: amount},
@@ -136,11 +139,11 @@ class SqlAdapterSuite:
     ) -> None:
         """Both units find no duplicate, then both add the same original: the unique index
         rejects one of them."""
-        owner, drawer = await owner_with_drawer(uow_factory)
+        owner, space = await owner_with_space(uow_factory)
         both_checked = asyncio.Barrier(2)
 
         async def add() -> Document:
-            document = builders.document(owner, drawer, content="same")
+            document = builders.document(owner, space, content="same")
             async with uow_factory() as uow:
                 assert await uow.documents.find_by_sha256(owner.id, document.sha256) is None
                 async with asyncio.timeout(10):
@@ -156,7 +159,7 @@ class SqlAdapterSuite:
     async def test_concurrent_uploads_of_the_same_file_create_one_document(
         self, uow_factory: UnitOfWorkFactory
     ) -> None:
-        owner, _ = await owner_with_drawer(uow_factory)
+        owner, _ = await owner_with_space(uow_factory)
         pipeline = PipelineService(
             uow_factory,
             ManualClock(NOW),
@@ -173,6 +176,141 @@ class SqlAdapterSuite:
         assert all(isinstance(r, Document | DuplicateDocumentError) for r in results), results
         async with uow_factory() as uow:
             assert len(await uow.documents.list_visible_to(owner.id)) == 1
+
+    async def test_concurrent_tag_moves_make_no_cycle(self, uow_factory: UnitOfWorkFactory) -> None:
+        """Moving A under B and B under A at once: one move waits for the other and sees it."""
+        admin = builders.admin()
+        await _seed_user(uow_factory, admin)
+        service = MasterDataService(uow_factory, ManualClock(NOW), builders.TEMPLATES)
+        a = await service.create_tag(admin.id, "A")
+        b = await service.create_tag(admin.id, "B")
+        results = await asyncio.gather(
+            service.change_tag(admin.id, a.id, parent_id=b.id),
+            service.change_tag(admin.id, b.id, parent_id=a.id),
+            return_exceptions=True,
+        )
+        assert sorted(type(result).__name__ for result in results) == ["Tag", "ValidationError"]
+        async with uow_factory() as uow:
+            tags = {tag.id: tag for tag in await uow.tags.list_all()}
+        assert None in {tags[a.id].parent_id, tags[b.id].parent_id}
+
+    async def test_a_moved_tag_leaves_documents_and_groups_the_tag_below(
+        self, uow_factory: UnitOfWorkFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The job after a move, a page of documents at a time: what carries a tag and one now
+        above it keeps the one below; the lane, the confirmation and other documents stay."""
+        monkeypatch.setattr(master_data, "_NORMALISE_BATCH", 2)
+        owner, space = await owner_with_space(uow_factory)
+        admin = builders.admin()
+        await _seed_user(uow_factory, admin)
+        service = MasterDataService(uow_factory, ManualClock(NOW), builders.TEMPLATES)
+        insurance = await service.create_tag(admin.id, "Insurance")
+        health = await service.create_tag(admin.id, "Health")
+        dental = await service.create_tag(admin.id, "Dental", parent_id=health.id)
+        insurer = await service.create_tag(admin.id, "Insurer", scope=TagScope.CONTACT)
+        kassen = await service.create_tag(admin.id, "Kassen", scope=TagScope.CONTACT)
+        bills = await service.create_tag(admin.id, "Bills", scope=TagScope.DOCUMENT_TYPE)
+        medical = await service.create_tag(admin.id, "Medical", scope=TagScope.DOCUMENT_TYPE)
+        nord = await service.create_contact(admin.id, "Nord", group_ids=[insurer.id, kassen.id])
+        invoice = await service.create_document_type(
+            admin.id, "Invoice", group_ids=[bills.id, medical.id]
+        )
+        carried = [
+            {insurance.id, health.id},
+            {insurance.id, dental.id},
+            {insurance.id},
+            {health.id},
+            {insurance.id, health.id},
+        ]
+        documents = []
+        async with uow_factory() as uow:
+            for number, tags in enumerate(carried):
+                document = builders.run_pipeline(
+                    builders.document(owner, space, content=str(number))
+                )
+                document.tag_ids = set(tags)
+                if number == 0:
+                    document.mark_confirmed(NOW)
+                await uow.documents.add(document)
+                documents.append(document)
+            await uow.commit()
+        await service.change_tag(admin.id, health.id, parent_id=insurance.id)
+        await service.change_tag(admin.id, kassen.id, parent_id=insurer.id)
+        await service.change_tag(admin.id, medical.id, parent_id=bills.id)
+        # Health: four documents carry it or Dental, two per step, and a last step finds none.
+        assert [await service.run_next_job() for _ in range(6)] == [True] * 5 + [False]
+        async with uow_factory() as uow:
+            stored = [await uow.documents.get(document.id) for document in documents]
+            assert (await uow.contacts.get(nord.id)).group_ids == {kassen.id}
+            assert (await uow.document_types.get(invoice.id)).group_ids == {medical.id}
+        assert [document.tag_ids for document in stored] == [
+            {health.id},
+            {dental.id},
+            {insurance.id},
+            {health.id},
+            {health.id},
+        ]
+        assert [document.version for document in stored] == [2, 2, 1, 1, 2]
+        assert {document.lane for document in stored} == {Lane.GREEN}
+        assert [document.confirmed_at for document in stored[:2]] == [NOW, None]
+
+    async def test_groups_and_topics_count_their_contacts_and_types(
+        self, uow_factory: UnitOfWorkFactory
+    ) -> None:
+        """Each contact (type) once at its group or topic and at those above it, from the
+        stored groups and topics of contacts and types."""
+        admin = builders.admin()
+        await _seed_user(uow_factory, admin)
+        service = MasterDataService(uow_factory, ManualClock(NOW), builders.TEMPLATES)
+        insurer = await service.create_tag(admin.id, "Insurer", scope=TagScope.CONTACT)
+        health = await service.create_tag(
+            admin.id, "Health insurer", scope=TagScope.CONTACT, parent_id=insurer.id
+        )
+        work = await service.create_tag(admin.id, "Work", scope=TagScope.TOPIC)
+        bills = await service.create_tag(admin.id, "Bills", scope=TagScope.DOCUMENT_TYPE)
+        medical = await service.create_tag(
+            admin.id, "Medical", scope=TagScope.DOCUMENT_TYPE, parent_id=bills.id
+        )
+        await service.create_contact(
+            admin.id, "Nord", group_ids=[insurer.id, health.id], topic_ids=[work.id]
+        )
+        await service.create_contact(admin.id, "Süd", group_ids=[health.id], topic_ids=[work.id])
+        await service.create_document_type(admin.id, "Invoice", group_ids=[medical.id])
+        members = await service.tag_members(admin.id)
+        assert members.contacts == {insurer.id: 2, health.id: 2, work.id: 2}
+        assert members.document_types == {bills.id: 1, medical.id: 1}
+
+    async def test_a_topic_is_not_given_while_its_contact_gives_it_up(
+        self, uow_factory: UnitOfWorkFactory
+    ) -> None:
+        """Taking a topic away from a contact and giving it to one of its documents at once:
+        one waits for the other and sees it, so no document keeps a topic its contact does
+        not enable."""
+        owner, space = await owner_with_space(uow_factory)
+        admin = builders.admin()
+        await _seed_user(uow_factory, admin)
+        master = MasterDataService(uow_factory, ManualClock(NOW), builders.TEMPLATES)
+        documents = DocumentService(uow_factory, ManualClock(NOW), MemoryObjectStore())
+        work = await master.create_tag(admin.id, "Work", scope=TagScope.TOPIC)
+        nord = await master.create_contact(admin.id, "Nord", topic_ids=[work.id])
+        document = builders.document(owner, space)
+        async with uow_factory() as uow:
+            await uow.documents.add(document)
+            await uow.commit()
+        await documents.update_metadata(owner.id, document.id, DocumentChanges(contact_id=nord.id))
+        results = await asyncio.gather(
+            master.change_contact(admin.id, nord.id, topic_ids=[]),
+            documents.update_metadata(owner.id, document.id, DocumentChanges(topic_id=work.id)),
+            return_exceptions=True,
+        )
+        assert sorted(type(result).__name__ for result in results) in (
+            ["Contact", "ValidationError"],
+            ["ConflictError", "Document"],
+        ), results
+        async with uow_factory() as uow:
+            stored = await uow.documents.get(document.id)
+            contact = await uow.contacts.get(nord.id)
+        assert stored.topic_id is None or stored.topic_id in contact.topic_ids
 
     async def test_a_failed_write_leaves_only_rollback(
         self, uow_factory: UnitOfWorkFactory
@@ -312,23 +450,23 @@ class MigrationSuite:
         """Revision 0007 moves definitions, their types and values and renames stored names by
         their place; text a person wrote stays. The downgrade restores them."""
         await migrate(empty_database, "0006")
-        ids = {name: new_id() for name in ("user", "drawer", "document", "field", "type", "rule")}
+        ids = {name: new_id() for name in ("user", "space", "document", "field", "type", "rule")}
         field, document = str(ids["field"]), str(ids["document"])
         check = {"field": f"attribute:{field}", "outcome": "ok", "reason": "attribute"}
         condition = {"field": "attribute", "op": "is", "value": "x", "attribute_id": field}
         text = {"field": "text", "op": "contains", "value": "attribute"}
         rows: list[tuple[sa.TableClause | sa.Table, dict[str, Any]]] = [
             (t.users, {"id": ids["user"], "username": "a", "username_key": "a", "role": "admin"}),
-            (t.drawers, {"id": ids["drawer"], "owner_id": ids["user"], "name_key": "d"}),
+            (_OLD["drawers"], {"id": ids["space"], "owner_id": ids["user"], "name_key": "d"}),
             (t.document_types, {"id": ids["type"], "name": "Invoice", "name_key": "invoice"}),
             (_OLD["definitions"], {"id": ids["field"], "name": "Due", "name_key": "due"}),
             (_OLD["types"], {"attribute_id": ids["field"], "document_type_id": ids["type"]}),
             (
-                _before_0009(t.documents),
+                _drawer(_before_0009(t.documents)),
                 {
                     "id": ids["document"],
                     "owner_id": ids["user"],
-                    "drawer_id": ids["drawer"],
+                    "drawer_id": ids["space"],
                     "processing_step": "apply_rules",
                     "processing_outcomes": {**_OK_UP_TO_CLASSIFY, "extract_attributes": "ok"},
                 },
@@ -410,7 +548,7 @@ class MigrationSuite:
         )
         assert after["event"] == {"document_id": document, "fields": ["title", "fields"]}
 
-        await _downgrade(empty_database, "0006")
+        await downgrade(empty_database, "0006")
         restored = await _stored(empty_database, old=True)
         # The answer's key stays `fields`: checks were stored under `fields` before as well.
         before["log"][1]["answer"] = {"fields": {"a1": "attributes"}}
@@ -420,17 +558,17 @@ class MigrationSuite:
         """Revision 0009 renames the columns, the job kind, the payload keys and the event type
         `document.step_completed` wherever it is stored; the downgrade restores them."""
         await migrate(empty_database, "0008")
-        ids = {name: new_id() for name in ("user", "drawer", "document", "webhook")}
+        ids = {name: new_id() for name in ("user", "space", "document", "webhook")}
         document = str(ids["document"])
         rows: list[tuple[sa.TableClause | sa.Table, dict[str, Any]]] = [
             (t.users, {"id": ids["user"], "username": "a", "username_key": "a", "role": "admin"}),
-            (t.drawers, {"id": ids["drawer"], "owner_id": ids["user"], "name_key": "d"}),
+            (_OLD["drawers"], {"id": ids["space"], "owner_id": ids["user"], "name_key": "d"}),
             (
-                _before_0009(t.documents),
+                _drawer(_before_0009(t.documents)),
                 {
                     "id": ids["document"],
                     "owner_id": ids["user"],
-                    "drawer_id": ids["drawer"],
+                    "drawer_id": ids["space"],
                     "processing_step": "ocr",
                     "processing_outcomes": {"receive": "ok"},
                 },
@@ -500,7 +638,7 @@ class MigrationSuite:
             "delivery": "document.node_completed",
         }
 
-        await _downgrade(empty_database, "0008")
+        await downgrade(empty_database, "0008")
         assert await _node_names(empty_database, old=True) == before
         assert before["job"][0] == "pipeline.step"
 
@@ -511,7 +649,7 @@ class MigrationSuite:
         with the times of the latest log entry; `pages` is skipped. The downgrade derives the
         current node and the outcomes again."""
         await migrate(empty_database, "0009")
-        ids = {name: new_id() for name in ("user", "drawer", "a", "b", "c", "d")}
+        ids = {name: new_id() for name in ("user", "space", "a", "b", "c", "d")}
         second, third = NOW + timedelta(seconds=1), NOW + timedelta(seconds=3)
         rules_ok = {**_OK_UP_TO_CLASSIFY, "extract_fields": "ok", "apply_rules": "ok"}
         documents = {
@@ -522,16 +660,16 @@ class MigrationSuite:
         }
         rows: list[tuple[sa.TableClause | sa.Table, dict[str, Any]]] = [
             (t.users, {"id": ids["user"], "username": "a", "username_key": "a", "role": "admin"}),
-            (t.drawers, {"id": ids["drawer"], "owner_id": ids["user"], "name_key": "d"}),
+            (_OLD["drawers"], {"id": ids["space"], "owner_id": ids["user"], "name_key": "d"}),
         ]
         for name, (status, current, outcomes) in documents.items():
             rows.append(
                 (
-                    _before_0010(t.documents),
+                    _drawer(_before_0010(t.documents)),
                     {
                         "id": ids[name],
                         "owner_id": ids["user"],
-                        "drawer_id": ids["drawer"],
+                        "drawer_id": ids["space"],
                         "sha256": name * 64,
                         "processing_status": status,
                         "processing_node": current,
@@ -626,7 +764,7 @@ class MigrationSuite:
             )
         documents["a"] = ("processing", "classify", documents["a"][2])
 
-        await _downgrade(empty_database, "0009")
+        await downgrade(empty_database, "0009")
         restored = {
             name: (row.processing_node, row.processing_outcomes)
             for name, row in zip(
@@ -641,21 +779,26 @@ class MigrationSuite:
         """Revision 0014 takes the latest confirmation by a person (in the inbox, or a change
         beyond the title) or the source system; a later model run at `classify` undoes it."""
         await migrate(empty_database, "0013")
-        ids = {name: new_id() for name in ("user", "drawer", "inbox", "change", "title", "model")}
+        ids = {name: new_id() for name in ("user", "space", "inbox", "change", "title", "model")}
         later = NOW + timedelta(minutes=5)
         documents = sa.table(
             "documents",
-            *(sa.column(c.name, c.type) for c in t.documents.c if c.name != "confirmed_at"),
+            *(
+                sa.column(c.name, c.type)
+                for c in t.documents.c
+                if c.name not in {"confirmed_at", "space_id", "topic_id"}
+            ),
+            sa.column("drawer_id", sa.Uuid()),
         )
         rows: list[tuple[sa.TableClause | sa.Table, dict[str, Any]]] = [
             (t.users, {"id": ids["user"], "username": "a", "username_key": "a", "role": "admin"}),
-            (t.drawers, {"id": ids["drawer"], "owner_id": ids["user"], "name_key": "d"}),
+            (_OLD["drawers"], {"id": ids["space"], "owner_id": ids["user"], "name_key": "d"}),
         ]
         for number, name in enumerate(("inbox", "change", "title", "model")):
             values = {
                 "id": ids[name],
                 "owner_id": ids["user"],
-                "drawer_id": ids["drawer"],
+                "drawer_id": ids["space"],
                 "sha256": str(number) * 64,
                 "processing_nodes": {},
             }
@@ -732,14 +875,14 @@ class MigrationSuite:
             ids["title"]: None,
             ids["model"]: None,
         }
-        await _downgrade(empty_database, "0013")
+        await downgrade(empty_database, "0013")
 
     async def test_signals_come_before_the_judge_and_back(self, empty_database: Database) -> None:
         """Revision 0016 renames `classify` and `extract_fields` in the node states, the log,
         the jobs and the events; the signals are skipped where the judge ran, waiting where it
         waits, with jobs once the text is parsed. The downgrade restores the old graph."""
         await migrate(empty_database, "0015")
-        ids = {name: new_id() for name in ("user", "drawer", "done", "parsed", "early")}
+        ids = {name: new_id() for name in ("user", "space", "done", "parsed", "early")}
 
         def state(status: str, outcome: str | None = None) -> dict[str, Any]:
             return {"status": status, "outcome": outcome, "started_at": None, "finished_at": None}
@@ -758,17 +901,17 @@ class MigrationSuite:
         }
         rows: list[tuple[sa.TableClause | sa.Table, dict[str, Any]]] = [
             (t.users, {"id": ids["user"], "username": "a", "username_key": "a", "role": "admin"}),
-            (t.drawers, {"id": ids["drawer"], "owner_id": ids["user"], "name_key": "d"}),
+            (_OLD["drawers"], {"id": ids["space"], "owner_id": ids["user"], "name_key": "d"}),
         ]
         for number, (name, graph) in enumerate(graphs.items()):
             values = {
                 "id": ids[name],
                 "owner_id": ids["user"],
-                "drawer_id": ids["drawer"],
+                "drawer_id": ids["space"],
                 "sha256": str(number) * 64,
                 "processing_nodes": graph,
             }
-            rows.append((t.documents, values))
+            rows.append((_drawer(_before_0021(t.documents)), values))
         parsed = str(ids["parsed"])
         rows += [
             (
@@ -830,7 +973,7 @@ class MigrationSuite:
         assert (log, events) == (["judge"], ["fields"])
         assert jobs == sorted(f"{parsed}:1:{signal}" for signal in _SIGNALS)
 
-        await _downgrade(empty_database, "0015")
+        await downgrade(empty_database, "0015")
         nodes, log, jobs, events = await stored()
         assert set(nodes[ids["parsed"]]) == set(graphs["parsed"])
         assert nodes[ids["done"]] == graphs["done"]
@@ -891,7 +1034,7 @@ class MigrationSuite:
         assert " ".join(builders.TEMPLATES.render(title, values).split()) == "Lohn 2026-03 (scan)"
         assert builders.TEMPLATES.render(actions[2]["reason"], {}) == "check {{x}}"
 
-        await _downgrade(empty_database, "0017")
+        await downgrade(empty_database, "0017")
         assert await stored() == old_actions
 
     async def test_title_patterns_become_rules_of_their_types_and_back(
@@ -946,7 +1089,7 @@ class MigrationSuite:
             loaded = await unit.rules.get(rule["id"])
         assert loaded.managed_by == payslip and loaded.definition.actions[0].type == "set_title"
 
-        await _downgrade(empty_database, "0018")
+        await downgrade(empty_database, "0018")
         async with empty_database.reading() as connection:
             restored = (
                 await connection.execute(
@@ -973,11 +1116,11 @@ class MigrationSuite:
     async def test_titles_get_their_sort_key_and_back(self, empty_database: Database) -> None:
         """Revision 0023 fills the sort key of every title, case and accents aside."""
         await migrate(empty_database, "0022")
-        ids = {name: new_id() for name in ("user", "drawer", "letter", "invoice")}
+        ids = {name: new_id() for name in ("user", "space", "letter", "invoice")}
         documents = _before_0021(t.documents)
         rows: list[tuple[sa.TableClause | sa.Table, dict[str, Any]]] = [
             (t.users, {"id": ids["user"], "username": "a", "username_key": "a", "role": "admin"}),
-            (t.drawers, {"id": ids["drawer"], "owner_id": ids["user"], "name_key": "d"}),
+            (_OLD["drawers"], {"id": ids["space"], "owner_id": ids["user"], "name_key": "d"}),
         ]
         for number, (name, title) in enumerate(
             (("letter", "Ärztebrief Straße 5"), ("invoice", " INVOICE "))
@@ -985,13 +1128,13 @@ class MigrationSuite:
             values = {
                 "id": ids[name],
                 "owner_id": ids["user"],
-                "drawer_id": ids["drawer"],
+                "drawer_id": ids["space"],
                 "sha256": str(number) * 64,
                 "title": title,
                 "processing_nodes": {},
                 "processing_vision": False,
             }
-            rows.append((documents, values))
+            rows.append((_drawer(documents), values))
         async with empty_database.writing() as connection:
             for table, values in rows:
                 defaults = {k: v for k, v in _DEFAULTS.items() if k in table.c}
@@ -1004,9 +1147,519 @@ class MigrationSuite:
                 (await connection.execute(select(t.documents.c.id, t.documents.c.title_key))).all()
             )
         assert keys == {ids["letter"]: "arztebrief strasse 5", ids["invoice"]: "invoice"}
-        await _downgrade(empty_database, "0022")
+        await downgrade(empty_database, "0022")
         async with empty_database.reading() as connection:
             assert len((await connection.execute(select(documents.c.id))).all()) == 2
+
+    async def test_drawers_become_spaces_and_back(self, empty_database: Database) -> None:
+        """Revision 0024 renames the tables and the names Papiq stores; the rows that refer to
+        a document stay, and so does text a person wrote. The downgrade restores all of it."""
+        await migrate(empty_database, "0023")
+        async with empty_database.reading() as connection:
+            schema = await connection.run_sync(_schema)
+        ids = {
+            name: new_id()
+            for name in ("user", "other", "default", "shared", "document", "type", "rule")
+        }
+        ids |= {name: new_id() for name in ("text", "number", "tag")}
+        user, shared, document = str(ids["user"]), str(ids["shared"]), str(ids["document"])
+        template = (
+            "{{ drawer }}: drawer {% if drawer %}{{ drawer | upcase }}{% endif %}"
+            " {% raw %}{{ drawer }}{% endraw %} {{ 'drawer' }} {{ field.drawer }}"
+        )
+        renamed = (
+            "{{ space }}: drawer {% if space %}{{ space | upcase }}{% endif %}"
+            " {% raw %}{{ drawer }}{% endraw %} {{ 'drawer' }} {{ field.drawer }}"
+        )
+        actions = [
+            {"type": "set_drawer", "drawer_id": shared},
+            {"type": "set_title", "template": template},
+            {"type": "set_field", "field_id": str(ids["text"]), "value": "{{ drawer }}"},
+            {"type": "set_field", "field_id": str(ids["number"]), "value": "{{ drawer }}"},
+            {"type": "force_review", "reason": "Check {{ drawer }}"},
+        ]
+        log: dict[str, tuple[str | None, dict[str, Any], dict[str, Any]]] = {
+            "person:drawer": (
+                "person:drawer",
+                {"trigger": "change", "actor": user, "drawer_id": shared},
+                {"changed": ["drawer"]},
+            ),
+            "person": (
+                "person",
+                {"actor": user},
+                {
+                    "drawer_id": shared,
+                    "changed": ["drawer", "title"],
+                    "accepted": ["drawer"],
+                    "entered": [],
+                    "kept": ["drawer"],
+                },
+            ),
+            "file": (None, {}, {"fields": [{"field": "drawer", "reason": "the drawer stays"}]}),
+            "apply_rules": (
+                None,
+                {},
+                {
+                    "fields": [{"field": "drawer", "outcome": "ok"}],
+                    "rules": [
+                        {
+                            "applied": [{"field": "drawer", "value": shared}],
+                            "notes": [{"field": "drawer", "message": "drawer 'x' is gone"}],
+                        }
+                    ],
+                },
+            ),
+        }
+        rows: list[tuple[sa.TableClause | sa.Table, dict[str, Any]]] = [
+            (t.users, {"id": ids["user"], "username": "a", "username_key": "a", "role": "admin"}),
+            (t.users, {"id": ids["other"], "username": "b", "username_key": "b", "role": "user"}),
+            (_OLD["drawers"], {"id": ids["default"], "owner_id": ids["user"], "name_key": "d"}),
+            (
+                _OLD["drawers"],
+                {
+                    "id": ids["shared"],
+                    "owner_id": ids["user"],
+                    "name": "Shared",
+                    "name_key": "shared",
+                    "is_default": False,
+                },
+            ),
+            (
+                _OLD["shares"],
+                {"drawer_id": ids["shared"], "user_id": ids["other"], "level": "read"},
+            ),
+            (
+                _drawer(_before_0021(t.documents)),
+                {"id": ids["document"], "owner_id": ids["user"], "drawer_id": ids["shared"]},
+            ),
+            (t.tags, {"id": ids["tag"], "name": "T", "name_key": "t"}),
+            (t.document_tags, {"document_id": ids["document"], "tag_id": ids["tag"]}),
+            (
+                t.field_definitions,
+                {"id": ids["text"], "name": "A", "name_key": "a", "data_type": "text"},
+            ),
+            (
+                t.field_definitions,
+                {"id": ids["number"], "name": "B", "name_key": "b", "data_type": "number"},
+            ),
+            (
+                t.document_fields,
+                {"document_id": ids["document"], "field_id": ids["text"], "kind": "text"},
+            ),
+            (
+                t.document_types,
+                {"id": ids["type"], "name": "L", "name_key": "l", "title_pattern": template},
+            ),
+            (
+                t.rules,
+                {"id": ids["rule"], "scope": "user", "owner_id": ids["user"], "current_version": 1},
+            ),
+            (
+                t.rule_versions,
+                {"rule_id": ids["rule"], "number": 1, "conditions": {}, "actions": actions},
+            ),
+            (
+                t.outbox,
+                {
+                    "event_id": new_id(),
+                    "type": "document.filed",
+                    "payload": {"document_id": document, "drawer_id": shared},
+                },
+            ),
+        ]
+        rows += [
+            (
+                t.processing_log,
+                {
+                    "document_id": ids["document"],
+                    "node": node,
+                    "model_version": version,
+                    "input": input_,
+                    "output": output,
+                },
+            )
+            for node, (version, input_, output) in log.items()
+        ]
+        async with empty_database.writing() as connection:
+            for table, values in rows:
+                defaults = {k: v for k, v in _DEFAULTS.items() if k in table.c}
+                await connection.execute(insert(table).values({**defaults, **values}))
+
+        async def stored(old: bool) -> dict[str, Any]:
+            spaces = _OLD["drawers"] if old else t.spaces
+            shares = _OLD["shares"] if old else t.space_shares
+            documents = _drawer(_before_0021(t.documents)) if old else t.documents
+            space_column = documents.c.drawer_id if old else documents.c.space_id
+            async with empty_database.reading() as connection:
+
+                async def all_(query: Any) -> list[Any]:
+                    return [tuple(row) for row in (await connection.execute(query)).all()]
+
+                return {
+                    "spaces": sorted(await all_(select(spaces.c.id, spaces.c.is_default))),
+                    "shares": await all_(select(shares)),
+                    "document": await all_(select(documents.c.id, space_column)),
+                    "tags": await all_(select(t.document_tags)),
+                    "fields": await all_(select(t.document_fields.c.field_id)),
+                    "pattern": await all_(select(t.document_types.c.title_pattern)),
+                    "actions": await all_(select(t.rule_versions.c.actions)),
+                    "event": await all_(select(t.outbox.c.payload)),
+                    "log": {
+                        row.node: (row.model_version, row.input, row.output)
+                        for row in (await connection.execute(select(t.processing_log))).all()
+                    },
+                }
+
+        before = await stored(old=True)
+        await migrate(empty_database)
+        after = await stored(old=False)
+        assert after["spaces"] == before["spaces"]
+        assert after["shares"] == [(ids["shared"], ids["other"], "read")]
+        assert after["document"] == [(ids["document"], ids["shared"])]
+        assert (after["tags"], after["fields"]) == (before["tags"], before["fields"])
+        assert after["pattern"] == [(renamed,)]
+        assert after["actions"] == [
+            (
+                [
+                    {"type": "set_space", "space_id": shared},
+                    {"type": "set_title", "template": renamed},
+                    {"type": "set_field", "field_id": str(ids["text"]), "value": "{{ space }}"},
+                    {"type": "set_field", "field_id": str(ids["number"]), "value": "{{ drawer }}"},
+                    {"type": "force_review", "reason": "Check {{ space }}"},
+                ],
+            )
+        ]
+        assert after["event"] == [({"document_id": document, "space_id": shared},)]
+        assert after["log"] == {
+            "person:drawer": (
+                "person:space",
+                {"trigger": "change", "actor": user, "space_id": shared},
+                {"changed": ["space"]},
+            ),
+            "person": (
+                "person",
+                {"actor": user},
+                {
+                    "space_id": shared,
+                    "changed": ["space", "title"],
+                    "accepted": ["space"],
+                    "entered": [],
+                    "kept": ["space"],
+                },
+            ),
+            "file": (None, {}, {"fields": [{"field": "space", "reason": "the drawer stays"}]}),
+            "apply_rules": (
+                None,
+                {},
+                {
+                    "fields": [{"field": "space", "outcome": "ok"}],
+                    "rules": [
+                        {
+                            "applied": [{"field": "space", "value": shared}],
+                            "notes": [{"field": "space", "message": "drawer 'x' is gone"}],
+                        }
+                    ],
+                },
+            ),
+        }
+
+        await downgrade(empty_database, "0023")
+        assert await stored(old=True) == before
+        async with empty_database.reading() as connection:
+            assert await connection.run_sync(_schema) == schema
+
+    async def test_a_template_that_uses_space_stops_revision_0024(
+        self, empty_database: Database
+    ) -> None:
+        await migrate(empty_database, "0023")
+        pattern = "{% for space in tags %}{{ drawer }}{% endfor %}"
+        async with empty_database.writing() as connection:
+            values = {"id": new_id(), "name": "L", "name_key": "l", "title_pattern": pattern}
+            defaults = {k: v for k, v in _DEFAULTS.items() if k in t.document_types.c}
+            await connection.execute(insert(t.document_types).values({**defaults, **values}))
+        with pytest.raises(RuntimeError, match=r"uses 'space' already"):
+            await migrate(empty_database)
+
+    async def test_tags_get_scopes_and_groups_and_back(self, empty_database: Database) -> None:
+        """Revision 0026 keeps every tag (a document tag, proposed, shown, at the top) and every
+        row that refers to one; the downgrade drops the groups and the nesting, and the schema
+        is that of 0025 again."""
+        await migrate(empty_database, "0025")
+        async with empty_database.reading() as connection:
+            schema = await connection.run_sync(_schema)
+        ids = {name: new_id() for name in ("user", "space", "first", "second", "tax", "paid")}
+        ids |= {name: new_id() for name in ("contact", "type", "group", "type_group", "child")}
+        rows: list[tuple[sa.TableClause | sa.Table, dict[str, Any]]] = [
+            (t.users, {"id": ids["user"], "username": "a", "username_key": "a", "role": "admin"}),
+            (t.spaces, {"id": ids["space"], "owner_id": ids["user"], "name_key": "d"}),
+            (t.tags, {"id": ids["tax"], "name": "Tax", "name_key": "tax"}),
+            (t.tags, {"id": ids["paid"], "name": "Paid", "name_key": "paid"}),
+            (t.contacts, {"id": ids["contact"], "name": "Nord", "name_key": "nord"}),
+            (t.document_types, {"id": ids["type"], "name": "Invoice", "name_key": "invoice"}),
+        ]
+        for number, document in enumerate(("first", "second")):
+            values = {"id": ids[document], "owner_id": ids["user"], "space_id": ids["space"]}
+            rows.append((t.documents, values | {"sha256": str(number) * 64}))
+        rows += [
+            (t.document_tags, {"document_id": ids["first"], "tag_id": ids["tax"]}),
+            (t.document_tags, {"document_id": ids["first"], "tag_id": ids["paid"]}),
+            (t.document_tags, {"document_id": ids["second"], "tag_id": ids["tax"]}),
+        ]
+        async with empty_database.writing() as connection:
+            for table, values in rows:
+                defaults = {k: v for k, v in _DEFAULTS.items() if k in table.c}
+                await connection.execute(insert(table).values({**defaults, **values}))
+        flat = sa.table(
+            "tags",
+            sa.column("id", sa.Uuid()),
+            sa.column("name", sa.Text()),
+            sa.column("name_key", sa.Text()),
+            sa.column("created_at", UtcDateTime()),
+        )
+
+        async def stored(table: sa.TableClause | sa.Table) -> dict[str, Any]:
+            async with empty_database.reading() as connection:
+
+                async def all_(query: Any) -> list[tuple[Any, ...]]:
+                    return sorted(tuple(row) for row in (await connection.execute(query)).all())
+
+                return {
+                    "tags": await all_(select(table)),
+                    "document_tags": await all_(select(t.document_tags)),
+                }
+
+        before = await stored(flat)
+        await migrate(empty_database)
+        after = await stored(t.tags)
+        assert after["document_tags"] == before["document_tags"]
+        assert {row[:4] for row in after["tags"]} == {
+            (ids["paid"], "Paid", "paid", "document"),
+            (ids["tax"], "Tax", "tax", "document"),
+        }
+        assert {row[4:7] for row in after["tags"]} == {(None, "auto", True)}
+
+        # Groups, a contact group named like a document tag, and a nested tag.
+        new_rows: list[tuple[sa.Table, dict[str, Any]]] = [
+            (t.tags, {"id": ids["group"], "name": "Tax", "name_key": "tax", "scope": "contact"}),
+            (
+                t.tags,
+                {"id": ids["type_group"], "name": "B", "name_key": "b", "scope": "document_type"},
+            ),
+            (t.tags, {"id": ids["child"], "name": "C", "name_key": "c", "parent_id": ids["tax"]}),
+            (t.contact_groups, {"contact_id": ids["contact"], "tag_id": ids["group"]}),
+            (
+                t.document_type_groups,
+                {"document_type_id": ids["type"], "tag_id": ids["type_group"]},
+            ),
+            (t.document_tags, {"document_id": ids["second"], "tag_id": ids["child"]}),
+        ]
+        async with empty_database.writing() as connection:
+            for table, values in new_rows:
+                defaults = {k: v for k, v in _DEFAULTS.items() if k in table.c}
+                await connection.execute(insert(table).values({**defaults, **values}))
+        with pytest.raises(sa.exc.IntegrityError):
+            async with empty_database.writing() as connection:
+                same: dict[str, Any] = {"name": "tax", "name_key": "tax", "scope": "contact"}
+                defaults = {k: v for k, v in _DEFAULTS.items() if k in t.tags.c}
+                await connection.execute(
+                    insert(t.tags).values({**defaults, **same, "id": new_id()})
+                )
+
+        await downgrade(empty_database, "0025")
+        child = (ids["child"], "C", "c", NOW)
+        assert await stored(flat) == {
+            "tags": sorted([*before["tags"], child]),
+            "document_tags": sorted([*before["document_tags"], (ids["second"], ids["child"])]),
+        }
+        async with empty_database.reading() as connection:
+            assert await connection.run_sync(_schema) == schema
+
+    async def test_topics_come_and_go_with_revision_0027(self, empty_database: Database) -> None:
+        """Revision 0027 keeps every document, identifier and the rows that refer to them,
+        without a topic; the downgrade drops the topics and the columns again, and the schema is
+        that of 0026."""
+        await migrate(empty_database, "0026")
+        async with empty_database.reading() as connection:
+            schema = await connection.run_sync(_schema)
+        ids = {name: new_id() for name in ("user", "space", "first", "second", "tax", "contact")}
+        ids |= {name: new_id() for name in ("insurance", "health", "type")}
+        rows: list[tuple[sa.TableClause | sa.Table, dict[str, Any]]] = [
+            (t.users, {"id": ids["user"], "username": "a", "username_key": "a", "role": "admin"}),
+            (t.spaces, {"id": ids["space"], "owner_id": ids["user"], "name_key": "d"}),
+            (t.tags, {"id": ids["tax"], "name": "Tax", "name_key": "tax"}),
+            (t.contacts, {"id": ids["contact"], "name": "Nord", "name_key": "nord"}),
+            (t.document_types, {"id": ids["type"], "name": "Invoice", "name_key": "invoice"}),
+        ]
+        for number, document in enumerate(("first", "second")):
+            values = {"id": ids[document], "owner_id": ids["user"], "space_id": ids["space"]}
+            values |= {"contact_id": ids["contact"], "document_type_id": ids["type"]}
+            rows.append((t.documents, values | {"sha256": str(number) * 64, "title": document}))
+        rows += [
+            (t.document_tags, {"document_id": ids["first"], "tag_id": ids["tax"]}),
+            (t.document_identifiers, {"document_id": ids["first"], "kind": "iban", "value": "X"}),
+            (
+                t.contact_identifiers,
+                {"contact_id": ids["contact"], "kind": "iban", "value": "X", "source": "manual"},
+            ),
+            (
+                t.contact_identifiers,
+                {"contact_id": ids["contact"], "kind": "vat_id", "value": "Y", "source": "learned"},
+            ),
+        ]
+        async with empty_database.writing() as connection:
+            for table, values in rows:
+                defaults = {k: v for k, v in _DEFAULTS.items() if k in table.c}
+                await connection.execute(insert(table).values({**defaults, **values}))
+        documents = sa.table(
+            "documents",
+            *(sa.column(name) for name in ("id", "owner_id", "space_id", "sha256", "title")),
+            *(sa.column(name) for name in ("contact_id", "document_type_id", "processing_nodes")),
+        )
+        identifiers = sa.table(
+            "contact_identifiers",
+            *(sa.column(c) for c in ("contact_id", "kind", "value", "source")),
+        )
+
+        async def stored() -> dict[str, list[tuple[Any, ...]]]:
+            async with empty_database.reading() as connection:
+
+                async def all_(query: Any) -> list[tuple[Any, ...]]:
+                    return sorted(
+                        tuple(str(value) for value in row)
+                        for row in (await connection.execute(query)).all()
+                    )
+
+                return {
+                    "documents": await all_(select(documents)),
+                    "identifiers": await all_(select(identifiers)),
+                    "document_tags": await all_(select(t.document_tags)),
+                    "document_identifiers": await all_(select(t.document_identifiers)),
+                    "tags": await all_(select(t.tags.c.id, t.tags.c.scope)),
+                }
+
+        before = await stored()
+        await migrate(empty_database)
+        assert await stored() == before
+        async with empty_database.reading() as connection:
+            topics = await connection.execute(select(t.documents.c.topic_id))
+            assert {row[0] for row in topics} == {None}
+            topics = await connection.execute(select(t.contact_identifiers.c.topic_id))
+            assert {row[0] for row in topics} == {None}
+
+        topic: dict[str, Any] = {"scope": "topic"}
+        new_rows: list[tuple[sa.Table, dict[str, Any]]] = [
+            (t.tags, {"id": ids["insurance"], "name": "Tax", "name_key": "tax", **topic}),
+            (
+                t.tags,
+                {"id": ids["health"], "name": "H", "name_key": "h", "parent_id": ids["insurance"]}
+                | topic,
+            ),
+            (t.contact_topics, {"contact_id": ids["contact"], "tag_id": ids["health"]}),
+        ]
+        async with empty_database.writing() as connection:
+            for table, values in new_rows:
+                defaults = {k: v for k, v in _DEFAULTS.items() if k in table.c}
+                await connection.execute(insert(table).values({**defaults, **values}))
+            await connection.execute(
+                t.documents.update()
+                .where(t.documents.c.id == ids["first"])
+                .values(topic_id=ids["health"])
+            )
+            await connection.execute(
+                t.contact_identifiers.update()
+                .where(t.contact_identifiers.c.kind == "iban")
+                .values(topic_id=ids["health"])
+            )
+        with pytest.raises(sa.exc.IntegrityError):
+            async with empty_database.writing() as connection:
+                await connection.execute(
+                    t.documents.update()
+                    .where(t.documents.c.id == ids["second"])
+                    .values(topic_id=new_id())
+                )
+
+        await downgrade(empty_database, "0026")
+        assert await stored() == before
+        async with empty_database.reading() as connection:
+            assert await connection.run_sync(_schema) == schema
+
+    async def test_icons_colours_and_logos_come_and_go_with_revision_0028(
+        self, empty_database: Database
+    ) -> None:
+        """Revision 0028 keeps every tag, document type and contact as it is, without icon,
+        colour or logo; the downgrade drops them again, and the schema is that of 0027."""
+        await migrate(empty_database, "0027")
+        async with empty_database.reading() as connection:
+            schema = await connection.run_sync(_schema)
+        ids = {name: new_id() for name in ("tag", "topic", "type", "contact", "other")}
+        rows: list[tuple[sa.Table, dict[str, Any]]] = [
+            (t.tags, {"id": ids["tag"], "name": "Tax", "name_key": "tax"}),
+            (t.tags, {"id": ids["topic"], "name": "Car", "name_key": "car", "scope": "topic"}),
+            (t.document_types, {"id": ids["type"], "name": "Invoice", "name_key": "invoice"}),
+            (t.contacts, {"id": ids["contact"], "name": "Nord", "name_key": "nord"}),
+            (t.contacts, {"id": ids["other"], "name": "Süd", "name_key": "süd"}),
+            (t.contact_topics, {"contact_id": ids["contact"], "tag_id": ids["topic"]}),
+        ]
+        async with empty_database.writing() as connection:
+            for table, values in rows:
+                defaults = {k: v for k, v in _DEFAULTS.items() if k in table.c}
+                await connection.execute(insert(table).values({**defaults, **values}))
+        columns = ("id", "name", "name_key", "created_at", "version")
+        tables = {
+            name: sa.table(name, *(sa.column(column) for column in columns))
+            for name in ("tags", "document_types", "contacts")
+        }
+
+        async def stored() -> dict[str, list[tuple[Any, ...]]]:
+            async with empty_database.reading() as connection:
+                found = {
+                    name: sorted(
+                        tuple(str(value) for value in row)
+                        for row in (await connection.execute(select(table))).all()
+                    )
+                    for name, table in tables.items()
+                }
+                found["contact_topics"] = sorted(
+                    tuple(map(str, row))
+                    for row in (await connection.execute(select(t.contact_topics))).all()
+                )
+                return found
+
+        before = await stored()
+        await migrate(empty_database)
+        assert await stored() == before
+        looks = (
+            t.tags.c.icon,
+            t.tags.c.color,
+            t.document_types.c.icon,
+            t.contacts.c.logo_source,
+            t.contacts.c.logo_failed_domains,
+        )
+        async with empty_database.reading() as connection:
+            for column in looks:
+                assert {row[0] for row in await connection.execute(select(column))} == {None}
+        async with empty_database.writing() as connection:
+            await connection.execute(
+                t.tags.update()
+                .where(t.tags.c.id == ids["tag"])
+                .values(icon="calculator", color="#b45309")
+            )
+            await connection.execute(t.document_types.update().values(icon="receipt"))
+            await connection.execute(
+                t.contacts.update()
+                .where(t.contacts.c.id == ids["contact"])
+                .values(logo_source="fetched", logo_domain="nord.example", logo_stored_at=NOW)
+            )
+            await connection.execute(
+                t.contacts.update()
+                .where(t.contacts.c.id == ids["other"])
+                .values(logo_failed_domains="sued.example a.example", logo_failed_at=NOW)
+            )
+
+        await downgrade(empty_database, "0027")
+        assert await stored() == before
+        async with empty_database.reading() as connection:
+            assert await connection.run_sync(_schema) == schema
 
     async def test_migrations_match_the_table_definitions(
         self, empty_database: Database, model_database: Database
@@ -1026,6 +1679,22 @@ class MigrationSuite:
 
 
 _OLD = {
+    "drawers": sa.table(
+        "drawers",
+        sa.column("id", sa.Uuid()),
+        sa.column("owner_id", sa.Uuid()),
+        sa.column("name", sa.Text()),
+        sa.column("name_key", sa.Text()),
+        sa.column("is_default", sa.Boolean()),
+        sa.column("created_at", UtcDateTime()),
+        sa.column("version", sa.Integer()),
+    ),
+    "shares": sa.table(
+        "drawer_shares",
+        sa.column("drawer_id", sa.Uuid()),
+        sa.column("user_id", sa.Uuid()),
+        sa.column("level", sa.Text()),
+    ),
     "definitions": sa.table(
         "attribute_definitions",
         sa.column("id", sa.Uuid()),
@@ -1173,10 +1842,17 @@ async def _document_rows(database: Database, *, old: bool = False) -> list[Any]:
         return list((await connection.execute(select(table).order_by(table.c.sha256))).all())
 
 
+def _drawer(table: sa.TableClause) -> sa.TableClause:
+    """`table` (documents) with the space column as the revisions before 0024 named it, for
+    rows written there; the other helpers leave the column out, so they read at any revision."""
+    columns = [sa.column(c.name, c.type) for c in table.c]
+    return sa.table(table.name, *columns, sa.column("drawer_id", sa.Uuid()))
+
+
 def _before_0021(table: sa.Table) -> sa.TableClause:
-    """`table` as the revisions before 0021 had it: no vision reading of the run, and no sort
-    key of the title (0023)."""
-    later = {"processing_vision", "title_key"}
+    """`table` as the revisions before 0021 had it: no vision reading of the run, no sort key
+    of the title (0023) and no topic (0027); without the space column (see `_drawer`)."""
+    later = {"processing_vision", "title_key", "space_id", "topic_id"}
     return sa.table(
         table.name, *(sa.column(c.name, c.type) for c in table.c if c.name not in later)
     )
@@ -1185,8 +1861,17 @@ def _before_0021(table: sa.Table) -> sa.TableClause:
 def _before_0010(table: sa.Table) -> sa.TableClause:
     """`table` as the revisions before 0010 had it: the current node and the outcomes instead
     of the state of every node, and no page count (0011), confirmation (0014), vision reading
-    (0021) or sort key of the title (0023)."""
-    later = {"processing_nodes", "page_count", "confirmed_at", "processing_vision", "title_key"}
+    (0021), sort key of the title (0023) or topic (0027); without the space column (see
+    `_drawer`)."""
+    later = {
+        "processing_nodes",
+        "page_count",
+        "confirmed_at",
+        "processing_vision",
+        "title_key",
+        "space_id",
+        "topic_id",
+    }
     columns = [sa.column(c.name, c.type) for c in table.c if c.name not in later]
     if table.name == "documents":
         columns.append(sa.column("processing_node", sa.Text()))
@@ -1212,12 +1897,6 @@ def _current_and_outcomes(nodes: dict[str, Any]) -> tuple[str | None, dict[str, 
         if name != "pages" and state["outcome"] is not None
     }
     return (waiting[0] if waiting else None), outcomes
-
-
-async def _downgrade(database: Database, revision: str) -> None:
-    async with database.engine.connect() as connection:
-        await connection.run_sync(lambda sync: command.downgrade(alembic_config(sync), revision))
-        await connection.commit()
 
 
 def _compare(connection: Connection) -> list[Any]:

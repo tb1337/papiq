@@ -12,7 +12,7 @@ from papiq.adapters.outbound.memory import (
 from papiq.core.domain.documents import Document, DocumentChanges
 from papiq.core.domain.errors import EmbeddingsError
 from papiq.core.domain.identifiers import Identifier, IdentifierKind
-from papiq.core.domain.master_data import Contact
+from papiq.core.domain.master_data import Assignment, Contact, Tag
 from papiq.core.domain.pipeline import NodeResult
 from papiq.core.domain.search import EmbeddingStamp, IndexDocument
 from papiq.core.domain.users import User
@@ -47,8 +47,8 @@ def output(result: NodeResult | FactsResult) -> Any:
 
 
 async def stored(world: World, owner: User, text: str, contact: Contact | None = None) -> Document:
-    drawer = await world.default_drawer(owner)
-    document = builders.processed(owner, drawer, content=f"{text} {next(_numbers)}")
+    space = await world.default_space(owner)
+    document = builders.processed(owner, space, content=f"{text} {next(_numbers)}")
     if contact is not None:
         document.apply_changes(DocumentChanges(contact_id=contact.id), {}, builders.NOW)
     async with world.uow() as uow:
@@ -96,7 +96,7 @@ async def test_facts_are_names_and_identifiers_in_the_text(world: World) -> None
 
 async def test_without_text_facts_abstain(world: World) -> None:
     owner = await world.user()
-    document = builders.processed(owner, await world.default_drawer(owner))
+    document = builders.processed(owner, await world.default_space(owner))
     result = await FactsSignal(world.uow, world.object_store).run(document)
     assert ABSTAINED in result.output
 
@@ -165,7 +165,7 @@ async def test_neighbours_are_the_confirmed_documents_the_owner_may_read(world: 
                     id=document.id,
                     version=1,
                     owner_id=document.owner_id,
-                    drawer_id=document.drawer_id,
+                    space_id=document.space_id,
                     lane=document.lane,
                     title=document.title,
                     filename="scan.pdf",
@@ -199,7 +199,22 @@ async def test_neighbours_are_the_confirmed_documents_the_owner_may_read(world: 
         "contacts": [str(utility.id)],
         "document_types": [],
         "tags": [],
+        "topics": [],
     }
+    # They vote on the tags the classification sets, not on those set by hand.
+    electricity = Tag.create(name="Strom", now=builders.NOW)
+    paid = Tag.create(name="Bezahlt", now=builders.NOW, assignment=Assignment.MANUAL)
+    async with world.uow() as uow:
+        await uow.tags.add(electricity)
+        await uow.tags.add(paid)
+        current = await uow.documents.get(near.id)
+        changes = DocumentChanges(tag_ids=frozenset({electricity.id, paid.id}))
+        current.apply_changes(changes, {}, builders.NOW)
+        await uow.documents.update(current)
+        await uow.commit()
+    tagged = output(await signal.run(document))
+    assert tagged["neighbours"][0]["tag_ids"] == [str(electricity.id)]
+    assert tagged["known"]["tags"] == [str(electricity.id)]
 
     for unavailable in (
         NeighboursSignal(world.uow, world.object_store, None, embeddings),

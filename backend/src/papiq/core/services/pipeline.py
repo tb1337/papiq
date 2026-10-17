@@ -28,17 +28,18 @@ from papiq.core.domain.errors import (
     NotFoundError,
     OpenFieldsError,
     PermissionDeniedError,
+    SpaceWriteDeniedError,
     UnprocessableDocumentError,
     UnsupportedMediaTypeError,
     ValidationError,
 )
-from papiq.core.domain.ids import DocumentId, DrawerId, JobId, TagId, UserId
+from papiq.core.domain.ids import DocumentId, JobId, SpaceId, TagId, UserId
 from papiq.core.domain.imports import IMPORTED, ImportedMetadata
 from papiq.core.domain.jobs import Job, JobStatus
 from papiq.core.domain.json_value import JsonObject
 from papiq.core.domain.permissions import can_control_document, can_file_into
 from papiq.core.domain.pipeline import (
-    CHOSEN_DRAWER,
+    CHOSEN_SPACE,
     NODES,
     Lane,
     Node,
@@ -54,16 +55,16 @@ from papiq.core.domain.reading import (
     readings_from_json,
     vision_advice,
 )
-from papiq.core.domain.rule_engine import DRAWER, changed_fields
+from papiq.core.domain.rule_engine import SPACE, changed_fields
 from papiq.core.domain.users import User
 from papiq.core.ports import Clock, ObjectStore, UnitOfWork, UnitOfWorkFactory
 from papiq.core.ports.ocr import VisionModel
 from papiq.core.services._access import (
-    check_references,
+    checked_changes,
     load_actor,
     may_file,
     readable_document,
-    visible_drawer,
+    visible_space,
 )
 from papiq.core.services.inbox import (
     LEARNED_ALIAS,
@@ -74,7 +75,7 @@ from papiq.core.services.inbox import (
 )
 from papiq.core.services.master_data import learn_alias
 from papiq.core.services.objects import original_key
-from papiq.core.services.rules.running import corrected_fields, drawer_choice, person_record
+from papiq.core.services.rules.running import corrected_fields, person_record, space_choice
 
 log = logging.getLogger(__name__)
 
@@ -106,11 +107,12 @@ class MetadataResult:
     """A node result together with a change of the document's metadata (classification).
     Both are stored in the same transaction. If the change no longer fits (master data was
     removed meanwhile), nothing is changed and the node is uncertain. `add_tags` are added to
-    the tags the document has when the result is stored, so tags set meanwhile stay.
+    the tags the document has when the result is stored, so tags set meanwhile stay. A new
+    contact that does not enable the document's topic clears it (`checked_changes`).
 
     `confirms`: metadata taken over from the source system, which counts as confirmed;
-    otherwise it is the pipeline's, and a document whose contact, type or tags it changes is
-    no longer confirmed."""
+    otherwise it is the pipeline's, and a document whose contact, type, topic or tags it
+    changes is no longer confirmed."""
 
     result: NodeResult
     changes: DocumentChanges
@@ -122,7 +124,7 @@ class MetadataResult:
         if not self.add_tags <= document.tag_ids:
             changes = replace(changes, tag_ids=frozenset(document.tag_ids | self.add_tags))
         try:
-            await check_references(uow, changes)
+            changes = await checked_changes(uow, changes, document)
             definitions = {item.id: item for item in await uow.fields.list_all()}
             changed = document.apply_changes(changes, definitions, now)
         except (NotFoundError, ValidationError) as error:
@@ -236,7 +238,7 @@ class PipelineService:
         file: IncomingFile,
         *,
         filename: str,
-        drawer: DrawerId | None = None,
+        space: SpaceId | None = None,
         channel: Channel = Channel.API,
         owner: UserId | None = None,
         imported: ImportedMetadata | None = None,
@@ -245,16 +247,16 @@ class PipelineService:
         nodes after receiving in one transaction.
 
         The media type is recognised from the content; an unsupported type raises
-        UnsupportedMediaTypeError and nothing is stored. Without `drawer` the document goes to
-        the owner's default drawer; otherwise the owner needs write access to it. A file the
+        UnsupportedMediaTypeError and nothing is stored. Without `space` the document goes to
+        the owner's default space; otherwise the owner needs write access to it. A file the
         owner already has is rejected with DuplicateDocumentError, also if the same file arrives
         twice at the same moment. An
         original that is stored already (another owner has the same file) is not stored again.
         `channel`: how the document arrived (for rules).
 
         `owner`: an active admin may receive the document on behalf of another active user, who
-        becomes its owner (the duplicate check, the default drawer and the write access to
-        `drawer` are the owner's). `imported`: metadata of a document taken over from another
+        becomes its owner (the duplicate check, the default space and the write access to
+        `space` are the owner's). `imported`: metadata of a document taken over from another
         system, for an active admin and the channel `migration` only; it is checked against the
         master data now and applied by the classification nodes instead of the language model.
         """
@@ -267,7 +269,7 @@ class PipelineService:
             )
         async with self._uow() as uow:
             owner = await self._owner(uow, actor, owner, channel, imported)
-            target = await self._target_drawer(uow, owner, drawer, sha256)
+            target = await self._target_space(uow, owner, space, sha256)
             if imported is not None:
                 await _check_imported(uow, owner, imported, started)
         key = original_key(sha256)
@@ -292,7 +294,7 @@ class PipelineService:
                 channel,
                 result,
                 started,
-                chosen=drawer is not None,
+                chosen=space is not None,
             )
         except ConflictError:
             # The same file arrived twice at the same moment; the other upload won.
@@ -306,7 +308,7 @@ class PipelineService:
         self,
         actor: UserId,
         owner: UserId,
-        target: DrawerId,
+        target: SpaceId,
         sha256: Sha256,
         path: Path,
         filename: str,
@@ -317,7 +319,7 @@ class PipelineService:
         *,
         chosen: bool,
     ) -> Document:
-        """`chosen`: the person chose the drawer; rules leave it."""
+        """`chosen`: the person chose the space; rules leave it."""
         now = self._clock.now()
         key = original_key(sha256)
         async with self._uow() as uow:
@@ -327,10 +329,10 @@ class PipelineService:
             if not await self._store.exists(key):
                 await self._store.upload(key, path, content_type=media_type)
             # Check again: rights or a duplicate may have changed while the file was stored.
-            await self._target_drawer(uow, owner, target, sha256)
+            await self._target_space(uow, owner, target, sha256)
             document = Document.receive(
                 owner_id=owner,
-                drawer_id=target,
+                space_id=target,
                 sha256=sha256,
                 original_filename=filename,
                 media_type=media_type,
@@ -342,7 +344,7 @@ class PipelineService:
             await self._log(uow, document.id, Node.RECEIVE, 1, result, started, now)
             if chosen:
                 await uow.processing_log.append(
-                    drawer_choice(
+                    space_choice(
                         document,
                         node=Node.RECEIVE,
                         actor=actor,
@@ -380,19 +382,19 @@ class PipelineService:
             raise NotFoundError("user", owner)
         return owner
 
-    async def _target_drawer(
-        self, uow: UnitOfWork, actor: UserId, drawer: DrawerId | None, sha256: Sha256
-    ) -> DrawerId:
-        """The drawer for a document of `actor` (its owner)."""
+    async def _target_space(
+        self, uow: UnitOfWork, actor: UserId, space: SpaceId | None, sha256: Sha256
+    ) -> SpaceId:
+        """The space for a document of `actor` (its owner)."""
         user = await load_actor(uow, actor)
         existing = await uow.documents.find_by_sha256(actor, sha256)
         if existing is not None:
             raise DuplicateDocumentError(existing.id)
-        if drawer is None:
-            return (await uow.drawers.get_default(actor)).id
-        target = await visible_drawer(uow, user, drawer)
+        if space is None:
+            return (await uow.spaces.get_default(actor)).id
+        target = await visible_space(uow, user, space)
         if not can_file_into(user, target):
-            raise PermissionDeniedError(f"no write access to drawer {drawer}")
+            raise SpaceWriteDeniedError(space, str(space))
         return target.id
 
     # --- retry and reprocess --------------------------------------------------------------------
@@ -464,11 +466,11 @@ class PipelineService:
         *,
         accept_suggestions: bool = False,
         resume_at: Node = Node.APPLY_RULES,
-        drawer: DrawerId | None = None,
+        space: SpaceId | None = None,
     ) -> Document:
         """Owner or admin, for a document in the inbox: decide its open fields, apply `changes`
-        (as a metadata change), move it into `drawer` (one the owner may write to; an admin
-        chooses any drawer, and filing accepts it) and let processing continue from `resume_at`,
+        (as a metadata change), move it into `space` (one the owner may write to; an admin
+        chooses any space, and filing accepts it) and let processing continue from `resume_at`,
         up to filing.
 
         Each uncertain field of the nodes before `resume_at`, and of the rules when processing
@@ -493,14 +495,14 @@ class PipelineService:
                 if item.node not in again
                 or (item.node is Node.APPLY_RULES and resume_at is Node.APPLY_RULES)
             ]
-            target = None if drawer is None else await visible_drawer(uow, user, drawer)
+            target = None if space is None else await visible_space(uow, user, space)
             if target is not None and not (user.is_active_admin or can_file_into(user, target)):
-                raise PermissionDeniedError(f"no write access to drawer '{target.name}'")
+                raise SpaceWriteDeniedError(target.id, f"'{target.name}'")
             if target is None and not await may_file(
-                uow, document, await uow.drawers.get(document.drawer_id)
+                uow, document, await uow.spaces.get(document.space_id)
             ):
-                # Filing would stop again: someone has to choose another drawer.
-                raise OpenFieldsError((DRAWER,))
+                # Filing would stop again: someone has to choose another space.
+                raise OpenFieldsError((SPACE,))
             now = self._clock.now()
             tags_before = frozenset(document.tag_ids)
             overruled = document.confirm(resume_at, now)
@@ -511,12 +513,16 @@ class PipelineService:
                 changes,
                 accept_suggestions=accept_suggestions,
                 definitions=definitions,
-                given=() if target is None else (DRAWER,),
+                given=() if target is None else (SPACE,),
             )
-            await check_references(uow, decision.changes)
+            # The person decided the change as given (with the suggestions they accepted); a
+            # topic the new contact does not enable is cleared, but not by their decision.
+            decided = changed_fields(decision.changes)
+            checked = await checked_changes(uow, decision.changes, document, user)
+            decision = replace(decision, changes=checked)
             before = copy.deepcopy(document)
             document.apply_changes(decision.changes, definitions, now)
-            corrected = corrected_fields(before, document)
+            corrected = corrected_fields(before, document, decided=decided)
             if target is not None:
                 document.move_to(target.id, now)
             run = document.processing.run
@@ -527,12 +533,12 @@ class PipelineService:
                 Node.APPLY_RULES, outcomes.get(Node.APPLY_RULES), decision, user.id
             )
             person = person_record(
-                changed=changed_fields(decision.changes) | ({DRAWER} if target else set()),
+                changed=decided | ({SPACE} if target else set()),
                 tags_before=tags_before,
                 tags_after=document.tag_ids,
                 corrected=corrected,
             )
-            chosen: JsonObject = {} if target is None else {CHOSEN_DRAWER: str(target.id)}
+            chosen: JsonObject = {} if target is None else {CHOSEN_SPACE: str(target.id)}
             learned = alias_to_learn(open, decision, document)
             if learned is not None and await learn_alias(uow, *learned) is not None:
                 chosen[LEARNED_ALIAS] = {"contact_id": str(learned[0]), "alias": learned[1]}
@@ -1045,11 +1051,11 @@ async def _check_imported(
     changes = replace(imported.classification(), tag_ids=imported.tag_ids)
     changes = replace(changes, fields=dict(imported.fields))
     try:
-        await check_references(uow, changes)
+        changes = await checked_changes(uow, changes)
         definitions = {item.id: item for item in await uow.fields.list_all()}
         scratch = Document.receive(
             owner_id=owner,
-            drawer_id=DrawerId(owner),
+            space_id=SpaceId(owner),
             sha256=Sha256("0" * 64),
             original_filename="scratch",
             media_type="application/pdf",

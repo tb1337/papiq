@@ -17,9 +17,11 @@ from papiq.core.ports.identity import (
     SessionRepository,
     Totp,
 )
+from papiq.core.ports.images import ImageNormaliser
 from papiq.core.ports.job_queue import JobQueue
 from papiq.core.ports.llm import LanguageModel, StructuredAnswer, StructuredRequest
 from papiq.core.ports.locator import TextLocator
+from papiq.core.ports.logos import FetchedLogo, LogoFetcher
 from papiq.core.ports.metadata import FileMetadata, MetadataEntry, MetadataReader, MetadataSource
 from papiq.core.ports.object_store import ObjectStore
 from papiq.core.ports.ocr import Ocr, OcrResult, VisionModel, VisionReading
@@ -37,7 +39,6 @@ from papiq.core.ports.repository import (
     DocumentPosition,
     DocumentRepository,
     DocumentTypeRepository,
-    DrawerRepository,
     FieldDefinitionRepository,
     NamedRepository,
     ProcessingLog,
@@ -45,6 +46,7 @@ from papiq.core.ports.repository import (
     RuleApplicationRepository,
     RuleRepository,
     SortKey,
+    SpaceRepository,
     TagRepository,
     UserRepository,
     WebhookRepository,
@@ -80,18 +82,20 @@ __all__ = [
     "DocumentPosition",
     "DocumentRepository",
     "DocumentTypeRepository",
-    "DrawerRepository",
     "EmbeddingResult",
     "Embeddings",
     "EventBus",
     "EventHandler",
     "ExternalIdentityRepository",
+    "FetchedLogo",
     "FieldDefinitionRepository",
     "FileMetadata",
+    "ImageNormaliser",
     "IndexBuild",
     "JobQueue",
     "LanguageModel",
     "LoginFailureRepository",
+    "LogoFetcher",
     "MetadataEntry",
     "MetadataReader",
     "MetadataSource",
@@ -117,6 +121,7 @@ __all__ = [
     "SecretCipher",
     "SessionRepository",
     "SortKey",
+    "SpaceRepository",
     "StructuredAnswer",
     "StructuredRequest",
     "TagRepository",

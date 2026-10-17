@@ -56,14 +56,28 @@ CROP_WORDS = 30
 FETCH_PAGE = 1000
 _EXCERPT = 300  # characters of an error message from Meilisearch
 
-SEARCHABLE = ["title", "contact", "document_type", "tags", "fields", "filename", "text"]
+SEARCHABLE = [
+    "title",
+    "contact",
+    "document_type",
+    "tags",
+    "topics",
+    "contact_groups",
+    "document_type_groups",
+    "fields",
+    "filename",
+    "text",
+]
 FILTERABLE = [
     "owner_id",
-    "drawer_id",
+    "space_id",
     "lane",
     "contact_id",
     "document_type_id",
     "tag_ids",
+    "topic_ids",
+    "contact_group_ids",
+    "document_type_group_ids",
     "confirmed",
     "field_ids",
 ]
@@ -350,7 +364,7 @@ class MeilisearchIndex:
             "id": str(document.id),
             "version": document.version,
             "owner_id": str(document.owner_id),
-            "drawer_id": str(document.drawer_id),
+            "space_id": str(document.space_id),
             "lane": document.lane_value,
             "title": document.title,
             "title_key": sort_key(document.title),
@@ -362,6 +376,12 @@ class MeilisearchIndex:
             "document_type": document.document_type,
             "tag_ids": [str(tag) for tag in document.tag_ids],
             "tags": list(document.tags),
+            "contact_group_ids": [str(tag) for tag in document.contact_group_ids],
+            "contact_groups": list(document.contact_groups),
+            "document_type_group_ids": [str(tag) for tag in document.document_type_group_ids],
+            "document_type_groups": list(document.document_type_groups),
+            "topic_ids": [str(tag) for tag in document.topic_ids],
+            "topics": list(document.topics),
             "fields": list(document.fields),
             "field_ids": [str(field) for field in document.field_ids],
             "document_date": None
@@ -457,9 +477,19 @@ def filter_expression(visibility: Visibility, criteria: DocumentFilter) -> str |
         parts.append(f"contact_id = {_quote(criteria.contact)}")
     if criteria.document_type is not None:
         parts.append(f"document_type_id = {_quote(criteria.document_type)}")
-    parts.extend(f"tag_ids = {_quote(tag)}" for tag in sorted(criteria.tags, key=str))
-    if criteria.drawer is not None:
-        parts.append(f"drawer_id = {_quote(criteria.drawer)}")
+    if criteria.topics is not None:
+        listed = ", ".join(_quote(topic) for topic in sorted(criteria.topics, key=str))
+        parts.append(f"topic_ids IN [{listed}]")
+    for attribute, sets in (
+        ("tag_ids", criteria.tags),
+        ("contact_group_ids", criteria.contact_groups),
+        ("document_type_group_ids", criteria.document_type_groups),
+    ):
+        for tags in sets:
+            listed = ", ".join(_quote(tag) for tag in sorted(tags, key=str))
+            parts.append(f"{attribute} IN [{listed}]")
+    if criteria.space is not None:
+        parts.append(f"space_id = {_quote(criteria.space)}")
     if criteria.lanes:
         lanes = sorted(lane_value(lane) for lane in criteria.lanes)
         parts.append(f"lane IN [{', '.join(_quote(lane) for lane in lanes)}]")
@@ -472,10 +502,10 @@ def filter_expression(visibility: Visibility, criteria: DocumentFilter) -> str |
 
 def _visibility_filter(visibility: Visibility) -> str:
     own = f"owner_id = {_quote(visibility.user)}"
-    if not visibility.drawers:
+    if not visibility.spaces:
         return f"({own})"
-    drawers = ", ".join(_quote(drawer) for drawer in sorted(visibility.drawers, key=str))
-    return f'({own} OR (lane = "green" AND drawer_id IN [{drawers}]))'
+    spaces = ", ".join(_quote(space) for space in sorted(visibility.spaces, key=str))
+    return f'({own} OR (lane = "green" AND space_id IN [{spaces}]))'
 
 
 def _normalised(key: str, setting: Any) -> Any:

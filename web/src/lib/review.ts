@@ -13,7 +13,7 @@ type Check = components['schemas']['FieldCheckOut'];
 export type ReviewValue = string | string[] | InputValue;
 
 /** Fields of the rules that need no input of their own: confirming keeps their value. */
-export const RULE_FIELDS = ['drawer', 'title', 'review'] as const;
+export const RULE_FIELDS = ['space', 'title', 'review'] as const;
 
 export function isRuleField(field: string): boolean {
 	return (RULE_FIELDS as readonly string[]).includes(field);
@@ -43,6 +43,8 @@ export function initialValue(
 			return (
 				document.document_type_id ?? (typeof check.suggestion === 'string' ? check.suggestion : '')
 			);
+		case 'topic':
+			return document.topic_id ?? (typeof check.suggestion === 'string' ? check.suggestion : '');
 		case 'document_date':
 			return (
 				document.document_date ?? (typeof check.suggestion === 'string' ? check.suggestion : '')

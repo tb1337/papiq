@@ -5,7 +5,7 @@
 	import { Button } from '#lib/components/ui/button/index.ts';
 	import * as Field from '#lib/components/ui/field/index.ts';
 	import { Input } from '#lib/components/ui/input/index.ts';
-	import type { Drawer, Lookup } from '#lib/masterdata.svelte.ts';
+	import type { Space, Lookup } from '#lib/masterdata.svelte.ts';
 	import { m } from '#lib/paraglide/messages.js';
 	import { ACTION_LABELS, TRIGGER_LABELS } from '#lib/rules/describe.ts';
 	import {
@@ -27,7 +27,7 @@
 		scopes = [],
 		onscope,
 		lookup,
-		drawers,
+		spaces,
 		errors,
 		general,
 		busy,
@@ -40,7 +40,7 @@
 		scopes?: readonly Scope[];
 		onscope?: (scope: Scope) => void;
 		lookup: Lookup;
-		drawers: readonly Drawer[];
+		spaces: readonly Space[];
 		errors: Record<string, string>;
 		general: string | null;
 		busy: boolean;
@@ -144,7 +144,7 @@
 			<ActionRow
 				{action}
 				{lookup}
-				{drawers}
+				{spaces}
 				error={errors[action.key]}
 				onremove={() => model.actions.splice(index, 1)}
 				onup={index > 0 ? () => move(model.actions, index, -1) : undefined}

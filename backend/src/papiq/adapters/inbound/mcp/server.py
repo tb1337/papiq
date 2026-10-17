@@ -27,10 +27,12 @@ from papiq import __version__
 from papiq.adapters.inbound.context import ApiContext
 from papiq.adapters.inbound.schemas import FieldJson, RuleReportOut, field_json
 from papiq.core.domain.documents import UNSET, Document, DocumentChanges
-from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import DomainError, SearchUnavailableError, ValidationError
 from papiq.core.domain.fields import FieldDefinition, field_from_json
 from papiq.core.domain.ids import ContactId, DocumentId, DocumentTypeId, FieldId, TagId, UserId
+from papiq.core.domain.master_data import TagScope
+from papiq.core.domain.spaces import ShareLevel
+from papiq.core.domain.tag_tree import TagTree
 from papiq.core.ports import DocumentFilter
 from papiq.core.ports.search_index import MAX_HITS
 from papiq.core.services.auth import Principal
@@ -83,10 +85,11 @@ class DocumentOut(BaseModel):
     )
     status: str = Field(description="processing, review, completed or failed.")
     owner_id: UUID
-    drawer_id: UUID
+    space_id: UUID
     access: ShareLevel = Field(description="What you may do: read, or read_write.")
     contact: NameRef | None
     document_type: NameRef | None
+    topic: NameRef | None = Field(description="What the document is about with its contact.")
     tags: list[NameRef]
     document_date: date | None
     fields: dict[str, FieldJson] = Field(
@@ -108,6 +111,7 @@ class SearchItem(BaseModel):
     access: ShareLevel
     contact: NameRef | None
     document_type: NameRef | None
+    topic: NameRef | None
     tags: list[NameRef]
     document_date: date | None
 
@@ -140,8 +144,22 @@ class UpdateOut(BaseModel):
     )
 
 
+class TagRef(BaseModel):
+    id: UUID
+    name: str
+    scope: TagScope = Field(
+        description="document: a tag of documents (use these in search and update_metadata); "
+        "contact: a contact group; document_type: a document type group; topic: a topic "
+        "(the topic of update_metadata)."
+    )
+    path: list[str] = Field(
+        description="The names from the top-level tag down to its own: a document with this "
+        "tag is found by each of them."
+    )
+
+
 class TagsOut(BaseModel):
-    tags: list[NameRef]
+    tags: list[TagRef]
 
 
 @dataclass(frozen=True)
@@ -152,6 +170,7 @@ class Names:
     document_types: dict[UUID, str]
     tags: dict[UUID, str]
     fields: dict[FieldId, FieldDefinition]
+    topics: dict[UUID, str]
 
     @classmethod
     async def load(cls, context: ApiContext, user: UserId) -> "Names":
@@ -159,8 +178,9 @@ class Names:
         return cls(
             contacts={c.id: c.name for c in await master.list_contacts(user)},
             document_types={t.id: t.name for t in await master.list_document_types(user)},
-            tags={t.id: t.name for t in await master.list_tags(user)},
+            tags={t.id: t.name for t in await master.list_tags(user, TagScope.DOCUMENT)},
             fields={a.id: a for a in await master.list_fields(user)},
+            topics={t.id: t.name for t in await master.list_tags(user, TagScope.TOPIC)},
         )
 
     def contact(self, id: UUID | None) -> NameRef | None:
@@ -168,6 +188,9 @@ class Names:
 
     def document_type(self, id: UUID | None) -> NameRef | None:
         return None if id is None else NameRef(id=id, name=self.document_types.get(id, str(id)))
+
+    def topic(self, id: UUID | None) -> NameRef | None:
+        return None if id is None else NameRef(id=id, name=self.topics.get(id, str(id)))
 
     def tag_refs(self, ids: Any) -> list[NameRef]:
         refs = [NameRef(id=i, name=self.tags.get(i, str(i))) for i in ids]
@@ -187,6 +210,9 @@ class Names:
 
     def find_tag(self, name: str) -> TagId:
         return TagId(_find("tag", name, self.tags))
+
+    def find_topic(self, name: str) -> TagId:
+        return TagId(_find("topic", name, self.topics))
 
     def find_field(self, name: str) -> FieldDefinition:
         wanted = name.strip().casefold()
@@ -214,10 +240,11 @@ def document_out(document: Document, access: ShareLevel, names: Names) -> Docume
         lane=None if document.lane is None else document.lane.value,
         status=document.processing.status.value,
         owner_id=document.owner_id,
-        drawer_id=document.drawer_id,
+        space_id=document.space_id,
         access=access,
         contact=names.contact(document.contact_id),
         document_type=names.document_type(document.document_type_id),
+        topic=names.topic(document.topic_id),
         tags=names.tag_refs(document.tag_ids),
         document_date=document.document_date,
         fields={
@@ -264,7 +291,9 @@ def build_server(context: ApiContext, *, text_max: int) -> MCPServer:
         description=(
             "Find documents by words and meaning. Returns the best matches among the documents "
             "you may read, with a snippet of the matching text. Filters (names, any case) "
-            "narrow by contact, document type and tags (all of them)."
+            "narrow by contact, document type, document tags (all of them; a tag matches "
+            "the tags below it too) and topics (one of them, as a document has one topic; a "
+            "topic matches the topics below it too)."
         ),
         annotations=READ_ONLY,
     )
@@ -279,6 +308,9 @@ def build_server(context: ApiContext, *, text_max: int) -> MCPServer:
         tags: Annotated[
             list[str] | None, Field(description="Names of tags.", max_length=50)
         ] = None,
+        topics: Annotated[
+            list[str] | None, Field(description="Names of topics.", max_length=50)
+        ] = None,
     ) -> SearchOut:
         user = principal_of(ctx).id
         if context.search is None:
@@ -292,7 +324,8 @@ def build_server(context: ApiContext, *, text_max: int) -> MCPServer:
                 document_type=(
                     None if document_type is None else names.find_document_type(document_type)
                 ),
-                tags=frozenset(names.find_tag(tag) for tag in tags or ()),
+                tags=tuple(frozenset({names.find_tag(tag)}) for tag in tags or ()),
+                topics=frozenset(names.find_topic(topic) for topic in topics) if topics else None,
             ),
             offset=offset,
             limit=limit,
@@ -308,6 +341,7 @@ def build_server(context: ApiContext, *, text_max: int) -> MCPServer:
                     access=item.access,
                     contact=names.contact(item.document.contact_id),
                     document_type=names.document_type(item.document.document_type_id),
+                    topic=names.topic(item.document.topic_id),
                     tags=names.tag_refs(item.document.tag_ids),
                     document_date=item.document.document_date,
                 )
@@ -319,8 +353,8 @@ def build_server(context: ApiContext, *, text_max: int) -> MCPServer:
 
     @server.tool(
         name="get_document",
-        description="The metadata of a document you may read: title, contact, type, tags, "
-        "date, fields and processing state.",
+        description="The metadata of a document you may read: title, contact, type, topic, "
+        "tags, date, fields and processing state.",
         annotations=READ_ONLY,
     )
     @guarded
@@ -362,11 +396,13 @@ def build_server(context: ApiContext, *, text_max: int) -> MCPServer:
         name="update_metadata",
         description=(
             "Change a document's metadata; needs write access and a read_write token. Leave a "
-            "field out to keep it; give null to remove contact, document type or date. `tags` "
+            "field out to keep it; give null to remove contact, document type, topic or date. "
+            "`topic` names one of the topics the contact enables (another contact that does "
+            "not enable the document's topic removes it). `tags` "
             "is the complete list and replaces the tags. `fields` maps field names to "
             "values (text, choice, link and date as text, number as text or number, boolean, "
             "amount as {amount, currency}, period as {start, end} with YYYY-MM-DD, a single "
-            "day as start = end); null removes a value. Contact, type, tags and "
+            "day as start = end); null removes a value. Contact, type, topic, tags and "
             "fields must exist (see list_tags). The owner's rules that the change "
             "triggers run, as after a change in the web UI."
         ),
@@ -379,6 +415,7 @@ def build_server(context: ApiContext, *, text_max: int) -> MCPServer:
         title: Annotated[str, Field(min_length=1, default_factory=not_given)],
         contact: Annotated[str | None, Field(default_factory=not_given)],
         document_type: Annotated[str | None, Field(default_factory=not_given)],
+        topic: Annotated[str | None, Field(default_factory=not_given)],
         tags: Annotated[list[str], Field(default_factory=not_given, max_length=50)],
         document_date: Annotated[date | None, Field(default_factory=not_given)],
         fields: Annotated[dict[str, Any], Field(default_factory=not_given)],
@@ -392,6 +429,7 @@ def build_server(context: ApiContext, *, text_max: int) -> MCPServer:
             title=UNSET if title is NOT_GIVEN else title,
             contact_id=_reference(contact, names.find_contact),
             document_type_id=_reference(document_type, names.find_document_type),
+            topic_id=_reference(topic, names.find_topic),
             tag_ids=(
                 UNSET if tags is NOT_GIVEN else frozenset(names.find_tag(tag) for tag in tags)
             ),
@@ -414,20 +452,33 @@ def build_server(context: ApiContext, *, text_max: int) -> MCPServer:
 
     @server.tool(
         name="list_tags",
-        description="All tags with their names; use these names in `search` and `update_metadata`.",
+        description=(
+            "The tags with their scope and path, in the order of their trees. Use the names of "
+            "document tags in `search` (a tag finds the documents with a tag below it too) and "
+            "`update_metadata`, those of topics in `search` (`topics`) and as the `topic` of "
+            "`update_metadata`; contact and document type groups describe contacts and types."
+        ),
         annotations=READ_ONLY,
     )
     @guarded
-    async def list_tags(ctx: Context) -> TagsOut:
+    async def list_tags(
+        ctx: Context,
+        scope: Annotated[
+            TagScope | None, Field(description="Only tags of this scope; default: all.")
+        ] = None,
+    ) -> TagsOut:
         user = principal_of(ctx).id
-        tags = await context.master_data.list_tags(user)
-        return TagsOut(tags=sorted((NameRef(id=t.id, name=t.name) for t in tags), key=_by_name))
+        tree = TagTree.of(await context.master_data.list_tags(user))
+        scopes = list(TagScope) if scope is None else [scope]
+        return TagsOut(
+            tags=[
+                TagRef(id=tag.id, name=tag.name, scope=tag.scope, path=tree.path(tag.id))
+                for wanted in scopes
+                for tag in tree.of_scope(wanted)
+            ]
+        )
 
     return server
-
-
-def _by_name(ref: NameRef) -> str:
-    return ref.name.casefold()
 
 
 def _reference[T](name: str | None, find: Callable[[str], T]) -> Any:

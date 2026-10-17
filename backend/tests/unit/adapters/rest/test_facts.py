@@ -169,7 +169,7 @@ async def test_an_admin_attaches_an_identifier_from_a_document(facts_api: Api) -
     attached = await post(api, path, body, auth(admin))
     assert attached.status_code == 200, attached.text
     assert attached.json()["identifiers"] == [
-        {"kind": "customer_number", "value": "20047718", "source": "manual"}
+        {"kind": "customer_number", "value": "20047718", "source": "manual", "topic_id": None}
     ]
     # Counts at once in the document's facts.
     facts = (await api.client.get(f"{url}/facts", headers=auth(owner))).json()

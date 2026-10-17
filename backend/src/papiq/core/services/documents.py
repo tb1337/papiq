@@ -11,12 +11,12 @@ from uuid import UUID
 
 from papiq.core.domain import media_types
 from papiq.core.domain.codes import Code, GiroCode, code_identifiers, codes_from_json, giro_code
-from papiq.core.domain.documents import CONFIRMING, Document, DocumentChanges
-from papiq.core.domain.drawers import Drawer, ShareLevel
+from papiq.core.domain.documents import Document, DocumentChanges, confirms
 from papiq.core.domain.errors import (
     ConflictError,
     NotFoundError,
     PermissionDeniedError,
+    SpaceWriteDeniedError,
     UnprocessableDocumentError,
     ValidationError,
 )
@@ -24,8 +24,9 @@ from papiq.core.domain.exchanges import RunExchange, exchanges_from_json
 from papiq.core.domain.facts import Facts, facts_in
 from papiq.core.domain.fields import FieldType, FieldValue
 from papiq.core.domain.identifiers import IdentifierKind
-from papiq.core.domain.ids import ContactId, DocumentId, DrawerId, FieldId, UserId
+from papiq.core.domain.ids import ContactId, DocumentId, FieldId, SpaceId, TagId, UserId
 from papiq.core.domain.locations import Box, Location
+from papiq.core.domain.master_data import Assignment
 from papiq.core.domain.permissions import (
     can_control_document,
     can_manage_master_data,
@@ -35,6 +36,7 @@ from papiq.core.domain.permissions import (
     in_reach,
 )
 from papiq.core.domain.pipeline import Lane, Node, NodeRun
+from papiq.core.domain.spaces import ShareLevel, Space
 from papiq.core.domain.users import User
 from papiq.core.ports import (
     NEWEST_FIRST,
@@ -52,12 +54,13 @@ from papiq.core.ports import (
 )
 from papiq.core.ports.pages import PAGE_MEDIA_TYPE
 from papiq.core.services._access import (
-    check_references,
+    checked_changes,
     load_actor,
     readable_document,
-    visible_drawer,
+    visible_space,
     writable_document,
 )
+from papiq.core.services._tags import expanded, tag_counts
 from papiq.core.services.inbox import InboxItem, Review, node_reviews, open_nodes
 from papiq.core.services.maintenance import REMOVE_FILES_JOB
 from papiq.core.services.objects import (
@@ -83,12 +86,12 @@ MAX_PAGE = 200
 @dataclass(frozen=True)
 class MetadataChange:
     """A changed document; the caller's access afterwards (None if the rules filed it where
-    the caller cannot see it); its drawer; the rules' run, for the owner and admins; the state
+    the caller cannot see it); its space; the rules' run, for the owner and admins; the state
     before the change."""
 
     document: Document
     access: ShareLevel | None
-    drawer: Drawer
+    space: Space
     rules: RuleRun | None = None
     before: Document | None = None
 
@@ -241,8 +244,8 @@ class DocumentService:
     async def view(self, actor: UserId, id: DocumentId) -> DocumentView:
         async with self._uow() as uow:
             user = await load_actor(uow, actor)
-            document, drawer = await readable_document(uow, user, id)
-            access = document_access(user, document, drawer)
+            document, space = await readable_document(uow, user, id)
+            access = document_access(user, document, space)
         assert access is not None  # readable
         return DocumentView(document, access)
 
@@ -350,6 +353,7 @@ class DocumentService:
         async with self._uow() as uow:
             user = await _lister(uow, actor, all_users)
             position = await _position(uow, order, after)
+            filter = await expanded(uow, filter)
             if all_users:
                 documents = await uow.documents.query(
                     filter, order=order, after=position, limit=limit
@@ -358,12 +362,12 @@ class DocumentService:
                 documents = await uow.documents.query_visible(
                     actor, filter, order=order, after=position, limit=limit
                 )
-            drawers: dict[DrawerId, Drawer] = {}
+            spaces: dict[SpaceId, Space] = {}
             views = []
             for document in documents:
-                if document.drawer_id not in drawers:
-                    drawers[document.drawer_id] = await uow.drawers.get(document.drawer_id)
-                access = document_access(user, document, drawers[document.drawer_id])
+                if document.space_id not in spaces:
+                    spaces[document.space_id] = await uow.spaces.get(document.space_id)
+                access = document_access(user, document, spaces[document.space_id])
                 if access is None:
                     log.error(
                         "the repository listed a document the user may not read",
@@ -431,10 +435,15 @@ class DocumentService:
         self, actor: UserId, by: CountBy, *, all_users: bool = False
     ) -> dict[UUID, int]:
         """How many documents within the caller's reach (with `all_users`, admins only: every
-        document) have each contact, type or tag, or a value for each field; one query."""
+        document) have each contact, type or tag, or a value for each field. A tag counts what
+        its filter finds: the documents with it or a tag below it (each once), a group those
+        whose contact or type is in it or a group below it (`_tags.tag_counts`)."""
         async with self._uow() as uow:
             await _lister(uow, actor, all_users)
-            return await uow.documents.count_by(by, None if all_users else actor)
+            user = None if all_users else actor
+            if by is CountBy.TAG:
+                return await tag_counts(uow, user)
+            return await uow.documents.count_by(by, user)
 
     async def list_visible(self, actor: UserId) -> list[Document]:
         async with self._uow() as uow:
@@ -450,11 +459,11 @@ class DocumentService:
             document = await uow.documents.find(id)
             if document is None:
                 return set()
-            drawer = await uow.drawers.get(document.drawer_id)
+            space = await uow.spaces.get(document.space_id)
             readers: set[UserId] = set()
             for candidate in set(candidates):
                 user = await uow.users.find(candidate)
-                if user is not None and can_read_document(user, document, drawer):
+                if user is not None and can_read_document(user, document, space):
                     readers.add(candidate)
             return readers
 
@@ -545,7 +554,10 @@ class DocumentService:
     async def update_metadata(
         self, actor: UserId, id: DocumentId, changes: DocumentChanges
     ) -> Document:
-        """Needs write access. Referenced contact, type, tags and fields must exist."""
+        """Needs write access. Referenced contact, type, topic, tags and fields must exist; the
+        topic is one the contact enables, or an admin's choice enables it there
+        (`_access.checked_changes`). A change of confirming metadata confirms the document,
+        unless it only adds or removes tags set by hand (`documents.confirms`)."""
         return (await self.change_metadata(actor, id, changes)).document
 
     async def change_metadata(
@@ -564,11 +576,17 @@ class DocumentService:
         async with self._uow() as uow:
             user = await load_actor(uow, actor)
             document, _ = await writable_document(uow, user, id)
-            await check_references(uow, changes)
+            # What the person decided is the change as given; one the checks add (a topic the
+            # new contact does not enable, cleared) is none of their decisions.
+            given = changes
+            changes = await checked_changes(uow, given, document, user)
             definitions = {item.id: item for item in await uow.fields.list_all()}
             now = self._clock.now()
             before = copy.deepcopy(document)
-            if CONFIRMING & set(document.apply_changes(changes, definitions, now)):
+            changed = document.apply_changes(changes, definitions, now)
+            if confirms(
+                changed, before.tag_ids, document.tag_ids, await _manual(uow, before, document)
+            ):
                 document.mark_confirmed(now)
             run = None
             if rules is not None:
@@ -577,36 +595,36 @@ class DocumentService:
                     actor=user,
                     before=before,
                     document=document,
-                    changes=changes,
+                    changes=given,
                     prepared=prepared,
                     definitions=definitions,
                     now=now,
                     log=not dry_run,
                 )
-            drawer = await uow.drawers.get(document.drawer_id)
-            access = document_access(user, document, drawer)
+            space = await uow.spaces.get(document.space_id)
+            access = document_access(user, document, space)
             if not dry_run:
                 await _save(uow, document)
                 await uow.commit()
         report = can_control_document(user, document)
-        return MetadataChange(document, access, drawer, run if report else None, before)
+        return MetadataChange(document, access, space, run if report else None, before)
 
-    async def move(self, actor: UserId, id: DocumentId, drawer: DrawerId) -> None:
-        """The owner moves into a drawer they may write to; an admin moves any document into
-        any drawer."""
+    async def move(self, actor: UserId, id: DocumentId, space: SpaceId) -> None:
+        """The owner moves into a space they may write to; an admin moves any document into
+        any space."""
         async with self._uow() as uow:
             user = await load_actor(uow, actor)
             document, _ = await readable_document(uow, user, id)
             if not can_control_document(user, document):
                 raise PermissionDeniedError(f"only the owner moves document {id}")
-            target = await visible_drawer(uow, user, drawer)
+            target = await visible_space(uow, user, space)
             if not can_move_document(user, document, target):
-                raise PermissionDeniedError(f"no write access to drawer {drawer}")
+                raise SpaceWriteDeniedError(space, str(space))
             now = self._clock.now()
             document.move_to(target.id, now)
             if self._rules is not None:
                 await uow.processing_log.append(
-                    self._rules.drawer_chosen(document, actor=user, now=now)
+                    self._rules.space_chosen(document, actor=user, now=now)
                 )
             await _save(uow, document)
             await uow.commit()
@@ -643,16 +661,26 @@ async def _lister(uow: UnitOfWork, actor: UserId, all_users: bool) -> User:
 
 async def _readers(uow: UnitOfWork, document: Document) -> list[UserId]:
     """The users who have the document within their reach now (`in_reach`): its owner, and
-    while it is green the owner of its drawer and the users the drawer is shared with (if their
+    while it is green the owner of its space and the users the space is shared with (if their
     accounts are active). Admins hear of the deletion through their rights, not this list."""
-    drawer = await uow.drawers.get(document.drawer_id)
-    candidates = {document.owner_id, drawer.owner_id, *drawer.shares}
+    space = await uow.spaces.get(document.space_id)
+    candidates = {document.owner_id, space.owner_id, *space.shares}
     readers = []
     for candidate in candidates:
         user = await uow.users.find(candidate)
-        if user is not None and in_reach(user, document, drawer):
+        if user is not None and in_reach(user, document, space):
             readers.append(candidate)
     return sorted(readers)
+
+
+async def _manual(uow: UnitOfWork, before: Document, after: Document) -> frozenset[TagId]:
+    """The tags added or removed between `before` and `after` that are set by hand only."""
+    manual = set()
+    for id in before.tag_ids ^ after.tag_ids:
+        tag = await uow.tags.find(id)
+        if tag is not None and tag.assignment is Assignment.MANUAL:
+            manual.add(id)
+    return frozenset(manual)
 
 
 async def _save(uow: UnitOfWork, document: Document) -> None:

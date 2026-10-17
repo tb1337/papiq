@@ -35,6 +35,9 @@ class FoundIdentifierOut(BaseModel):
     contact_id: UUID | None = Field(
         description="The contact it is an identifier of (entered or learned); null if none."
     )
+    topic_id: UUID | None = Field(
+        default=None, description="The topic of the contact it points to, if any."
+    )
     in_text: bool
     in_code: bool = Field(description="A code on the pages holds it.")
     spans: list[SpanOut] = Field(description="Where it stands in the text.")
@@ -164,6 +167,7 @@ class FactsOut(BaseModel):
                     kind=item.kind,
                     value=item.value,
                     contact_id=item.contact_id,
+                    topic_id=item.topic_id,
                     in_text=item.in_text,
                     in_code=item.in_code,
                     spans=[SpanOut.of(span) for span in item.spans],

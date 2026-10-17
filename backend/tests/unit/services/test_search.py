@@ -8,7 +8,6 @@ import pytest
 
 from papiq.adapters.outbound.memory import FakeEmbeddings
 from papiq.core.domain.documents import Document, DocumentChanges
-from papiq.core.domain.drawers import Drawer, ShareLevel
 from papiq.core.domain.errors import (
     AuthenticationError,
     PermissionDeniedError,
@@ -17,6 +16,7 @@ from papiq.core.domain.errors import (
 )
 from papiq.core.domain.ids import DocumentId
 from papiq.core.domain.pipeline import Node
+from papiq.core.domain.spaces import ShareLevel, Space
 from papiq.core.domain.users import Role, User
 from papiq.core.ports import (
     DocumentFilter,
@@ -36,7 +36,7 @@ class Scene:
     owner: User
     reader: User
     stranger: User
-    shared: Drawer
+    shared: Space
     shared_document: Document
     private_document: Document
 
@@ -59,8 +59,8 @@ async def scene(world: World) -> Scene:
     scene.setup = Setup(world)
     scene.owner, scene.reader = await world.user("owner"), await world.user("reader")
     scene.stranger = await world.user("stranger")
-    scene.shared = await world.drawers.create(scene.owner.id, "Household")
-    await world.drawers.share(scene.owner.id, scene.shared.id, scene.reader.id, ShareLevel.READ)
+    scene.shared = await world.spaces.create(scene.owner.id, "Household")
+    await world.spaces.share(scene.owner.id, scene.shared.id, scene.reader.id, ShareLevel.READ)
     scene.shared_document = await scene.setup.document(scene.owner, "Stromrechnung September")
     await world.documents.move(scene.owner.id, scene.shared_document.id, scene.shared.id)
     scene.private_document = await scene.setup.document(scene.owner, "Mietvertrag Wohnung")
@@ -80,7 +80,7 @@ async def test_the_owner_finds_everything_in_any_lane(scene: Scene) -> None:
     assert await scene.ids(scene.owner, "Mietvertrag") == {scene.private_document.id}
 
 
-async def test_others_find_green_documents_of_shared_drawers_only(scene: Scene) -> None:
+async def test_others_find_green_documents_of_shared_spaces_only(scene: Scene) -> None:
     assert await scene.ids(scene.reader, "Stromrechnung") == {scene.shared_document.id}
     assert await scene.ids(scene.reader, "Mietvertrag") == set()
     assert await scene.ids(scene.stranger, "Stromrechnung") == set()
@@ -111,7 +111,7 @@ async def test_a_yellow_document_is_not_found_by_others(scene: Scene) -> None:
 
 
 async def test_a_withdrawn_share_hides_the_documents_at_once(scene: Scene) -> None:
-    await scene.setup.world.drawers.unshare(scene.owner.id, scene.shared.id, scene.reader.id)
+    await scene.setup.world.spaces.unshare(scene.owner.id, scene.shared.id, scene.reader.id)
     assert await scene.ids(scene.reader, "Stromrechnung") == set()
 
 
@@ -126,15 +126,15 @@ async def test_the_database_is_asked_again_when_the_index_is_behind(scene: Scene
     assert await scene.ids(scene.reader, "Stromrechnung") == set()
 
     await world.documents.move(scene.owner.id, scene.private_document.id, scene.shared.id)
-    assert scene.setup.entry(scene.private_document.id).drawer_id != scene.shared.id
+    assert scene.setup.entry(scene.private_document.id).space_id != scene.shared.id
     assert await scene.ids(scene.reader, "Mietvertrag") == set()  # not in the index for reader
 
 
-async def test_a_document_moved_out_of_a_shared_drawer_is_dropped(scene: Scene) -> None:
+async def test_a_document_moved_out_of_a_shared_space_is_dropped(scene: Scene) -> None:
     world = scene.setup.world
-    private = await world.drawers.create(scene.owner.id, "Private")
+    private = await world.spaces.create(scene.owner.id, "Private")
     await world.documents.move(scene.owner.id, scene.shared_document.id, private.id)
-    assert scene.setup.entry(scene.shared_document.id).drawer_id == scene.shared.id  # still
+    assert scene.setup.entry(scene.shared_document.id).space_id == scene.shared.id  # still
     assert await scene.ids(scene.reader, "Stromrechnung") == set()
 
 
@@ -324,8 +324,8 @@ async def test_the_index_never_sees_a_query_without_the_callers_rights(scene: Sc
     await service.search(scene.reader.id, "Strom")
     (query,) = seen
     assert query.visibility.user == scene.reader.id
-    assert scene.shared.id in query.visibility.drawers
-    assert len(query.visibility.drawers) == 2  # the shared drawer and the reader's own
+    assert scene.shared.id in query.visibility.spaces
+    assert len(query.visibility.spaces) == 2  # the shared space and the reader's own
 
 
 def test_policy_ratio_is_checked() -> None:

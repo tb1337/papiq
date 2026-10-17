@@ -8,10 +8,10 @@ from typing import Any
 
 from papiq.adapters.outbound.liquid import LiquidTemplateRenderer
 from papiq.core.domain.documents import Document, Sha256
-from papiq.core.domain.drawers import Drawer
-from papiq.core.domain.ids import DocumentId, DrawerId, UserId, new_id
+from papiq.core.domain.ids import DocumentId, SpaceId, UserId, new_id
 from papiq.core.domain.pipeline import Lane, Node, NodeResult, Outcome
 from papiq.core.domain.search import IndexDocument
+from papiq.core.domain.spaces import Space
 from papiq.core.domain.users import Role, User
 from papiq.core.services.pipeline import IncomingFile, PipelineService, PlaceholderNode
 
@@ -46,12 +46,12 @@ def admin(name: str | None = None) -> User:
     return user(name, role=Role.ADMIN)
 
 
-def drawer(owner: User, name: str | None = None) -> Drawer:
-    return Drawer.create(owner_id=owner.id, name=name or _unique("drawer"), now=NOW)
+def space(owner: User, name: str | None = None) -> Space:
+    return Space.create(owner_id=owner.id, name=name or _unique("space"), now=NOW)
 
 
-def default_drawer(owner: User) -> Drawer:
-    return Drawer.create_default(owner_id=owner.id, now=NOW)
+def default_space(owner: User) -> Space:
+    return Space.create_default(owner_id=owner.id, now=NOW)
 
 
 def sha256(content: str | None = None) -> Sha256:
@@ -60,7 +60,7 @@ def sha256(content: str | None = None) -> Sha256:
 
 def document(
     owner: User | UserId,
-    in_drawer: Drawer | DrawerId,
+    in_space: Space | SpaceId,
     *,
     content: str | None = None,
     filename: str = "scan.pdf",
@@ -68,7 +68,7 @@ def document(
     """A freshly received document; OCR is due."""
     document = Document.receive(
         owner_id=owner.id if isinstance(owner, User) else owner,
-        drawer_id=in_drawer.id if isinstance(in_drawer, Drawer) else in_drawer,
+        space_id=in_space.id if isinstance(in_space, Space) else in_space,
         sha256=sha256(content),
         original_filename=filename,
         media_type="application/pdf",
@@ -93,13 +93,13 @@ def run_pipeline(document: Document, results: dict[Node, NodeResult] | None = No
 
 def processed(
     owner: User,
-    in_drawer: Drawer,
+    in_space: Space,
     results: dict[Node, NodeResult] | None = None,
     *,
     content: str | None = None,
 ) -> Document:
     """A document whose pipeline has run; green unless `results` say otherwise."""
-    result = run_pipeline(document(owner, in_drawer, content=content), results)
+    result = run_pipeline(document(owner, in_space, content=content), results)
     result.pull_events()
     return result
 
@@ -124,13 +124,13 @@ def skip_classification(pipeline: PipelineService) -> PipelineService:
 
 
 def index_document(**fields: Any) -> IndexDocument:
-    """A green document of a random owner in a random drawer, for the search index; `fields`
+    """A green document of a random owner in a random space, for the search index; `fields`
     override any of its fields."""
     values: dict[str, Any] = {
         "id": DocumentId(new_id()),
         "version": 1,
         "owner_id": UserId(new_id()),
-        "drawer_id": DrawerId(new_id()),
+        "space_id": SpaceId(new_id()),
         "lane": Lane.GREEN,
         "title": _unique("title"),
         "filename": "scan.pdf",

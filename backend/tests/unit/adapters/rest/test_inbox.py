@@ -114,7 +114,7 @@ async def test_confirm_from_the_inbox(api: Api) -> None:
     assert undecided.headers["content-type"] == PROBLEM
     assert undecided.json()["open_fields"] == ["document_date"]
 
-    for body in ({"resume_at": "file"}, {"changes": {"drawer_id": "x"}}, {"other": 1}):
+    for body in ({"resume_at": "file"}, {"changes": {"space_id": "x"}}, {"other": 1}):
         invalid = await api.client.post(f"{url}/confirm", json=body, headers=auth(owner))
         assert invalid.status_code == 422, body
 

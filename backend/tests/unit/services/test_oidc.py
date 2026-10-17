@@ -73,7 +73,7 @@ async def test_accounts_can_be_created_at_first_sign_in(world: World) -> None:
     assert outcome.signed_in is not None
     bob = outcome.signed_in.user
     assert bob.username == "bob" and bob.role is Role.USER
-    assert (await world.default_drawer(bob)).is_default
+    assert (await world.default_space(bob)).is_default
     again = await round_trip(service, world, await service.begin(), "sub-bob", username="robert")
     assert again.signed_in is not None and again.signed_in.user.id == bob.id
 

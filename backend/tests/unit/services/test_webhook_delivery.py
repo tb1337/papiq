@@ -9,7 +9,6 @@ from datetime import timedelta
 import pytest
 
 from papiq.core.domain.documents import Document
-from papiq.core.domain.drawers import Drawer, ShareLevel
 from papiq.core.domain.errors import NotFoundError, TooManyAttemptsError
 from papiq.core.domain.events import (
     DocumentDeleted,
@@ -20,6 +19,7 @@ from papiq.core.domain.events import (
 from papiq.core.domain.ids import DocumentId, WebhookId, new_id
 from papiq.core.domain.jobs import Job, JobStatus
 from papiq.core.domain.pipeline import Lane
+from papiq.core.domain.spaces import ShareLevel, Space
 from papiq.core.domain.users import Role, User
 from papiq.core.domain.webhooks import (
     DISABLED_FAILING,
@@ -43,11 +43,11 @@ async def hook(world: World, owner: User, *types: str, url: str = URL) -> tuple[
 
 
 async def seed(
-    world: World, owner: User, drawer: Drawer | None = None, *, green: bool = True
+    world: World, owner: User, space: Space | None = None, *, green: bool = True
 ) -> Document:
     """A document of the owner; green, or still in processing."""
-    drawer = drawer or await world.default_drawer(owner)
-    document = builders.processed(owner, drawer) if green else builders.document(owner, drawer)
+    space = space or await world.default_space(owner)
+    document = builders.processed(owner, space) if green else builders.document(owner, space)
     async with world.uow() as uow:
         await uow.documents.add(document)
         await uow.commit()
@@ -93,10 +93,10 @@ async def test_an_event_is_queued_for_each_webhook_that_wants_its_type(world: Wo
 
 async def test_only_those_who_may_read_the_document_are_told(world: World) -> None:
     owner, friend, stranger = await world.user(), await world.user(), await world.user()
-    shared = builders.drawer(owner, "shared")
+    shared = builders.space(owner, "shared")
     shared.share(friend.id, ShareLevel.READ)
     async with world.uow() as uow:
-        await uow.drawers.add(shared)
+        await uow.spaces.add(shared)
         await uow.commit()
     in_shared = await seed(world, owner, shared)
     private = await seed(world, owner)
@@ -116,12 +116,12 @@ async def test_only_those_who_may_read_the_document_are_told(world: World) -> No
 
 async def test_an_admins_webhooks_report_their_reach_only(world: World) -> None:
     """Tobi, 08.10.2026: admins read everything, but their webhooks report only what they reach
-    as a user: their own documents and green ones in their drawers and shares."""
+    as a user: their own documents and green ones in their spaces and shares."""
     admin, user = await world.user(role=Role.ADMIN), await world.user()
-    shared = builders.drawer(user, "shared")
+    shared = builders.space(user, "shared")
     shared.share(admin.id, ShareLevel.READ)
     async with world.uow() as uow:
-        await uow.drawers.add(shared)
+        await uow.spaces.add(shared)
         await uow.commit()
     foreign = await seed(world, user)
     in_share = await seed(world, user, shared)
@@ -140,7 +140,7 @@ async def test_an_admins_webhooks_report_their_reach_only(world: World) -> None:
 
     # The rights are checked again when sending: still the reach, although the admin may
     # read the document.
-    await world.drawers.unshare(user.id, shared.id, admin.id)
+    await world.spaces.unshare(user.id, shared.id, admin.id)
     assert await run_all(service) == 2
     rows = await log(world, webhook)
     dropped = [row.document_id for row in rows if row.outcome is DeliveryOutcome.DROPPED]
@@ -160,14 +160,12 @@ async def test_filed_is_skipped_while_the_document_has_no_lane(world: World) -> 
     user = await world.user()
     await hook(world, user, "document.filed")
     service = world.webhook_delivery()
-    drawer = await world.default_drawer(user)
+    space = await world.default_space(user)
     early = await seed(world, user, green=False)
-    await service.on_event(
-        DocumentFiled(occurred_at=NOW, document_id=early.id, drawer_id=drawer.id)
-    )
+    await service.on_event(DocumentFiled(occurred_at=NOW, document_id=early.id, space_id=space.id))
     assert deliveries(world) == []
     done = await seed(world, user)
-    await service.on_event(DocumentFiled(occurred_at=NOW, document_id=done.id, drawer_id=drawer.id))
+    await service.on_event(DocumentFiled(occurred_at=NOW, document_id=done.id, space_id=space.id))
     assert len(deliveries(world)) == 1
 
 
@@ -376,16 +374,16 @@ async def test_a_webhook_is_switched_off_after_repeated_failures_and_success_res
 
 async def test_a_lost_right_drops_the_delivery_without_sending(world: World) -> None:
     owner, friend = await world.user(), await world.user()
-    shared = builders.drawer(owner, "shared")
+    shared = builders.space(owner, "shared")
     shared.share(friend.id, ShareLevel.READ)
     async with world.uow() as uow:
-        await uow.drawers.add(shared)
+        await uow.spaces.add(shared)
         await uow.commit()
     document = await seed(world, owner, shared)
     webhook, _ = await hook(world, friend)
     service = world.webhook_delivery()
     await queue(world, document, service)
-    await world.drawers.unshare(owner.id, shared.id, friend.id)
+    await world.spaces.unshare(owner.id, shared.id, friend.id)
 
     assert await service.run_next_job()
     assert world.sender.requests == []

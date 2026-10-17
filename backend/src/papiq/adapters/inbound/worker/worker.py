@@ -1,7 +1,8 @@
 """The worker service: runs background jobs, delivers events and keeps the cleanup scheduled.
 
 - `concurrency` job loops claim and run due jobs (the cleanup when due, then search indexing,
-  else pipeline nodes, rule applications, and last the classifier's check and training);
+  else pipeline nodes, rule applications, normalising tags after a move, logos of contacts, and
+  last the classifier's check and training);
   a loop that finds nothing waits `poll_interval`.
 - `webhook_concurrency` further loops deliver webhooks, apart from the job loops: a receiver that
   does not answer holds up deliveries, never the pipeline.
@@ -24,7 +25,9 @@ from datetime import timedelta
 from papiq.core.ports import EventBus
 from papiq.core.services.classifier import ClassifierService
 from papiq.core.services.indexing import IndexingService
+from papiq.core.services.logos import LogoService
 from papiq.core.services.maintenance import MaintenanceService
+from papiq.core.services.master_data import MasterDataService
 from papiq.core.services.pipeline import PipelineService
 from papiq.core.services.rules.retroactive import RuleApplicationService
 from papiq.core.services.webhooks import WebhookDeliveryService
@@ -50,8 +53,12 @@ class Worker:
         webhooks: WebhookDeliveryService | None = None,
         webhook_concurrency: int = 4,
         classifier: ClassifierService | None = None,
+        logos: LogoService | None = None,
+        master_data: MasterDataService | None = None,
     ) -> None:
         self._pipeline = pipeline
+        self._master_data = master_data
+        self._logos = logos
         self._classifier = classifier
         self._rules = rules
         self._maintenance = maintenance
@@ -130,6 +137,8 @@ class Worker:
             or (self._indexing is not None and await self._indexing.run_next_job())
             or await self._pipeline.run_next_job()
             or (self._rules is not None and await self._rules.run_next_job())
+            or (self._master_data is not None and await self._master_data.run_next_job())
+            or (self._logos is not None and await self._logos.run_next_job())
             # Training waits for a quiet moment: during a bulk ingest it would be outdated soon.
             or (self._classifier is not None and await self._classifier.run_next_job())
         )

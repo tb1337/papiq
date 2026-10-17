@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import ClassVar
 
-from papiq.core.domain.ids import DocumentId, DrawerId, EventId, UserId, new_id
+from papiq.core.domain.ids import DocumentId, EventId, SpaceId, UserId, new_id
 from papiq.core.domain.pipeline import Lane, Node, Outcome
 from papiq.core.domain.validation import require_utc
 
@@ -74,7 +74,7 @@ class LaneChanged(DocumentEvent):
 @dataclass(frozen=True, kw_only=True)
 class DocumentFiled(DocumentEvent):
     type: ClassVar[str] = "document.filed"
-    drawer_id: DrawerId
+    space_id: SpaceId
 
 
 @dataclass(frozen=True, kw_only=True)

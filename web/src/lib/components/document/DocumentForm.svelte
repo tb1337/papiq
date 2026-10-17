@@ -14,12 +14,16 @@
 	import { ApiError } from '#lib/api/problem.ts';
 	import type { components } from '#lib/api/schema.ts';
 	import { BASE } from '#lib/base.ts';
+	import ContactAvatar from '#lib/components/ContactAvatar.svelte';
 	import FieldGroup from '#lib/components/document/FieldGroup.svelte';
 	import FieldShell from '#lib/components/document/FieldShell.svelte';
 	import TagsInput from '#lib/components/document/TagsInput.svelte';
+	import TopicInput from '#lib/components/document/TopicInput.svelte';
+	import GroupChips from '#lib/components/GroupChips.svelte';
 	import FieldValueInput from '#lib/components/FieldValueInput.svelte';
 	import NativeSelect from '#lib/components/NativeSelect.svelte';
 	import RuleEffects from '#lib/components/rules/RuleEffects.svelte';
+	import TypeIcon from '#lib/components/TypeIcon.svelte';
 	import { Button } from '#lib/components/ui/button/index.ts';
 	import * as Dialog from '#lib/components/ui/dialog/index.ts';
 	import { Input } from '#lib/components/ui/input/index.ts';
@@ -35,16 +39,17 @@
 	import { describeError, fieldErrors as fieldMessages } from '#lib/errors.ts';
 	import { sameValue, toApi, toInput, type ApiValue, type InputValue } from '#lib/fields.ts';
 	import {
-		drawerLabel,
+		spaceLabel,
 		fieldsFor,
 		type FieldDefinition,
 		type Lookup
 	} from '#lib/masterdata.svelte.ts';
-	import { writableDrawers } from '#lib/permissions.ts';
+	import { writableSpaces } from '#lib/permissions.ts';
 	import { NODE_LABELS } from '#lib/node-labels.ts';
 	import { m } from '#lib/paraglide/messages.js';
 	import { fieldId, initialValue, isRuleField, type ReviewValue } from '#lib/review.ts';
 	import { session } from '#lib/session.svelte.ts';
+	import { ofScope } from '#lib/tags.ts';
 
 	type Document = components['schemas']['DocumentDetails'];
 	type Patch = components['schemas']['DocumentPatch'];
@@ -66,6 +71,7 @@
 		onconfirmed,
 		onmarks,
 		onreveal,
+		onenabled,
 		factCounts = null,
 		factsHref = ''
 	}: {
@@ -81,6 +87,8 @@
 		onconfirmed: (next: string | null) => void;
 		onmarks: (marks: Mark[]) => void;
 		onreveal: (place: Place) => void;
+		/** An admin's choice enabled the topic at the contact: the master data changed. */
+		onenabled?: () => void;
 		/** What the document shows of its contact, counted; a chip at the contact leads there. */
 		factCounts?: { evidence: number; unknown: number; codes: number } | null;
 		/** Where the facts are: the content. */
@@ -103,10 +111,11 @@
 	let title = $state('');
 	let date = $state('');
 	let contact = $state('');
+	let topic = $state('');
 	let documentType = $state('');
 	let tags = $state<string[]>([]);
 	let values = $state<Record<string, InputValue>>({});
-	let drawerId = $state('');
+	let spaceId = $state('');
 	let openNext = $state(true);
 	let busy = $state(false);
 	let preview = $state<Preview | null>(null);
@@ -133,21 +142,22 @@
 	const nodeNotes = $derived(
 		review?.open.filter((node) => node.outcome === 'uncertain' && node.fields.length === 0) ?? []
 	);
-	const hasDrawer = $derived(reviewing && openChecks.some((check) => check.field === 'drawer'));
+	const hasSpace = $derived(reviewing && openChecks.some((check) => check.field === 'space'));
 	// Something to confirm. A failed node alone is repeated, not confirmed; its document can
 	// still be changed (dry run and save).
-	const confirming = $derived(reviewing && (!failedNode || decisions.length > 0 || hasDrawer));
-	// The owner confirms into drawers they may write to; an admin into any drawer.
-	const drawers = $derived(writableDrawers(lookup.drawers, session.user));
+	const confirming = $derived(reviewing && (!failedNode || decisions.length > 0 || hasSpace));
+	// The owner confirms into spaces they may write to; an admin into any space.
+	const spaces = $derived(writableSpaces(lookup.spaces, session.user));
 
 	const snapshot = () =>
-		JSON.stringify([title, date, contact, documentType, tags, values, drawerId]);
+		JSON.stringify([title, date, contact, topic, documentType, tags, values, spaceId]);
 	let baseline: { id: string; form: string; reviewing: boolean } | null = null;
 
 	function assign(key: string, value: ReviewValue) {
 		const id = fieldId(key);
 		if (id !== null) values[id] = value as InputValue;
-		else if (key === 'contact') contact = value as string;
+		else if (key === 'contact') chooseContact(value as string);
+		else if (key === 'topic') topic = value as string;
 		else if (key === 'document_type') documentType = value as string;
 		else if (key === 'document_date') date = value as string;
 		else if (key === 'tags') tags = [...(value as string[])];
@@ -160,12 +170,13 @@
 		title = document.title;
 		date = document.document_date ?? '';
 		contact = document.contact_id ?? '';
+		topic = document.topic_id ?? '';
 		documentType = document.document_type_id ?? '';
 		tags = [...document.tag_ids];
 		values = Object.fromEntries(
 			lookup.fields.map((field) => [field.id, toInput(field.data_type, document.fields[field.id])])
 		);
-		drawerId = document.drawer_id;
+		spaceId = document.space_id;
 		if (reviewing) {
 			for (const check of decisions)
 				assign(check.field, initialValue(check, document, lookup.fields));
@@ -178,10 +189,39 @@
 		const id = fieldId(key);
 		if (id !== null) return document.fields[id] ?? null;
 		if (key === 'contact') return document.contact_id;
+		if (key === 'topic') return document.topic_id;
 		if (key === 'document_type') return document.document_type_id;
 		if (key === 'document_date') return document.document_date;
 		if (key === 'tags') return document.tag_ids;
 		return null;
+	}
+
+	// The topics of the chosen contact; an admin may choose any (it is then enabled at the
+	// contact). Another contact keeps the topic only if it enables it, as the API does.
+	const enabledTopics = $derived(
+		lookup.contacts.find((entry) => entry.id === contact)?.topic_ids ?? []
+	);
+	const topicChoices = $derived(
+		ofScope(lookup.tags, 'topic').filter(
+			(option) =>
+				option.id === topic ||
+				(contact !== '' && (session.isAdmin || enabledTopics.includes(option.id)))
+		)
+	);
+	const enablesTopic = $derived(topic !== '' && contact !== '' && !enabledTopics.includes(topic));
+	const topicCheck = $derived(evidence.get('topic')?.check);
+	// Papiq suggests a topic it did not set (a topic never waits): a card with the candidates.
+	const topicAdvice = $derived(
+		topic === '' &&
+			topicCheck !== undefined &&
+			(topicCheck.value ?? null) === null &&
+			(topicCheck.candidates?.length ?? 0) > 0
+	);
+
+	function chooseContact(value: string) {
+		contact = value;
+		const topics = lookup.contacts.find((entry) => entry.id === value)?.topic_ids ?? [];
+		if (topic !== '' && !topics.includes(topic)) topic = '';
 	}
 
 	$effect(() => {
@@ -207,6 +247,8 @@
 
 	// Fields that fit the chosen type, and those the document has without fitting it.
 	const fitting = $derived(fieldsFor(lookup.fields, documentType || null));
+	const chosenContact = $derived(lookup.contacts.find((entry) => entry.id === contact));
+	const chosenType = $derived(lookup.documentTypes.find((entry) => entry.id === documentType));
 	const globalFields = $derived(fitting.filter((field) => field.document_type_ids === null));
 	const typeFields = $derived(fitting.filter((field) => field.document_type_ids !== null));
 	const otherFields = $derived(
@@ -229,6 +271,18 @@
 		if (title.trim() !== document.title) next.title = title.trim();
 		if ((date || null) !== document.document_date) next.document_date = date || null;
 		if ((contact || null) !== document.contact_id) next.contact_id = contact || null;
+		const chosen = topic || null;
+		const kept = document.topic_id ?? null;
+		if ('contact_id' in next) {
+			// Another contact keeps the topic if it enables it and clears it otherwise (the API
+			// does both): only the person's own choice is sent. Another topic; the stored one
+			// cleared where the contact enables it; or the stored one chosen again where it
+			// does not (an admin's choice enables it there).
+			const enabled = (id: string) => enabledTopics.includes(id);
+			if (chosen !== null ? chosen !== kept || !enabled(chosen) : kept !== null && enabled(kept)) {
+				next.topic_id = chosen;
+			}
+		} else if (chosen !== kept) next.topic_id = chosen;
 		if ((documentType || null) !== document.document_type_id) {
 			next.document_type_id = documentType || null;
 		}
@@ -261,9 +315,11 @@
 			if (id !== null) {
 				const field = lookup.fields.find((entry) => entry.id === id);
 				// Extracted again for the new type: a suggestion must not count as the owner's.
-				if (typeChanged) delete fields[id];
+				// A field set by hand is never extracted: what the owner entered stays.
+				if (typeChanged && field?.assignment !== 'manual') delete fields[id];
 				else if (field) fields[id] = toApi(field.data_type, values[id]);
 			} else if (check.field === 'contact') changes.contact_id = contact || null;
+			else if (check.field === 'topic') changes.topic_id = topic || null;
 			else if (check.field === 'document_type') changes.document_type_id = documentType || null;
 			else if (check.field === 'document_date') changes.document_date = date || null;
 			else if (check.field === 'tags') changes.tag_ids = [...tags];
@@ -274,7 +330,7 @@
 			changes,
 			accept_suggestions: false,
 			resume_at: typeChanged ? 'fields' : 'apply_rules',
-			...(hasDrawer && drawerId && drawerId !== document.drawer_id ? { drawer_id: drawerId } : {})
+			...(hasSpace && spaceId && spaceId !== document.space_id ? { space_id: spaceId } : {})
 		};
 	}
 
@@ -299,6 +355,7 @@
 	async function confirm() {
 		busy = true;
 		formError = null;
+		const enabling = session.isAdmin && enablesTopic;
 		try {
 			await unwrap(
 				api.POST('/api/v1/documents/{id}/confirm', {
@@ -307,6 +364,7 @@
 				})
 			);
 			baseline = null;
+			if (enabling) onenabled?.();
 			toast.success(m.review_confirmed());
 			onconfirmed(openNext ? next : null);
 		} catch (error) {
@@ -338,6 +396,7 @@
 
 	async function save() {
 		busy = true;
+		const enabling = session.isAdmin && enablesTopic && 'topic_id' in patch;
 		try {
 			const result = await unwrap(
 				api.PATCH('/api/v1/documents/{id}', {
@@ -347,6 +406,7 @@
 			);
 			preview = null;
 			baseline = null;
+			if (enabling) onenabled?.();
 			toast.success(m.document_saved());
 			if ('title' in result) onsaved(result);
 			else {
@@ -399,6 +459,7 @@
 		const field = fieldOf(key);
 		if (field) return toApi(field.data_type, values[field.id]);
 		if (key === 'contact') return contact || null;
+		if (key === 'topic') return topic || null;
 		if (key === 'document_type') return documentType || null;
 		if (key === 'document_date') return date || null;
 		if (key === 'tags') return tags;
@@ -547,11 +608,20 @@
 				onjump={jump}
 				onpick={take}
 			>
-				<NativeSelect
-					id="doc-contact"
-					bind:value={contact}
-					disabled={!editable}
-					options={options(lookup.contacts)}
+				<div class="flex min-w-0 items-center gap-2">
+					{#if chosenContact}<ContactAvatar contact={chosenContact} size="md" />{/if}
+					<NativeSelect
+						id="doc-contact"
+						value={contact}
+						disabled={!editable}
+						options={options(lookup.contacts)}
+						onchange={chooseContact}
+					/>
+				</div>
+				<GroupChips
+					tags={lookup.tags}
+					ids={lookup.contacts.find((entry) => entry.id === contact)?.group_ids ?? []}
+					class="mt-1.5"
 				/>
 				{#if factsChip}
 					<a
@@ -561,6 +631,35 @@
 						<ListChecks class="size-3.5" aria-hidden="true" />
 						{factsChip}
 					</a>
+				{/if}
+			</FieldShell>
+			<FieldShell
+				key="topic"
+				label={m.field_topic()}
+				inputId="doc-topic"
+				evidence={evidence.get('topic')}
+				{lookup}
+				review={reviewing}
+				advice={topicAdvice}
+				quoted={false}
+				applies={applies('topic')}
+				active={focused === 'topic' || pinned === 'topic'}
+				onfocus={focus}
+				onjump={jump}
+				onpick={take}
+			>
+				<!-- An admin creates a topic here, too; saving enables it at the contact. -->
+				<TopicInput
+					id="doc-topic"
+					bind:value={topic}
+					topics={topicChoices}
+					all={lookup.tags}
+					disabled={!editable || contact === '' || (topicChoices.length === 0 && !session.isAdmin)}
+					placeholder={contact === '' ? m.topic_no_contact() : m.value_unset()}
+					creating={session.isAdmin && contact !== ''}
+				/>
+				{#if enablesTopic && session.isAdmin}
+					<p class="mt-1 text-xs text-muted-foreground">{m.topic_enables_hint()}</p>
 				{/if}
 			</FieldShell>
 			<FieldShell
@@ -576,11 +675,23 @@
 				onjump={jump}
 				onpick={take}
 			>
-				<NativeSelect
-					id="doc-type"
-					bind:value={documentType}
-					disabled={!editable}
-					options={options(lookup.documentTypes)}
+				<div class="flex min-w-0 items-center gap-2">
+					{#if chosenType?.icon}
+						<span class="grid size-8 shrink-0 place-items-center text-muted-foreground">
+							<TypeIcon icon={chosenType.icon} class="size-5" />
+						</span>
+					{/if}
+					<NativeSelect
+						id="doc-type"
+						bind:value={documentType}
+						disabled={!editable}
+						options={options(lookup.documentTypes)}
+					/>
+				</div>
+				<GroupChips
+					tags={lookup.tags}
+					ids={lookup.documentTypes.find((entry) => entry.id === documentType)?.group_ids ?? []}
+					class="mt-1.5"
 				/>
 			</FieldShell>
 			<FieldShell
@@ -597,23 +708,23 @@
 			>
 				<TagsInput bind:tags all={lookup.tags} id="doc-tags" disabled={!editable} />
 			</FieldShell>
-			{#if hasDrawer}
+			{#if hasSpace}
 				<FieldShell
-					key="drawer"
-					label={m.field_drawer()}
-					inputId="doc-drawer"
+					key="space"
+					label={m.field_space()}
+					inputId="doc-space"
 					{lookup}
-					active={focused === 'drawer'}
+					active={focused === 'space'}
 					onfocus={focus}
 					onjump={jump}
 				>
 					<NativeSelect
-						id="doc-drawer"
-						bind:value={drawerId}
+						id="doc-space"
+						bind:value={spaceId}
 						disabled={!editable}
-						options={drawers.map((drawer) => ({
-							value: drawer.id,
-							label: drawerLabel(drawer, lookup.users, session.user?.id)
+						options={spaces.map((space) => ({
+							value: space.id,
+							label: spaceLabel(space, lookup.users, session.user?.id)
 						}))}
 					/>
 				</FieldShell>
@@ -632,6 +743,7 @@
 				applies={applies(key)}
 				active={focused === key || pinned === key}
 				required={required(field)}
+				byHand={field.assignment === 'manual'}
 				hint={field.description}
 				onfocus={focus}
 				onjump={jump}
@@ -677,7 +789,7 @@
 			</FieldGroup>
 		{/if}
 
-		{#if reviewing && decisions.length === 0 && !failedNode && ruleNotes.length === 0 && nodeNotes.length === 0 && !hasDrawer}
+		{#if reviewing && decisions.length === 0 && !failedNode && ruleNotes.length === 0 && nodeNotes.length === 0 && !hasSpace}
 			<p class="px-1 text-sm text-muted-foreground">{m.review_nothing_open()}</p>
 		{/if}
 	</div>
@@ -746,13 +858,13 @@
 					<section>
 						<h3 class="mb-1 font-medium">{m.dryrun_visible()}</h3>
 						<p>
-							{m.dryrun_drawer({ drawer: describeValue(preview.visibility.drawer_id, lookup) })}
+							{m.dryrun_space({ space: describeValue(preview.visibility.space_id, lookup) })}
 						</p>
 						<p class="text-muted-foreground">
 							{[
 								describeValue(preview.visibility.owner_id, lookup),
-								preview.visibility.drawer_owner_id
-									? describeValue(preview.visibility.drawer_owner_id, lookup)
+								preview.visibility.space_owner_id
+									? describeValue(preview.visibility.space_owner_id, lookup)
 									: null,
 								...(preview.visibility.shares ?? []).map((share) =>
 									describeValue(share.user_id, lookup)

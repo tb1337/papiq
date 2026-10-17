@@ -33,8 +33,12 @@ from papiq.core.domain.rules import (
 
 class ConditionSchema(BaseModel):
     """`field` `op` `value`. Operators by field: contact, document_type: `is`, `in`, `present`,
-    `missing`; tags: `contains` (this tag), `in` (one of), `present` (any), `missing` (none);
-    channel: `is`, `in`; text: `contains`, `matches` (regular expression); document_date and
+    `missing`; topic: the same, where a topic matches the ones below it too (unknown while the
+    model set it and nobody confirmed it); tags (document tags), contact_group (the groups of
+    the document's contact),
+    document_type_group (those of its type): `contains` (this one), `in` (one of), `present`
+    (any), `missing` (none), where a tag or group matches the ones below it too; channel:
+    `is`, `in`; text: `contains`, `matches` (regular expression); document_date and
     number, amount, date fields: `is`, `gt`, `lt`, `present`, `missing`; text and link
     fields: `is`, `in`, `contains`, `matches`, `present`, `missing`; choice: `is`, `in`,
     `present`, `missing`; boolean: `is`, `present`, `missing`; period fields: `is`,
@@ -90,10 +94,10 @@ class AnyGroup(BaseModel):
     negate: bool = Field(default=False, alias="not")
 
 
-class SetDrawerAction(BaseModel):
+class SetSpaceAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    type: Literal["set_drawer"]
-    drawer_id: UUID = Field(description="A drawer the rule's owner may write to (user rules).")
+    type: Literal["set_space"]
+    space_id: UUID = Field(description="A space the rule's owner may write to (user rules).")
 
 
 class SetContactAction(BaseModel):
@@ -108,10 +112,22 @@ class SetDocumentTypeAction(BaseModel):
     document_type_id: UUID
 
 
+class SetTopicAction(BaseModel):
+    """User rules only, as contact and type. Applied only if the document's contact (as the
+    rules leave it) enables the topic; otherwise skipped and noted."""
+
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["set_topic"]
+    topic_id: UUID = Field(description="A tag of scope `topic`.")
+
+
 TEMPLATE_DESCRIPTION = (
     "A Liquid template (`{{ value }}`, `{% if value %}…{% endif %}`, filters with `|`). Values: "
     "`title`, `filename` (the original's name without extension), `original_filename`, "
-    "`contact`, `document_type`, `document_date`, `added`, `tags` (a list), `drawer`, `owner`, "
+    "`contact`, `document_type`, `topic` (its name), `document_date`, `added`, `tags` (a list, "
+    "those set), "
+    "`contact_groups` and `document_type_groups` (lists, the groups the contact and the type are "
+    "in), `space`, `owner`, "
     "`channel`, `pages`, and `field.<key>` (`FieldOut.key`; an amount has `.amount` and "
     "`.currency`, a period `.start` and `.end` and writes itself in ISO 8601 as `2026-09`, "
     "`2026-W38`, `2026-Q3` and the like). Besides Liquid's filters: `datetime` (`format: 'MMMM "
@@ -131,6 +147,9 @@ class SetTitleAction(BaseModel):
 
 
 class AddTagsAction(BaseModel):
+    """Document tags (also those set by hand). A tag above one the document keeps or gets is
+    not added; a parent gives way to a child added."""
+
     model_config = ConfigDict(extra="forbid")
     type: Literal["add_tags"]
     tag_ids: list[UUID] = Field(min_length=1, max_length=100)
@@ -162,9 +181,10 @@ class ForceReviewAction(BaseModel):
 
 
 ActionSchema = Annotated[
-    SetDrawerAction
+    SetSpaceAction
     | SetContactAction
     | SetDocumentTypeAction
+    | SetTopicAction
     | SetTitleAction
     | AddTagsAction
     | RemoveTagsAction
@@ -185,7 +205,7 @@ _RULE_EXAMPLE: dict[str, Any] = {
         ]
     },
     "actions": [
-        {"type": "set_drawer", "drawer_id": "01999d5e-5555-7c1e-b6a3-2f4d5e6f7a8b"},
+        {"type": "set_space", "space_id": "01999d5e-5555-7c1e-b6a3-2f4d5e6f7a8b"},
         {"type": "add_tags", "tag_ids": ["01999d5e-2222-7c1e-b6a3-2f4d5e6f7a8b"]},
     ],
 }

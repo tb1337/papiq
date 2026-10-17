@@ -1,22 +1,24 @@
 """The rules on arrival: the nodes `apply_rules` and `file`, and confirming in the inbox."""
 
 import logging
+from decimal import Decimal
 
 import pytest
 
 from papiq.core.domain.documents import DocumentChanges
-from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import OpenFieldsError
 from papiq.core.domain.fields import FieldType
+from papiq.core.domain.master_data import Assignment
 from papiq.core.domain.pipeline import PERSON, RULES, Lane, Node, Outcome, ProcessingStatus
 from papiq.core.domain.rules import (
     ForceReview,
     SetContact,
-    SetDrawer,
     SetField,
+    SetSpace,
     SetTitle,
     Trigger,
 )
+from papiq.core.domain.spaces import ShareLevel
 from papiq.core.services.rules.running import PatternBudget, prepare
 from tests.unit.services.conftest import World
 from tests.unit.services.rules_support import (
@@ -43,7 +45,7 @@ async def test_rules_act_on_arrival_and_the_log_names_rule_and_version(world: Wo
     acme = await r.contact("ACME")
     tax, checked, foreign = await r.tag("tax"), await r.tag("checked"), await r.tag("foreign")
     note = await world.master_data.create_field(r.admin.id, "Note", FieldType.TEXT)
-    household = await world.drawers.create(owner.id, "Household")
+    household = await world.spaces.create(owner.id, "Household")
     rule = await r.user_rule(owner, definition("Draft", channel_api(), SetTitle("Draft")))
     rule = await r.rules.change(
         owner.id,
@@ -55,7 +57,7 @@ async def test_rules_act_on_arrival_and_the_log_names_rule_and_version(world: Wo
             SetTitle("{{ contact }} {{ filename }}"),
             add_tags(tax.id),
             SetField(note.id, "from a rule"),
-            SetDrawer(household.id),
+            SetSpace(household.id),
         ),
     )
     shared = await r.global_rule(definition("Checked", channel_api(), add_tags(checked.id)))
@@ -68,7 +70,7 @@ async def test_rules_act_on_arrival_and_the_log_names_rule_and_version(world: Wo
     assert (document.contact_id, document.title) == (acme.id, "ACME Bill 2026")
     assert document.tag_ids == {tax.id, checked.id}
     assert document.fields == {note.id: "from a rule"}
-    assert document.drawer_id == household.id
+    assert document.space_id == household.id
     (entry,) = await r.rule_entries(document, RULES)
     assert entry.result.outcome is Outcome.OK
     assert entry.result.input == {
@@ -85,7 +87,7 @@ async def test_rules_act_on_arrival_and_the_log_names_rule_and_version(world: Wo
         "title",
         "tags",
         f"field:{note.id}",
-        "drawer",
+        "space",
     }
 
 
@@ -121,6 +123,49 @@ async def test_conflicting_rules_wait_in_the_inbox_until_the_owner_decides(world
     assert again.result.output["fields"] == []
 
 
+async def test_a_required_field_set_by_hand_waits_for_a_person(world: World) -> None:
+    """Issue #52: after the rules, a required field set by hand without a value keeps the
+    document yellow; confirming without a value is no decision, with one it files."""
+    r = await rule_world(world)
+    owner = await world.user()
+    asn = await world.master_data.create_field(
+        r.admin.id, "ASN", FieldType.NUMBER, required=True, assignment=Assignment.MANUAL
+    )
+
+    document = await r.arrive(owner)
+
+    assert document.lane is Lane.YELLOW
+    (item,) = await r.documents.inbox(owner.id)
+    (open,) = item.open
+    assert open.node is Node.APPLY_RULES
+    (check,) = open.fields
+    assert check.reason == "'ASN' is set by hand and has no value yet"
+    with pytest.raises(OpenFieldsError, match="ASN"):
+        await r.pipeline().confirm(owner.id, document.id, DocumentChanges(fields={asn.id: None}))
+    await r.pipeline().confirm(
+        owner.id, document.id, DocumentChanges(fields={asn.id: Decimal(4711)})
+    )
+    await world.drain(r.pipeline())
+
+    document = await r.stored(document)
+    assert document.lane is Lane.GREEN
+    assert document.fields == {asn.id: Decimal(4711)}
+
+
+async def test_a_rule_gives_a_field_set_by_hand_its_value(world: World) -> None:
+    r = await rule_world(world)
+    owner = await world.user()
+    asn = await world.master_data.create_field(
+        r.admin.id, "ASN", FieldType.TEXT, required=True, assignment=Assignment.MANUAL
+    )
+    await r.user_rule(owner, definition("ASN", channel_api(), SetField(asn.id, "A-1")))
+
+    document = await r.arrive(owner)
+
+    assert document.lane is Lane.GREEN
+    assert document.fields == {asn.id: "A-1"}
+
+
 async def test_a_rule_replaces_the_machines_title(world: World) -> None:
     """The title the machine gave is no value the model checked: a rule sets another one
     without the document becoming uncertain."""
@@ -143,7 +188,7 @@ async def test_a_rule_does_not_replace_the_models_value(world: World) -> None:
     assert (document.lane, document.contact_id) == (Lane.YELLOW, model.id)
     ((check,),) = [open.fields for open in (await r.documents.review(owner.id, document.id)).open]
     assert check.field == "contact"
-    assert check.reason == f"rules: the model set another value ({model.id})"
+    assert check.reason == "rules: the model set another value ('Model')"
     assert check.suggestion == str(rule.id)
 
     # The owner takes the rule's value; it is not yellow again.
@@ -181,60 +226,60 @@ async def test_a_forced_review_holds_the_document_once(world: World) -> None:
     assert [entry.node for entry in confirmed] == [Node.APPLY_RULES]
 
 
-async def test_unconfirmed_model_values_do_not_file_into_a_drawer_others_see(
+async def test_unconfirmed_model_values_do_not_file_into_a_space_others_see(
     world: World,
 ) -> None:
     r = await rule_world(world)
     owner, reader = await world.user(), await world.user()
     acme = await r.contact("ACME")
-    shared = await world.drawers.create(owner.id, "Shared")
-    await world.drawers.share(owner.id, shared.id, reader.id, ShareLevel.READ)
-    await r.user_rule(owner, definition("ACME", contact_is(acme.id), SetDrawer(shared.id)))
+    shared = await world.spaces.create(owner.id, "Shared")
+    await world.spaces.share(owner.id, shared.id, reader.id, ShareLevel.READ)
+    await r.user_rule(owner, definition("ACME", contact_is(acme.id), SetSpace(shared.id)))
 
     document = await r.arrive(owner, classify=Classifies(contact=acme.id))
 
     assert document.lane is Lane.YELLOW
-    assert document.drawer_id == (await world.default_drawer(owner)).id
+    assert document.space_id == (await world.default_space(owner)).id
     (open,) = (await r.documents.review(owner.id, document.id)).open
     assert [(check.field, check.suggestion) for check in open.fields] == [("contact", str(acme.id))]
     (entry,) = await r.rule_entries(document, RULES)
-    assert notes(entry.result.output) == [("drawer", "refused")]
+    assert notes(entry.result.output) == [("space", "refused")]
     assert await world.documents.list_visible(reader.id) == []
 
     # Confirmed by the owner, the contact is trusted: the rule files.
     await r.pipeline().confirm(owner.id, document.id, DocumentChanges())
     await world.drain(r.pipeline())
     document = await r.stored(document)
-    assert (document.lane, document.drawer_id) == (Lane.GREEN, shared.id)
+    assert (document.lane, document.space_id) == (Lane.GREEN, shared.id)
     assert [item.id for item in await world.documents.list_visible(reader.id)] == [document.id]
 
 
-async def test_unconfirmed_model_values_still_file_into_a_private_drawer(world: World) -> None:
+async def test_unconfirmed_model_values_still_file_into_a_private_space(world: World) -> None:
     r = await rule_world(world)
     owner = await world.user()
     acme = await r.contact("ACME")
-    private = await world.drawers.create(owner.id, "Private")
-    await r.user_rule(owner, definition("ACME", contact_is(acme.id), SetDrawer(private.id)))
+    private = await world.spaces.create(owner.id, "Private")
+    await r.user_rule(owner, definition("ACME", contact_is(acme.id), SetSpace(private.id)))
 
     document = await r.arrive(owner, classify=Classifies(contact=acme.id))
 
-    assert (document.lane, document.drawer_id) == (Lane.GREEN, private.id)
+    assert (document.lane, document.space_id) == (Lane.GREEN, private.id)
 
 
-async def test_unconfirmed_model_tags_do_not_file_into_another_users_drawer(
+async def test_unconfirmed_model_tags_do_not_file_into_another_users_space(
     world: World,
 ) -> None:
     r = await rule_world(world)
     owner, colleague = await world.user(), await world.user()
     tax = await r.tag("tax")
-    office = await world.drawers.create(colleague.id, "Office")
-    await world.drawers.share(colleague.id, office.id, owner.id, ShareLevel.READ_WRITE)
-    await r.user_rule(owner, definition("Tax", has_tag(tax.id), SetDrawer(office.id)))
+    office = await world.spaces.create(colleague.id, "Office")
+    await world.spaces.share(colleague.id, office.id, owner.id, ShareLevel.READ_WRITE)
+    await r.user_rule(owner, definition("Tax", has_tag(tax.id), SetSpace(office.id)))
 
     document = await r.arrive(owner, classify=Classifies(tags=[tax.id]))
 
     assert document.lane is Lane.YELLOW
-    assert document.drawer_id == (await world.default_drawer(owner)).id
+    assert document.space_id == (await world.default_space(owner)).id
     (open,) = (await r.documents.review(owner.id, document.id)).open
     assert [check.field for check in open.fields] == ["tags"]
 
@@ -242,35 +287,35 @@ async def test_unconfirmed_model_tags_do_not_file_into_another_users_drawer(
 async def test_a_withdrawn_share_stops_the_rule_from_filing(world: World) -> None:
     r = await rule_world(world)
     owner, colleague = await world.user(), await world.user()
-    office = await world.drawers.create(colleague.id, "Office")
-    await world.drawers.share(colleague.id, office.id, owner.id, ShareLevel.READ_WRITE)
-    await r.user_rule(owner, definition("Office", channel_api(), SetDrawer(office.id)))
-    await world.drawers.share(colleague.id, office.id, owner.id, ShareLevel.READ)
+    office = await world.spaces.create(colleague.id, "Office")
+    await world.spaces.share(colleague.id, office.id, owner.id, ShareLevel.READ_WRITE)
+    await r.user_rule(owner, definition("Office", channel_api(), SetSpace(office.id)))
+    await world.spaces.share(colleague.id, office.id, owner.id, ShareLevel.READ)
 
     document = await r.arrive(owner)
 
-    default = await world.default_drawer(owner)
-    assert (document.lane, document.drawer_id) == (Lane.YELLOW, default.id)
+    default = await world.default_space(owner)
+    assert (document.lane, document.space_id) == (Lane.YELLOW, default.id)
     (open,) = (await r.documents.review(owner.id, document.id)).open
     (check,) = open.fields
-    assert check.field == "drawer"
-    assert check.reason == f"rule 'Office': no write access to drawer {office.id} (any more)"
+    assert check.field == "space"
+    assert check.reason == "rule 'Office': no write access to space 'Office' (any more)"
 
-    # Keeping the drawer: the rule is refused again, but the document is filed.
+    # Keeping the space: the rule is refused again, but the document is filed.
     await r.pipeline().confirm(owner.id, document.id, DocumentChanges())
     await world.drain(r.pipeline())
     document = await r.stored(document)
-    assert (document.lane, document.drawer_id) == (Lane.GREEN, default.id)
+    assert (document.lane, document.space_id) == (Lane.GREEN, default.id)
 
 
 async def test_filing_checks_the_owners_write_access_once_more(world: World) -> None:
     r = await rule_world(world)
     owner, colleague = await world.user(), await world.user()
-    office = await world.drawers.create(colleague.id, "Office")
-    await world.drawers.share(colleague.id, office.id, owner.id, ShareLevel.READ_WRITE)
+    office = await world.spaces.create(colleague.id, "Office")
+    await world.spaces.share(colleague.id, office.id, owner.id, ShareLevel.READ_WRITE)
     pipeline = r.pipeline()
-    received = await pipeline.receive(owner.id, incoming_pdf(), filename="a.pdf", drawer=office.id)
-    await world.drawers.unshare(colleague.id, office.id, owner.id)
+    received = await pipeline.receive(owner.id, incoming_pdf(), filename="a.pdf", space=office.id)
+    await world.spaces.unshare(colleague.id, office.id, owner.id)
 
     await world.drain(pipeline)
 
@@ -279,18 +324,18 @@ async def test_filing_checks_the_owners_write_access_once_more(world: World) -> 
     assert document.processing.outcomes[Node.FILE] is Outcome.UNCERTAIN
     assert "document.filed" not in world.event_types()
     (open,) = (await r.documents.review(owner.id, document.id)).open
-    assert (open.node, [check.field for check in open.fields]) == (Node.FILE, ["drawer"])
+    assert (open.node, [check.field for check in open.fields]) == (Node.FILE, ["space"])
 
-    # Keeping the drawer would stop filing again: the owner has to choose one.
+    # Keeping the space would stop filing again: the owner has to choose one.
     with pytest.raises(OpenFieldsError) as error:
         await pipeline.confirm(owner.id, document.id, DocumentChanges())
-    assert error.value.fields == ("drawer",)
+    assert error.value.fields == ("space",)
 
-    default = await world.default_drawer(owner)
-    await pipeline.confirm(owner.id, document.id, DocumentChanges(), drawer=default.id)
+    default = await world.default_space(owner)
+    await pipeline.confirm(owner.id, document.id, DocumentChanges(), space=default.id)
     await world.drain(pipeline)
     document = await r.stored(document)
-    assert (document.lane, document.drawer_id) == (Lane.GREEN, default.id)
+    assert (document.lane, document.space_id) == (Lane.GREEN, default.id)
 
 
 async def test_the_rules_of_a_deactivated_owner_do_not_run(world: World) -> None:
@@ -314,23 +359,23 @@ async def test_the_rules_of_a_deactivated_owner_do_not_run(world: World) -> None
 async def test_a_global_rule_acts_on_every_document_but_never_moves_it(world: World) -> None:
     r = await rule_world(world)
     owner, colleague = await world.user(), await world.user()
-    office = await world.drawers.create(colleague.id, "Office")
-    await world.drawers.share(colleague.id, office.id, owner.id, ShareLevel.READ_WRITE)
+    office = await world.spaces.create(colleague.id, "Office")
+    await world.spaces.share(colleague.id, office.id, owner.id, ShareLevel.READ_WRITE)
     seen = await r.tag("seen")
     await r.global_rule(definition("Seen", channel_api(), add_tags(seen.id)))
 
     mine = await r.arrive(owner)
     theirs = await r.arrive(colleague)
-    filed = await r.arrive(owner, drawer=office.id)
+    filed = await r.arrive(owner, space=office.id)
 
-    for document, drawer in (
-        (mine, (await world.default_drawer(owner)).id),
-        (theirs, (await world.default_drawer(colleague)).id),
+    for document, space in (
+        (mine, (await world.default_space(owner)).id),
+        (theirs, (await world.default_space(colleague)).id),
         (filed, office.id),
     ):
-        assert (document.lane, document.drawer_id, document.tag_ids) == (
+        assert (document.lane, document.space_id, document.tag_ids) == (
             Lane.GREEN,
-            drawer,
+            space,
             {seen.id},
         )
 

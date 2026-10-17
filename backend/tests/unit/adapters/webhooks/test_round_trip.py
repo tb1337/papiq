@@ -59,7 +59,7 @@ async def test_a_green_document_reaches_the_receiver_signed_after_a_failed_try()
         user = builders.user()
         async with container.unit_of_work() as uow:
             await uow.users.add(user)
-            await uow.drawers.add(builders.default_drawer(user))
+            await uow.spaces.add(builders.default_space(user))
             await uow.commit()
         created = await services.webhooks.create(
             user.id, name="n8n", url=f"{receiver.url}/hook", event_types=["document.lane_changed"]

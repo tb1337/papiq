@@ -1,4 +1,4 @@
-"""The migration: users, master data, drawers, then documents. The same code path serves the
+"""The migration: users, master data, spaces, then documents. The same code path serves the
 trial run (`dry`: reads only, writes nothing, knows nothing of Papiq but what it can read) and
 the real run (resumable: what the state file knows is not done twice)."""
 
@@ -17,10 +17,10 @@ from papiq_migration.mapping import (
     NAME_LIMIT,
     NOTES_SPEC,
     FieldSpec,
-    drawer_name,
     field_key,
     field_spec,
     norm,
+    space_name,
 )
 from papiq_migration.paperless import Paperless, PaperlessError, Snapshot
 from papiq_migration.papiq import ApiError, Papiq
@@ -29,10 +29,12 @@ from papiq_migration.state import DOCUMENT_DONE, DocumentRow, State
 
 NEW, EXISTING, OMITTED, FAILED = "new", "existing", "omitted", "failed"
 DONE_PIPELINE = ("completed", "failed", "review")
-NAMED = (
-    ("contact", "/contacts", "correspondents", "contacts"),
-    ("document_type", "/document-types", "document_types", "document_types"),
-    ("tag", "/tags", "tags", "tags"),
+# Kind, path, Paperless's key, the key of the ids, and what lists the ones to match by name:
+# tags of documents only (a contact group of the same name is another thing).
+NAMED: tuple[tuple[str, str, str, str, dict[str, Any] | None], ...] = (
+    ("contact", "/contacts", "correspondents", "contacts", None),
+    ("document_type", "/document-types", "document_types", "document_types", None),
+    ("tag", "/tags", "tags", "tags", {"scope": "document"}),
 )
 
 Progress = Callable[[str], None]
@@ -124,10 +126,10 @@ class Migration:
         ]
         await self._wake()
         phase = self._clock()
-        drawers = await self._drawers()
-        self.totals.seconds["drawers"] = self._clock() - phase
+        spaces = await self._spaces()
+        self.totals.seconds["spaces"] = self._clock() - phase
         phase = self._clock()
-        await self._documents(drawers)
+        await self._documents(spaces)
         self.totals.seconds["documents"] = self._clock() - phase
         if not self._stop.is_set():
             await self._deactivate()
@@ -136,8 +138,8 @@ class Migration:
 
     # --- reading Papiq -----------------------------------------------------------------------
 
-    async def _list(self, path: str) -> list[dict[str, Any]]:
-        return [] if self._target is None else await self._target.items(path)
+    async def _list(self, path: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        return [] if self._target is None else await self._target.items(path, params)
 
     async def _admin(self) -> None:
         if self._target is None:
@@ -268,8 +270,8 @@ class Migration:
     # --- contacts, document types, tags ------------------------------------------------------
 
     async def _master_data(self, snapshot: Snapshot) -> None:
-        for kind, path, source_key, ids_key in NAMED:
-            existing = {norm(item["name"]): item for item in await self._list(path)}
+        for kind, path, source_key, ids_key, listed in NAMED:
+            existing = {norm(item["name"]): item for item in await self._list(path, listed)}
             mapping: dict[int, str] = getattr(self.ids, ids_key)
             first: dict[str, str] = {}
             for item in getattr(snapshot, source_key):
@@ -294,7 +296,7 @@ class Migration:
                             if error.status != 409:
                                 raise
                             # Created by an earlier attempt whose answer was lost.
-                            again = {norm(i["name"]): i for i in await self._list(path)}
+                            again = {norm(i["name"]): i for i in await self._list(path, listed)}
                             if key not in again:
                                 raise
                             id, status = again[key]["id"], EXISTING
@@ -387,22 +389,22 @@ class Migration:
             if key not in self.ids.fields:
                 del self.ids.specs[key]
 
-    # --- drawers -----------------------------------------------------------------------------
+    # --- spaces -----------------------------------------------------------------------------
 
-    async def _drawers(self) -> dict[str, str]:
-        """The drawers the documents need: one per owner and combination of readers and
+    async def _spaces(self) -> dict[str, str]:
+        """The spaces the documents need: one per owner and combination of readers and
         writers, shared accordingly. Returns the Papiq id by key."""
         wanted: dict[str, Prepared] = {}
         for item in self.prepared:
-            key = item.drawer_key()
+            key = item.space_key()
             if item.skip is None and key is not None:
                 wanted.setdefault(key, item)
         existing: dict[tuple[str, str], dict[str, Any]] = {}
-        for drawer in await self._list("/drawers"):
-            existing[(drawer["owner_id"], norm(drawer["name"]))] = drawer
+        for space in await self._list("/spaces"):
+            existing[(space["owner_id"], norm(space["name"]))] = space
         result: dict[str, str] = {}
         for key, item in sorted(wanted.items()):
-            name = drawer_name(item.shares)
+            name = space_name(item.shares)
             found = existing.get((item.owner, norm(name)))
             notes = [f"owner {item.owner_name or 'the executing admin'}"]
             status = EXISTING
@@ -410,9 +412,9 @@ class Migration:
                 if found is not None:
                     id = found["id"]
                 elif self._dry or self._target is None:
-                    id, status = f"new:drawer:{key}", NEW
+                    id, status = f"new:space:{key}", NEW
                 else:
-                    id, status = (await self._target.create_drawer(name, item.owner))["id"], NEW
+                    id, status = (await self._target.create_space(name, item.owner))["id"], NEW
                     found = {"shares": []}
                 have = {
                     share["user_id"]: share["level"] for share in (found or {}).get("shares") or []
@@ -422,16 +424,16 @@ class Migration:
                     if have.get(user_id) != level and not self._dry and self._target is not None:
                         await self._target.share(id, user_id, level)
             except ApiError as error:
-                # The documents that need this drawer fail with this reason; the others go on.
-                self._record("drawer", key, name, None, FAILED, [str(error)])
+                # The documents that need this space fail with this reason; the others go on.
+                self._record("space", key, name, None, FAILED, [str(error)])
                 continue
             result[key] = id
-            self._record("drawer", key, name, id, status, notes)
+            self._record("space", key, name, id, status, notes)
         return result
 
     # --- documents ---------------------------------------------------------------------------
 
-    async def _documents(self, drawers: dict[str, str]) -> None:
+    async def _documents(self, spaces: dict[str, str]) -> None:
         self.totals.documents = len(self.prepared)
         done = 0
         gate = asyncio.Semaphore(self._config.concurrency)
@@ -443,7 +445,7 @@ class Migration:
                     self.totals.stopped += 1
                     return
                 try:
-                    await self._document(item, drawers)
+                    await self._document(item, spaces)
                 except Exception as error:  # one document never stops the others
                     self.totals.failed += 1
                     row = self._state.document(item.id)
@@ -460,15 +462,15 @@ class Migration:
         await asyncio.gather(*(one(item) for item in self.prepared))
 
     def _detail(self, item: Prepared) -> dict[str, Any]:
-        key = item.drawer_key()
+        key = item.space_key()
         return {
             "title": item.title,
             "owner": item.owner_name,
-            "drawer": drawer_name(item.shares) if key else "default",
+            "space": space_name(item.shares) if key else "default",
             "media_type": item.media_type,
         }
 
-    async def _document(self, item: Prepared, drawers: dict[str, str]) -> None:
+    async def _document(self, item: Prepared, spaces: dict[str, str]) -> None:
         detail = self._detail(item)
         prior = self._state.document(item.id)
         if self._dry:
@@ -506,7 +508,7 @@ class Migration:
                 self.totals.resumed += 1
         if papiq_id is None:
             began = self._clock()
-            uploaded = await self._upload(item, drawers, detail)
+            uploaded = await self._upload(item, spaces, detail)
             if uploaded is None:
                 return
             papiq_id, sha256, duplicate = uploaded
@@ -570,30 +572,30 @@ class Migration:
         self._state.put_document(row.source_id, row.status, lane=lane, reason=reason)
 
     async def _upload(
-        self, item: Prepared, drawers: dict[str, str], detail: dict[str, Any]
+        self, item: Prepared, spaces: dict[str, str], detail: dict[str, Any]
     ) -> tuple[str, str, bool] | None:
-        """Download the original and upload it with owner, drawer and metadata; the Papiq id,
+        """Download the original and upload it with owner, space and metadata; the Papiq id,
         the file's SHA-256 and whether Papiq had the file already. None: not taken over
         (recorded)."""
         assert self._target is not None
-        key = item.drawer_key()
+        key = item.space_key()
         fields = {
             "channel": "migration",
             "owner": item.owner,
             "metadata": json.dumps(item.metadata),
         }
         if key is not None:
-            if key not in drawers:
+            if key not in spaces:
                 self.totals.failed += 1
                 self._state.put_document(
                     item.id,
                     FAILED,
-                    reason="its drawer could not be prepared (see the drawers)",
+                    reason="its space could not be prepared (see the spaces)",
                     notes=item.notes,
                     detail=detail,
                 )
                 return None
-            fields["drawer_id"] = drawers[key]
+            fields["space_id"] = spaces[key]
         with tempfile.TemporaryDirectory(prefix="papiq-migration-") as directory:
             path = Path(directory) / "original"
             try:

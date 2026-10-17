@@ -26,55 +26,55 @@ export function canManage(document: Document, user: Actor): boolean {
 	return owns(document, user) || isAdmin(user);
 }
 
-/** Move: the owner into drawers they may write to; an admin any document into any drawer. */
+/** Move: the owner into spaces they may write to; an admin any document into any space. */
 export function canMove(document: Document, user: Actor): boolean {
 	return owns(document, user) || isAdmin(user);
 }
 
-/** Drawers the caller may file into: own drawers, `read_write` shares; every one for admins. */
-export function writableDrawers<T extends { owner_id: string; access: string }>(
-	drawers: readonly T[],
+/** Spaces the caller may file into: own spaces, `read_write` shares; every one for admins. */
+export function writableSpaces<T extends { owner_id: string; access: string }>(
+	spaces: readonly T[],
 	user: Actor,
 	admin = isAdmin(user)
 ): T[] {
-	return drawers.filter(
-		(drawer) => admin || drawer.owner_id === user?.id || drawer.access === 'read_write'
+	return spaces.filter(
+		(space) => admin || space.owner_id === user?.id || space.access === 'read_write'
 	);
 }
 
-/** Drawers another user may write to, as far as the shares show it (admins see every share):
+/** Spaces another user may write to, as far as the shares show it (admins see every share):
  * where that user's rule files when an admin changes it. */
-export function drawersWritableBy<
+export function spacesWritableBy<
 	T extends { owner_id: string; shares?: readonly { user_id: string; level: string }[] | null }
->(drawers: readonly T[], owner: Actor): T[] {
+>(spaces: readonly T[], owner: Actor): T[] {
 	// A deactivated user files nowhere (the API refuses).
 	if (owner === null || owner.active === false) return [];
-	if (isAdmin(owner)) return [...drawers];
-	return drawers.filter(
-		(drawer) =>
-			drawer.owner_id === owner.id ||
-			(drawer.shares ?? []).some(
+	if (isAdmin(owner)) return [...spaces];
+	return spaces.filter(
+		(space) =>
+			space.owner_id === owner.id ||
+			(space.shares ?? []).some(
 				(share) => share.user_id === owner.id && share.level === 'read_write'
 			)
 	);
 }
 
-/** Drawers a rule of `owner` may file into when `caller` changes it: the caller's own choice
+/** Spaces a rule of `owner` may file into when `caller` changes it: the caller's own choice
  * for themselves, else the owner's (an admin changing another user's rule). */
-export function drawersFor<
+export function spacesFor<
 	T extends {
 		owner_id: string;
 		access: string;
 		shares?: readonly { user_id: string; level: string }[] | null;
 	}
->(drawers: readonly T[], owner: Actor, caller: Actor): T[] {
-	if (owner !== null && owner.id === caller?.id) return writableDrawers(drawers, caller);
-	return drawersWritableBy(drawers, owner);
+>(spaces: readonly T[], owner: Actor, caller: Actor): T[] {
+	if (owner !== null && owner.id === caller?.id) return writableSpaces(spaces, caller);
+	return spacesWritableBy(spaces, owner);
 }
 
-/** Rename, share and delete a drawer: its owner and admins. */
-export function canManageDrawer(drawer: Owned, user: Actor): boolean {
-	return owns(drawer, user) || isAdmin(user);
+/** Rename, share and delete a space: its owner and admins. */
+export function canManageSpace(space: Owned, user: Actor): boolean {
+	return owns(space, user) || isAdmin(user);
 }
 
 /** Change, delete, test a webhook and renew its secret: its owner and admins. */

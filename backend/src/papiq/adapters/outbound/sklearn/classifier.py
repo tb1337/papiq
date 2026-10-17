@@ -1,10 +1,12 @@
 """Classifier on scikit-learn: TF-IDF of words and word pairs, and a logistic regression for the
-contact, one for the document type and one per tag, as Paperless-ngx learns its matching.
+contact, one for the document type, one for the topic and one per tag, as Paperless-ngx learns
+its matching.
 
 scikit-learn only fits. The model is the fitted numbers in an npz archive (vocabulary, inverse
 document frequencies, coefficients, classes), read with `allow_pickle=False`: a model cannot
 run code, and it outlives an update of scikit-learn. Predicting is a few lines of numpy
-(`_Model`), checked against scikit-learn's own in the tests.
+(`_Model`), checked against scikit-learn's own in the tests. A model trained before topics has
+no topic arrays: it knows no topic.
 """
 
 import asyncio
@@ -84,6 +86,7 @@ class Fitted:
     contact: LogisticRegression | None
     document_type: LogisticRegression | None
     tags: dict[TagId, LogisticRegression]
+    topic: LogisticRegression | None = None
 
 
 def fit(examples: list[TrainingExample]) -> tuple[bytes, JsonObject, Fitted]:
@@ -106,6 +109,7 @@ def fit(examples: list[TrainingExample]) -> tuple[bytes, JsonObject, Fitted]:
         raise ClassifierError(f"the examples have too few words: {error}") from None
     contact = _single(matrix, [example.contact for example in examples])
     document_type = _single(matrix, [example.document_type for example in examples])
+    topic = _single(matrix, [example.topic for example in examples])
     tags = _tags(matrix, examples)
     vocabulary = vectorizer.vocabulary_
     terms = sorted(vocabulary, key=vocabulary.__getitem__)
@@ -116,6 +120,7 @@ def fit(examples: list[TrainingExample]) -> tuple[bytes, JsonObject, Fitted]:
         "idf": vectorizer.idf_.astype(np.float32),
         **_target("contact", contact, len(terms)),
         **_target("document_type", document_type, len(terms)),
+        **_target("topic", topic, len(terms)),
         **_tag_arrays(tags, len(terms)),
     }
     buffer = io.BytesIO()
@@ -123,6 +128,7 @@ def fit(examples: list[TrainingExample]) -> tuple[bytes, JsonObject, Fitted]:
     classes: JsonObject = {
         "contact": 0 if contact is None else len(contact.classes_),
         "document_type": 0 if document_type is None else len(document_type.classes_),
+        "topic": 0 if topic is None else len(topic.classes_),
         "tags": len(tags),
     }
     summary: JsonObject = {
@@ -131,7 +137,7 @@ def fit(examples: list[TrainingExample]) -> tuple[bytes, JsonObject, Fitted]:
         "terms": len(terms),
         "classes": classes,
     }
-    return buffer.getvalue(), summary, Fitted(vectorizer, contact, document_type, tags)
+    return buffer.getvalue(), summary, Fitted(vectorizer, contact, document_type, tags, topic)
 
 
 def _single(matrix: Any, labels: Sequence[UUID | None]) -> LogisticRegression | None:
@@ -211,6 +217,7 @@ class _Model:
     idf: _Array
     contact: _Single
     document_type: _Single
+    topic: _Single
     tag_classes: list[str]
     tag_coef: _Array
     tag_intercept: _Array
@@ -227,6 +234,7 @@ class _Model:
                     idf=archive["idf"],
                     contact=_single_of(archive, "contact"),
                     document_type=_single_of(archive, "document_type"),
+                    topic=_single_of(archive, "topic", optional=True),
                     tag_classes=[str(tag) for tag in archive["tag_classes"]],
                     tag_coef=archive["tag_coef"],
                     tag_intercept=archive["tag_intercept"],
@@ -255,6 +263,10 @@ class _Model:
                 for label, share in self.document_type.probabilities(indices, weights)
             ],
             tags=tags,
+            topics=[
+                (TagId(UUID(label)), share)
+                for label, share in self.topic.probabilities(indices, weights)
+            ],
         )
 
     def _vector(self, text: str) -> tuple[_Array, _Array]:
@@ -267,7 +279,10 @@ class _Model:
         return indices, (weights / norm if norm else weights)
 
 
-def _single_of(archive: Any, name: str) -> _Single:
+def _single_of(archive: Any, name: str, *, optional: bool = False) -> _Single:
+    """The regression of a target; an `optional` one a model may lack is empty then."""
+    if optional and f"{name}_classes" not in archive.files:
+        return _Single(classes=[], coef=np.zeros((0, 0)), intercept=np.zeros(0))
     return _Single(
         classes=[str(item) for item in archive[f"{name}_classes"]],
         coef=archive[f"{name}_coef"],

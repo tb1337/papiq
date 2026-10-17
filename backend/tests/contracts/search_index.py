@@ -10,8 +10,8 @@ from papiq.core.domain.ids import (
     ContactId,
     DocumentId,
     DocumentTypeId,
-    DrawerId,
     FieldId,
+    SpaceId,
     TagId,
     UserId,
     new_id,
@@ -19,6 +19,7 @@ from papiq.core.domain.ids import (
 from papiq.core.domain.pipeline import Lane
 from papiq.core.domain.search import EmbeddingStamp, IndexDocument, Visibility
 from papiq.core.ports import DocumentFilter, DocumentOrder, SearchIndex, SearchQuery, SortKey
+from papiq.core.ports.repository import TagSets
 from papiq.core.ports.search_index import SimilarQuery
 from tests.builders import index_document
 
@@ -26,8 +27,8 @@ DIMENSIONS = 3
 STAMP = EmbeddingStamp("test-model", "abc")
 
 
-def visibility(user: UserId, *drawers: DrawerId) -> Visibility:
-    return Visibility(user, frozenset(drawers))
+def visibility(user: UserId, *spaces: SpaceId) -> Visibility:
+    return Visibility(user, frozenset(spaces))
 
 
 def query(text: str, who: Visibility, **fields: object) -> SearchQuery:
@@ -209,16 +210,16 @@ class SearchIndexContract:
 
     async def test_filters(self, search_index: SearchIndex) -> None:
         owner = UserId(new_id())
-        drawer_a, drawer_b = DrawerId(new_id()), DrawerId(new_id())
+        space_a, space_b = SpaceId(new_id()), SpaceId(new_id())
         contact, kind = ContactId(new_id()), DocumentTypeId(new_id())
         tag_1, tag_2 = TagId(new_id()), TagId(new_id())
         base = {"owner_id": owner, "text": "Rechnung"}
         both = index_document(
-            **base, drawer_id=drawer_a, contact_id=contact, document_type_id=kind,
+            **base, space_id=space_a, contact_id=contact, document_type_id=kind,
             tag_ids=(tag_1, tag_2), lane=Lane.GREEN,
         )  # fmt: skip
-        one_tag = index_document(**base, drawer_id=drawer_b, tag_ids=(tag_1,), lane=Lane.YELLOW)
-        processing = index_document(**base, drawer_id=drawer_b, lane=None)
+        one_tag = index_document(**base, space_id=space_b, tag_ids=(tag_1,), lane=Lane.YELLOW)
+        processing = index_document(**base, space_id=space_b, lane=None)
         await search_index.upsert([both, one_tag, processing])
         who = visibility(owner)
 
@@ -228,9 +229,10 @@ class SearchIndexContract:
         assert await with_filter() == {both.id, one_tag.id, processing.id}
         assert await with_filter(contact=contact) == {both.id}
         assert await with_filter(document_type=kind) == {both.id}
-        assert await with_filter(tags=frozenset({tag_1})) == {both.id, one_tag.id}
-        assert await with_filter(tags=frozenset({tag_1, tag_2})) == {both.id}
-        assert await with_filter(drawer=drawer_b) == {one_tag.id, processing.id}
+        assert await with_filter(tags=(frozenset({tag_1}),)) == {both.id, one_tag.id}
+        assert await with_filter(tags=(frozenset({tag_1}), frozenset({tag_2}))) == {both.id}
+        assert await with_filter(tags=(frozenset({tag_2, TagId(new_id())}),)) == {both.id}
+        assert await with_filter(space=space_b) == {one_tag.id, processing.id}
         assert await with_filter(lanes=frozenset({Lane.GREEN})) == {both.id}
         assert await with_filter(lanes=frozenset({Lane.GREEN, Lane.YELLOW})) == {
             both.id,
@@ -239,9 +241,74 @@ class SearchIndexContract:
         assert await with_filter(lanes=frozenset({None})) == {processing.id}
         assert await with_filter(lanes=frozenset({None, Lane.RED})) == {processing.id}
         assert await with_filter(
-            tags=frozenset({tag_1}), drawer=drawer_b, lanes=frozenset({Lane.YELLOW})
+            tags=(frozenset({tag_1}),), space=space_b, lanes=frozenset({Lane.YELLOW})
         ) == {one_tag.id}
         assert await with_filter(contact=ContactId(new_id())) == set()
+
+    async def test_tags_with_their_ancestors_and_groups_are_found_by_name(
+        self, search_index: SearchIndex
+    ) -> None:
+        owner = UserId(new_id())
+        grouped = index_document(
+            owner_id=owner,
+            text="Schreiben",
+            tags=("Krankenversicherung", "Versicherungen"),
+            contact_groups=("Versorger",),
+            document_type_groups=("Belege",),
+        )
+        other = index_document(owner_id=owner, text="Schreiben")
+        await search_index.upsert([grouped, other])
+        who = visibility(owner)
+        for word in ("Versicherungen", "Versorger", "Belege"):
+            assert await found(search_index, word, who) == {grouped.id}
+        assert await found(search_index, "Schreiben", who) == {grouped.id, other.id}
+
+    async def test_groups_of_contact_and_type(self, search_index: SearchIndex) -> None:
+        owner = UserId(new_id())
+        insurer, employer, bills = (TagId(new_id()) for _ in range(3))
+        both = index_document(
+            owner_id=owner,
+            text="Rechnung",
+            contact_group_ids=(insurer, employer),
+            document_type_group_ids=(bills,),
+        )
+        employed = index_document(owner_id=owner, text="Rechnung", contact_group_ids=(employer,))
+        neither = index_document(owner_id=owner, text="Rechnung")
+        await search_index.upsert([both, employed, neither])
+
+        async def with_filter(contacts: TagSets = (), types: TagSets = ()) -> set[DocumentId]:
+            filter = DocumentFilter(contact_groups=contacts, document_type_groups=types)
+            return await found(search_index, "Rechnung", visibility(owner), filter=filter)
+
+        assert await with_filter(contacts=(frozenset({employer}),)) == {both.id, employed.id}
+        assert await with_filter(contacts=(frozenset({insurer}), frozenset({employer}))) == {
+            both.id
+        }
+        assert await with_filter(types=(frozenset({bills}),)) == {both.id}
+        assert await with_filter(types=(frozenset({insurer}),)) == set()
+
+    async def test_a_topic_with_those_above_it(self, search_index: SearchIndex) -> None:
+        owner = UserId(new_id())
+        insurance, health, work = (TagId(new_id()) for _ in range(3))
+        insured = index_document(
+            owner_id=owner,
+            text="Schreiben",
+            topic_ids=(health, insurance),
+            topics=("Krankenversicherung", "Versicherungen"),
+        )
+        working = index_document(owner_id=owner, text="Schreiben", topic_ids=(work,))
+        neither = index_document(owner_id=owner, text="Schreiben")
+        await search_index.upsert([insured, working, neither])
+        who = visibility(owner)
+        assert await found(search_index, "Versicherungen", who) == {insured.id}
+
+        async def with_topics(*topics: TagId) -> set[DocumentId]:
+            filter = DocumentFilter(topics=frozenset(topics))
+            return await found(search_index, "Schreiben", who, filter=filter)
+
+        assert await with_topics(insurance) == {insured.id}
+        assert await with_topics(work, health) == {insured.id, working.id}
+        assert await with_topics(TagId(new_id())) == set()
 
     async def test_a_field_with_a_value(self, search_index: SearchIndex) -> None:
         owner, field = UserId(new_id()), FieldId(new_id())
@@ -288,15 +355,15 @@ class SearchIndexContract:
 
     async def test_rights_filter(self, search_index: SearchIndex) -> None:
         me, other = UserId(new_id()), UserId(new_id())
-        mine, shared, foreign = DrawerId(new_id()), DrawerId(new_id()), DrawerId(new_id())
+        mine, shared, foreign = SpaceId(new_id()), SpaceId(new_id()), SpaceId(new_id())
 
-        def doc(owner: UserId, drawer: DrawerId, lane: Lane | None) -> IndexDocument:
-            return index_document(owner_id=owner, drawer_id=drawer, lane=lane, text="Vertrag")
+        def doc(owner: UserId, space: SpaceId, lane: Lane | None) -> IndexDocument:
+            return index_document(owner_id=owner, space_id=space, lane=lane, text="Vertrag")
 
         own = {lane: doc(me, mine, lane) for lane in (None, Lane.GREEN, Lane.YELLOW, Lane.RED)}
-        own_elsewhere = doc(me, foreign, Lane.RED)  # my document in a drawer I cannot see
+        own_elsewhere = doc(me, foreign, Lane.RED)  # my document in a space I cannot see
         green_shared = doc(other, shared, Lane.GREEN)
-        green_mine = doc(other, mine, Lane.GREEN)  # another user filed it into my drawer
+        green_mine = doc(other, mine, Lane.GREEN)  # another user filed it into my space
         green_foreign = doc(other, foreign, Lane.GREEN)
         others_unfinished = [doc(other, shared, lane) for lane in (None, Lane.YELLOW, Lane.RED)]
         await search_index.upsert(
@@ -317,12 +384,12 @@ class SearchIndexContract:
             green_mine.id,
         }
         assert await found(search_index, "Vertrag", visibility(me, mine, shared)) == expected
-        # Without drawers only the own documents remain.
+        # Without spaces only the own documents remain.
         assert await found(search_index, "Vertrag", visibility(me)) == {
             *(document.id for document in own.values()),
             own_elsewhere.id,
         }
-        # A user with no documents and no drawers finds nothing.
+        # A user with no documents and no spaces finds nothing.
         assert await found(search_index, "Vertrag", visibility(UserId(new_id()))) == set()
         # An admin who asks for everything finds every document, in every lane.
         everything = Visibility(UserId(new_id()), frozenset(), everything=True)
@@ -341,14 +408,14 @@ class SearchIndexContract:
         self, search_index: SearchIndex
     ) -> None:
         me, other = UserId(new_id()), UserId(new_id())
-        drawer = DrawerId(new_id())
+        space = SpaceId(new_id())
         contact = ContactId(new_id())
         hidden = index_document(
-            owner_id=other, drawer_id=drawer, lane=Lane.YELLOW, contact_id=contact, text="Vertrag"
+            owner_id=other, space_id=space, lane=Lane.YELLOW, contact_id=contact, text="Vertrag"
         )
         await search_index.upsert([hidden])
-        who = visibility(me, drawer)
-        fields = DocumentFilter(contact=contact, drawer=drawer, lanes=frozenset({Lane.YELLOW}))
+        who = visibility(me, space)
+        fields = DocumentFilter(contact=contact, space=space, lanes=frozenset({Lane.YELLOW}))
         assert await found(search_index, "Vertrag", who, filter=fields) == set()
 
     # --- paging ---------------------------------------------------------------------------------
@@ -441,7 +508,7 @@ class SearchIndexContract:
         """Nearest first, as the rights and the criteria allow, without the document itself;
         documents without vectors are not among them."""
         me, other = UserId(new_id()), UserId(new_id())
-        shared = DrawerId(new_id())
+        shared = SpaceId(new_id())
 
         def vectored(vector: tuple[float, ...], **fields: object) -> IndexDocument:
             return index_document(vectors=(vector,), embedding=STAMP, **fields)
@@ -452,7 +519,7 @@ class SearchIndexContract:
         unconfirmed = vectored((0.0, 1.0, 0.0), owner_id=me)
         hidden = vectored((0.0, 1.0, 0.0), owner_id=other, confirmed=True, lane=Lane.YELLOW)
         visible = vectored(
-            (0.0, 0.0, 1.0), owner_id=other, drawer_id=shared, confirmed=True, lane=Lane.GREEN
+            (0.0, 0.0, 1.0), owner_id=other, space_id=shared, confirmed=True, lane=Lane.GREEN
         )
         plain = index_document(owner_id=me, confirmed=True)
         await search_index.upsert([itself, near, farther, unconfirmed, hidden, visible, plain])

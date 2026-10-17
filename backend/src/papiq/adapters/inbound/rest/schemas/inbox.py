@@ -8,9 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from papiq.adapters.inbound.rest.schemas.documents import DocumentDetails, DocumentPatch
 from papiq.core.domain.classification import Candidate, CandidateSource, FieldCheck
-from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.locations import Box, Location
 from papiq.core.domain.pipeline import Node, Outcome
+from papiq.core.domain.spaces import ShareLevel
 from papiq.core.services.inbox import InboxItem, NodeReview, OpenNode, Review
 
 ResumeNode = StrEnum(  # type: ignore[misc]
@@ -163,7 +163,10 @@ class FieldCheckOut(BaseModel):
     )
 
     field: str = Field(
-        description=("`contact`, `document_type`, `tags`, `document_date`, or `field:<id>`.")
+        description=(
+            "`contact`, `document_type`, `topic`, `tags`, `document_date`, or `field:<id>`. The "
+            "topic, as the tags, is never uncertain: one not set comes as a `suggestion`."
+        )
     )
     outcome: Outcome = Field(description="`ok` or `uncertain`.")
     confidence: float = Field(
@@ -173,7 +176,9 @@ class FieldCheckOut(BaseModel):
             "`candidates` (their `sources`)."
         )
     )
-    reason: str | None = Field(description="Why the field is uncertain.")
+    reason: str | None = Field(
+        description="Why the field is uncertain (for the topic: why it was not set)."
+    )
     proposed: Any = Field(description="What the model answered, unchanged.")
     evidence: str | None = Field(description="The excerpt the model quoted.")
     value: Any = Field(
@@ -183,7 +188,7 @@ class FieldCheckOut(BaseModel):
         )
     )
     suggestion: Any = Field(
-        description="A value that can be accepted as it is (uncertain fields only)."
+        description="A value that can be accepted as it is (uncertain fields, and the topic)."
     )
     new_name: str | None = Field(
         description="A contact or document type that does not exist; an admin can create it."
@@ -206,8 +211,8 @@ class FieldCheckOut(BaseModel):
     candidates: list[CandidateOut] = Field(
         default_factory=list,
         description=(
-            "Contact, document type and tags: the values the signals proposed, best first, "
-            "with what each signal said; empty for other fields and older checks."
+            "Contact, document type, topic and tags: the values the signals proposed, best "
+            "first, with what each signal said; empty for other fields and older checks."
         ),
     )
 
@@ -238,7 +243,7 @@ class OpenNodeOut(BaseModel):
     fields: list[FieldCheckOut] = Field(
         description=(
             "Uncertain fields of classification, field extraction and the rules (also "
-            "`drawer`, `title`, `review`), and of filing (`drawer`)."
+            "`space`, `title`, `review`), and of filing (`space`)."
         )
     )
 
@@ -340,10 +345,10 @@ class ConfirmRequest(BaseModel):
             "`fields` after correcting the document type, so the fields of the new type are read."
         ),
     )
-    drawer_id: UUID | None = Field(
+    space_id: UUID | None = Field(
         default=None,
         description=(
-            "Move the document into this drawer (one the owner may write to); decides the "
-            "rules' open field `drawer`. Default: it stays where it is."
+            "Move the document into this space (one the owner may write to); decides the "
+            "rules' open field `space`. Default: it stays where it is."
         ),
     )

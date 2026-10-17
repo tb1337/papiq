@@ -1,0 +1,69 @@
+{
+  "description": "Pay slip of the insurance group that is also the user's employer: its personnel number points to the topic Arbeit and the model names it, so the topic is set.",
+  "expected": {
+    "lane": "green",
+    "contact": "Hanse Versicherung AG",
+    "document_type": "Lohnabrechnung",
+    "topic": "Arbeit",
+    "tags": [
+      "Arbeit"
+    ],
+    "document_date": "2026-03-31",
+    "fields": {
+      "Nettolohn": {
+        "amount": "2664.54",
+        "currency": "EUR"
+      },
+      "Bezugszeitraum": {
+        "start": "2026-03-01",
+        "end": "2026-03-31"
+      },
+      "Bruttolohn": {
+        "amount": "4250.00",
+        "currency": "EUR"
+      }
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Hanse Versicherung AG",
+        "evidence": "Hanse Versicherung AG"
+      },
+      "document_type": "Lohnabrechnung",
+      "new_document_type": null,
+      "topic": "Arbeit",
+      "tags": [
+        "Arbeit"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-03-31",
+        "evidence": "erstellt am 31.03.2026"
+      }
+    },
+    "fields": {
+      "Nettolohn": {
+        "value": {
+          "amount": "2664.54",
+          "currency": "EUR"
+        },
+        "evidence": "Nettoverdienst: 2.664,54 €"
+      },
+      "Bezugszeitraum": {
+        "value": {
+          "start": "2026-03-01",
+          "end": "2026-03-31"
+        },
+        "evidence": "Entgeltabrechnung März 2026"
+      },
+      "Bruttolohn": {
+        "value": {
+          "amount": "4250.00",
+          "currency": "EUR"
+        },
+        "evidence": "Gesamtbrutto | 4.250,00 €"
+      }
+    }
+  }
+}

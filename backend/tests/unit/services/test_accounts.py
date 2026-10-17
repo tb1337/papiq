@@ -2,7 +2,6 @@
 
 import pytest
 
-from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import (
     AuthenticationError,
     ConflictError,
@@ -13,6 +12,7 @@ from papiq.core.domain.errors import (
 )
 from papiq.core.domain.identity import ExternalIdentity, TokenScope
 from papiq.core.domain.ids import UserId, new_id
+from papiq.core.domain.spaces import ShareLevel
 from papiq.core.domain.users import Role
 from tests import builders
 from tests.builders import NOW, PASSWORD
@@ -26,7 +26,7 @@ async def test_admins_create_users_with_password(world: World) -> None:
     user = await world.users.create_user(admin.id, "alice", Role.USER, PASSWORD)
     signed_in = await world.auth.login("alice", PASSWORD)
     assert signed_in.user == user
-    assert (await world.default_drawer(user)).is_default
+    assert (await world.default_space(user)).is_default
     for weak in ("short", "alice"):
         with pytest.raises(ValidationError):
             await world.users.create_user(admin.id, "bob", Role.USER, weak)
@@ -115,7 +115,7 @@ async def test_deactivation_ends_sessions_and_refuses_tokens(world: World) -> No
     with pytest.raises(AuthenticationError):
         await world.auth.login("alice", PASSWORD)
     with pytest.raises(AuthenticationError):
-        await world.drawers.list(user.id)
+        await world.spaces.list(user.id)
 
     await world.users.set_active(admin.id, user.id, True)
     await world.auth.authenticate_token(token)
@@ -170,9 +170,9 @@ async def test_deleting_a_user_without_documents(world: World) -> None:
     admin = await world.account("root", Role.ADMIN)
     user = await world.account("alice")
     friend = await world.account("bob")
-    own = await world.drawers.create(user.id, "Mine")
-    shared = await world.drawers.create(friend.id, "Shared")
-    await world.drawers.share(friend.id, shared.id, user.id, ShareLevel.READ)
+    own = await world.spaces.create(user.id, "Mine")
+    shared = await world.spaces.create(friend.id, "Shared")
+    await world.spaces.share(friend.id, shared.id, user.id, ShareLevel.READ)
     await world.auth.create_api_token(user.id, "cli", TokenScope.READ)
     await world.auth.login("alice", PASSWORD)
 
@@ -180,8 +180,8 @@ async def test_deleting_a_user_without_documents(world: World) -> None:
 
     async with world.uow() as uow:
         assert await uow.users.find(user.id) is None
-        assert await uow.drawers.find(own.id) is None
-        assert (await uow.drawers.get(shared.id)).shares == {}
+        assert await uow.spaces.find(own.id) is None
+        assert (await uow.spaces.get(shared.id)).shares == {}
         assert await uow.credentials.find(user.id) is None
         assert await uow.api_tokens.list_for(user.id) == []
     with pytest.raises(AuthenticationError):
@@ -193,10 +193,10 @@ async def test_deleting_a_user_without_documents(world: World) -> None:
 async def test_users_with_documents_are_not_deleted(world: World) -> None:
     admin = await world.account("root", Role.ADMIN)
     owner, guest = await world.account("alice"), await world.account("bob")
-    drawer = await world.drawers.create(owner.id, "Household")
-    await world.drawers.share(owner.id, drawer.id, guest.id, ShareLevel.READ_WRITE)
+    space = await world.spaces.create(owner.id, "Household")
+    await world.spaces.share(owner.id, space.id, guest.id, ShareLevel.READ_WRITE)
     async with world.uow() as uow:
-        await uow.documents.add(builders.processed(guest, drawer))  # guest's file, owner's drawer
+        await uow.documents.add(builders.processed(guest, space))  # guest's file, owner's space
         await uow.commit()
     with pytest.raises(ConflictError, match="owns documents"):
         await world.users.delete_user(admin.id, guest.id)
@@ -211,7 +211,7 @@ async def test_the_first_admin_is_created_once(world: World) -> None:
     created = await world.users.bootstrap_admin("root", PASSWORD)
     assert created is not None and created.is_admin
     await world.auth.login("root", PASSWORD)
-    assert (await world.default_drawer(created)).is_default
+    assert (await world.default_space(created)).is_default
     # Later starts change nothing, also not the password.
     assert await world.users.bootstrap_admin("root", NEW_PASSWORD) is None
     assert await world.users.bootstrap_admin("other", NEW_PASSWORD) is None

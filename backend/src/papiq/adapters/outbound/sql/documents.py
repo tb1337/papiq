@@ -1,16 +1,28 @@
 """Documents with their field values, and the processing log."""
 
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, FromClause, Row, and_, delete, func, insert, or_, select
+from sqlalchemy import (
+    ColumnElement,
+    FromClause,
+    Row,
+    and_,
+    case,
+    delete,
+    distinct,
+    func,
+    insert,
+    or_,
+    select,
+)
 
 from papiq.adapters.outbound.sql import tables as t
-from papiq.adapters.outbound.sql.drawers import visible_to
 from papiq.adapters.outbound.sql.repositories import MICROSECOND, SqlRepository, Values
+from papiq.adapters.outbound.sql.spaces import visible_to
 from papiq.adapters.outbound.sql.transaction import Transaction
 from papiq.core.domain.documents import Channel, Document, Sha256
 from papiq.core.domain.fields import FieldValue, Money, Url
@@ -18,8 +30,8 @@ from papiq.core.domain.ids import (
     ContactId,
     DocumentId,
     DocumentTypeId,
-    DrawerId,
     FieldId,
+    SpaceId,
     TagId,
     UserId,
 )
@@ -45,6 +57,9 @@ from papiq.core.ports.repository import (
     DocumentPosition,
     SortKey,
 )
+
+_COUNTED = 200
+"""Keys of `count_tagged` per query (a column each)."""
 
 
 class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
@@ -120,6 +135,8 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
             column = documents.c.contact_id
             if by is CountBy.DOCUMENT_TYPE:
                 column = documents.c.document_type_id
+            elif by is CountBy.TOPIC:
+                column = documents.c.topic_id
             criteria.append(column.is_not(None))
         statement = (
             select(column.label("key"), func.count().label("documents"))
@@ -129,6 +146,34 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
         )
         rows = (await self._tx.read(statement)).all()
         return {UUID(str(row.key)): int(row.documents) for row in rows}
+
+    async def count_tagged(
+        self, sets: Mapping[UUID, Collection[TagId]], user: UserId | None
+    ) -> dict[UUID, int]:
+        """One query per `_COUNTED` keys: each a count of the distinct documents among the
+        rows of the key's tags."""
+        documents, tags = t.documents, t.document_tags
+        criteria: list[ColumnElement[bool]] = [] if user is None else [visible_to(user)]
+        keys = list(sets)
+        counts: dict[UUID, int] = {}
+        for start in range(0, len(keys), _COUNTED):
+            batch = keys[start : start + _COUNTED]
+            columns = [
+                func.count(
+                    distinct(case((tags.c.tag_id.in_(sorted(sets[key])), tags.c.document_id)))
+                ).label(f"key_{number}")
+                for number, key in enumerate(batch)
+            ]
+            statement = (
+                select(*columns)
+                .select_from(tags.join(documents, documents.c.id == tags.c.document_id))
+                .where(*criteria)
+            )
+            row = (await self._tx.read(statement)).one()
+            counts.update(
+                (key, int(row[number])) for number, key in enumerate(batch) if row[number]
+            )
+        return counts
 
     async def _query(
         self,
@@ -147,13 +192,28 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
             criteria.append(documents.c.contact_id == filter.contact)
         if filter.document_type is not None:
             criteria.append(documents.c.document_type_id == filter.document_type)
-        if filter.drawer is not None:
-            criteria.append(documents.c.drawer_id == filter.drawer)
-        for tag in sorted(filter.tags):
+        if filter.topics is not None:
+            criteria.append(documents.c.topic_id.in_(sorted(filter.topics)))
+        if filter.space is not None:
+            criteria.append(documents.c.space_id == filter.space)
+        for tag_set in filter.tags:
             tags = t.document_tags
             criteria.append(
-                documents.c.id.in_(select(tags.c.document_id).where(tags.c.tag_id == tag))
+                documents.c.id.in_(
+                    select(tags.c.document_id).where(tags.c.tag_id.in_(sorted(tag_set)))
+                )
             )
+        for column, groups, owner in (
+            (documents.c.contact_id, filter.contact_groups, t.contact_groups.c.contact_id),
+            (
+                documents.c.document_type_id,
+                filter.document_type_groups,
+                t.document_type_groups.c.document_type_id,
+            ),
+        ):
+            for group_set in groups:
+                in_groups = owner.table.c.tag_id.in_(sorted(group_set))
+                criteria.append(column.in_(select(owner).where(in_groups)))
         if filter.confirmed is not None:
             confirmed = documents.c.confirmed_at
             criteria.append(confirmed.is_not(None) if filter.confirmed else confirmed.is_(None))
@@ -203,16 +263,18 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
                 map(DocumentTypeId, await values(documents.c.document_type_id, documents))
             ),
             tags=frozenset(map(TagId, await values(tags.c.tag_id, tagged))),
+            topics=frozenset(map(TagId, await values(documents.c.topic_id, documents))),
         )
 
     async def exists(
         self,
         *,
         owner: UserId | None = None,
-        drawer: DrawerId | None = None,
+        space: SpaceId | None = None,
         contact: ContactId | None = None,
         document_type: DocumentTypeId | None = None,
         tag: TagId | None = None,
+        topic: TagId | None = None,
         field: FieldId | None = None,
         sha256: Sha256 | None = None,
     ) -> bool:
@@ -220,12 +282,14 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
         criteria: list[ColumnElement[bool]] = []
         if owner is not None:
             criteria.append(documents.c.owner_id == owner)
-        if drawer is not None:
-            criteria.append(documents.c.drawer_id == drawer)
+        if space is not None:
+            criteria.append(documents.c.space_id == space)
         if contact is not None:
             criteria.append(documents.c.contact_id == contact)
         if document_type is not None:
             criteria.append(documents.c.document_type_id == document_type)
+        if topic is not None:
+            criteria.append(documents.c.topic_id == topic)
         if tag is not None:
             tags = t.document_tags
             criteria.append(
@@ -251,7 +315,7 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
             Document(
                 id=DocumentId(row.id),
                 owner_id=UserId(row.owner_id),
-                drawer_id=DrawerId(row.drawer_id),
+                space_id=SpaceId(row.space_id),
                 sha256=Sha256(row.sha256),
                 title=row.title,
                 original_filename=row.original_filename,
@@ -260,6 +324,7 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
                 document_type_id=(
                     None if row.document_type_id is None else DocumentTypeId(row.document_type_id)
                 ),
+                topic_id=None if row.topic_id is None else TagId(row.topic_id),
                 tag_ids={TagId(tag.tag_id) for tag in tags[row.id]},
                 fields={FieldId(value.field_id): _field_value(value) for value in fields[row.id]},
                 document_date=row.document_date,
@@ -288,7 +353,7 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
         return {
             "id": entity.id,
             "owner_id": entity.owner_id,
-            "drawer_id": entity.drawer_id,
+            "space_id": entity.space_id,
             "sha256": entity.sha256.hex,
             "title": entity.title,
             "title_key": sort_key(entity.title),
@@ -296,6 +361,7 @@ class SqlDocumentRepository(SqlRepository[DocumentId, Document]):
             "media_type": entity.media_type,
             "contact_id": entity.contact_id,
             "document_type_id": entity.document_type_id,
+            "topic_id": entity.topic_id,
             "document_date": entity.document_date,
             "channel": entity.channel.value,
             "lane": None if entity.lane is None else entity.lane.value,

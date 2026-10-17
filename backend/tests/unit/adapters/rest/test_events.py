@@ -8,8 +8,8 @@ import httpx2
 
 from papiq.adapters.inbound.rest import PREFIX, close_event_streams
 from papiq.composition.container import build_memory_container, build_services
-from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.events import ClassifierTrained
+from papiq.core.domain.spaces import ShareLevel
 from tests.api import Stream, auth, issue_token, listen, serving, until
 from tests.builders import NOW, PASSWORD
 from tests.contracts.processing import SAMPLES
@@ -21,8 +21,8 @@ EVENTS = f"{PREFIX}/events"
 async def test_events_reach_only_users_who_may_read_the_document(api: Api) -> None:
     owner, reader, stranger = await api.user(), await api.user(), await api.user()
     admin = await api.admin()
-    shared = await api.services.drawers.create(owner.id, "Shared")
-    await api.services.drawers.share(owner.id, shared.id, reader.id, ShareLevel.READ)
+    shared = await api.services.spaces.create(owner.id, "Shared")
+    await api.services.spaces.share(owner.id, shared.id, reader.id, ShareLevel.READ)
 
     async with serving(api.app) as url, httpx2.AsyncClient(base_url=url, timeout=10) as client:
         streams = {user.id: Stream() for user in (owner, reader, stranger, admin)}
@@ -39,7 +39,7 @@ async def test_events_reach_only_users_who_may_read_the_document(api: Api) -> No
         response = await client.post(
             f"{PREFIX}/documents",
             files=files,
-            data={"drawer_id": str(shared.id)},
+            data={"space_id": str(shared.id)},
             headers=auth(owner),
         )
         document = response.json()["id"]

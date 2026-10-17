@@ -63,6 +63,24 @@ async def test_global_rules_are_for_admins_and_only_tag(api: Api) -> None:
     assert [item["id"] for item in listed.json()] == [rule["id"]]
 
 
+async def test_a_rule_does_not_file_into_a_space_its_owner_only_reads(api: Api) -> None:
+    owner, reader = await api.user(), await api.user()
+    space = await post(api, "/spaces", {"name": "Household"}, auth(owner))
+    await api.client.put(
+        f"{PREFIX}/spaces/{space['id']}/shares/{reader.id}",
+        json={"level": "read"},
+        headers=auth(owner),
+    )
+    body = {
+        "name": "File",
+        "conditions": {"all": [{"field": "channel", "op": "is", "value": "api"}]},
+        "actions": [{"type": "set_space", "space_id": space["id"]}],
+    }
+    response = await api.client.post(f"{PREFIX}/rules", json=body, headers=auth(reader))
+    assert response.status_code == 403
+    assert response.json()["space_id"] == space["id"]
+
+
 async def test_a_template_that_does_not_fit_is_refused(api: Api) -> None:
     user = await api.user()
     body = {
@@ -111,8 +129,8 @@ async def test_rules_act_on_arrival_and_conflicts_wait_in_the_inbox(api: Api) ->
     admin, owner = await api.admin(), await api.user()
     a, o = auth(admin), auth(owner)
     tax = await post(api, "/tags", {"name": "tax"}, a)
-    drawer = await post(api, "/drawers", {"name": "Household"}, o)
-    other = await post(api, "/drawers", {"name": "Office"}, o)
+    space = await post(api, "/spaces", {"name": "Household"}, o)
+    other = await post(api, "/spaces", {"name": "Office"}, o)
     api_channel = {"all": [{"field": "channel", "op": "is", "value": "api"}]}
     await post(
         api,
@@ -123,7 +141,7 @@ async def test_rules_act_on_arrival_and_conflicts_wait_in_the_inbox(api: Api) ->
             "actions": [
                 {"type": "add_tags", "tag_ids": [tax["id"]]},
                 {"type": "set_title", "template": "Scan {{ filename }}"},
-                {"type": "set_drawer", "drawer_id": drawer["id"]},
+                {"type": "set_space", "space_id": space["id"]},
             ],
         },
         o,
@@ -133,7 +151,7 @@ async def test_rules_act_on_arrival_and_conflicts_wait_in_the_inbox(api: Api) ->
     assert document["lane"] == "green", document
     assert document["tag_ids"] == [tax["id"]]
     assert document["title"] == "Scan Bill 2026"
-    assert document["drawer_id"] == drawer["id"]
+    assert document["space_id"] == space["id"]
     assert document["channel"] == "api"
 
     await post(
@@ -142,7 +160,7 @@ async def test_rules_act_on_arrival_and_conflicts_wait_in_the_inbox(api: Api) ->
         {
             "name": "Office",
             "conditions": api_channel,
-            "actions": [{"type": "set_drawer", "drawer_id": other["id"]}],
+            "actions": [{"type": "set_space", "space_id": other["id"]}],
         },
         o,
     )
@@ -151,15 +169,15 @@ async def test_rules_act_on_arrival_and_conflicts_wait_in_the_inbox(api: Api) ->
     assert document["lane"] == "yellow", document
     review = (await api.client.get(f"{PREFIX}/documents/{id}/review", headers=o)).json()
     fields = [field["field"] for node in review["open"] for field in node["fields"]]
-    assert fields == ["drawer"]
+    assert fields == ["space"]
     response = await api.client.post(
-        f"{PREFIX}/documents/{id}/confirm", json={"drawer_id": other["id"]}, headers=o
+        f"{PREFIX}/documents/{id}/confirm", json={"space_id": other["id"]}, headers=o
     )
     assert response.status_code == 202, response.text
     await api.drain()
     document = (await api.client.get(f"{PREFIX}/documents/{id}", headers=o)).json()
     assert document["lane"] == "green", document
-    assert document["drawer_id"] == other["id"]
+    assert document["space_id"] == other["id"]
 
 
 async def upload_other(api: Api, headers: dict[str, str]) -> str:
@@ -175,7 +193,7 @@ async def test_a_change_sets_off_the_rules_that_become_true(api: Api) -> None:
     a, o = auth(admin), auth(owner)
     telekom = await post(api, "/contacts", {"name": "Telekom"}, a)
     vodafone = await post(api, "/contacts", {"name": "Vodafone"}, a)
-    drawer = await post(api, "/drawers", {"name": "Household"}, o)
+    space = await post(api, "/spaces", {"name": "Household"}, o)
     await post(
         api,
         "/rules",
@@ -183,7 +201,7 @@ async def test_a_change_sets_off_the_rules_that_become_true(api: Api) -> None:
             "name": "Telekom to household",
             "triggers": ["change"],
             "conditions": {"all": [{"field": "contact", "op": "is", "value": telekom["id"]}]},
-            "actions": [{"type": "set_drawer", "drawer_id": drawer["id"]}],
+            "actions": [{"type": "set_space", "space_id": space["id"]}],
         },
         o,
     )
@@ -194,9 +212,9 @@ async def test_a_change_sets_off_the_rules_that_become_true(api: Api) -> None:
     response = await api.client.patch(url, json={"contact_id": telekom["id"]}, headers=o)
     assert response.status_code == 200, response.text
     changed = response.json()
-    assert changed["drawer_id"] == drawer["id"]
+    assert changed["space_id"] == space["id"]
     assert changed["lane"] == "green"
-    assert [effect["field"] for effect in changed["rules"][0]["applied"]] == ["drawer"]
+    assert [effect["field"] for effect in changed["rules"][0]["applied"]] == ["space"]
     # Not again: the rule held before this change.
     response = await api.client.patch(url, json={"title": "Bill"}, headers=o)
     assert response.json()["rules"] == []
@@ -252,14 +270,14 @@ async def test_a_rule_is_applied_to_existing_documents(api: Api) -> None:
 async def test_a_dry_run_shows_what_a_change_would_do(api: Api) -> None:
     admin, owner = await api.admin(), await api.user()
     telekom = await post(api, "/contacts", {"name": "Telekom"}, auth(admin))
-    drawer = await post(api, "/drawers", {"name": "Household"}, auth(owner))
+    space = await post(api, "/spaces", {"name": "Household"}, auth(owner))
     await post(
         api,
         "/rules",
         {
             "name": "Telekom",
             "conditions": {"all": [{"field": "contact", "op": "is", "value": telekom["id"]}]},
-            "actions": [{"type": "set_drawer", "drawer_id": drawer["id"]}],
+            "actions": [{"type": "set_space", "space_id": space["id"]}],
         },
         auth(owner),
     )
@@ -271,8 +289,8 @@ async def test_a_dry_run_shows_what_a_change_would_do(api: Api) -> None:
     )
     assert response.status_code == 200, response.text
     preview = response.json()
-    assert preview["changed"] == ["contact", "drawer"]
-    assert preview["visibility"]["drawer_id"] == drawer["id"]
+    assert preview["changed"] == ["contact", "space"]
+    assert preview["visibility"]["space_id"] == space["id"]
     assert preview["visibility"]["shares"] == []
     stored = (await api.client.get(f"{PREFIX}/documents/{id}", headers=auth(owner))).json()
     assert stored["contact_id"] is None
@@ -284,15 +302,15 @@ async def test_an_editor_whose_change_files_the_document_away_learns_nothing_mor
     admin, owner, editor = await api.admin(), await api.user(), await api.user()
     o = auth(owner)
     acme = await post(api, "/contacts", {"name": "ACME"}, auth(admin))
-    shared = await post(api, "/drawers", {"name": "Shared"}, o)
-    private = await post(api, "/drawers", {"name": "Private"}, o)
+    shared = await post(api, "/spaces", {"name": "Shared"}, o)
+    private = await post(api, "/spaces", {"name": "Private"}, o)
     response = await api.client.put(
-        f"{PREFIX}/drawers/{shared['id']}/shares/{editor.id}",
+        f"{PREFIX}/spaces/{shared['id']}/shares/{editor.id}",
         json={"level": "read_write"},
         headers=o,
     )
     assert response.status_code < 300, response.text
-    for name, triggers, condition, drawer in (
+    for name, triggers, condition, space in (
         ("Shared", ["ingest"], {"field": "channel", "op": "is", "value": "api"}, shared),
         ("Private", ["change"], {"field": "contact", "op": "is", "value": acme["id"]}, private),
     ):
@@ -303,20 +321,20 @@ async def test_an_editor_whose_change_files_the_document_away_learns_nothing_mor
                 "name": name,
                 "triggers": triggers,
                 "conditions": {"all": [condition]},
-                "actions": [{"type": "set_drawer", "drawer_id": drawer["id"]}],
+                "actions": [{"type": "set_space", "space_id": space["id"]}],
             },
             o,
         )
     id = await upload(api, o)
     url = f"{PREFIX}/documents/{id}"
-    assert (await api.client.get(url, headers=o)).json()["drawer_id"] == shared["id"]
+    assert (await api.client.get(url, headers=o)).json()["space_id"] == shared["id"]
 
     response = await api.client.patch(url, json={"contact_id": acme["id"]}, headers=auth(editor))
 
     assert response.status_code == 200, response.text
     assert response.json() == {"id": id, "access": None}
     assert (await api.client.get(url, headers=auth(editor))).status_code == 404
-    assert (await api.client.get(url, headers=o)).json()["drawer_id"] == private["id"]
+    assert (await api.client.get(url, headers=o)).json()["space_id"] == private["id"]
 
 
 async def test_a_template_is_previewed_with_a_document(api: Api) -> None:

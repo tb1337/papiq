@@ -21,11 +21,13 @@ from papiq.adapters.outbound.crypto import (
 )
 from papiq.adapters.outbound.filesystem import FilesystemObjectStore
 from papiq.adapters.outbound.liquid import LiquidTemplateRenderer
+from papiq.adapters.outbound.logos import HttpLogoFetcher
 from papiq.adapters.outbound.meilisearch import MeilisearchIndex
 from papiq.adapters.outbound.memory import (
     FakeCipher,
     FakeClassifier,
     FakeCodeReader,
+    FakeImageNormaliser,
     FakeMetadataReader,
     FakeOcr,
     FakePageRenderer,
@@ -46,6 +48,7 @@ from papiq.adapters.outbound.oidc import AuthlibOidcProvider
 from papiq.adapters.outbound.openai_compat import OpenAiCompatEmbeddings, OpenAiCompatLanguageModel
 from papiq.adapters.outbound.pdfium import LayoutParser, PdfiumPageRenderer, PdfiumTextLocator
 from papiq.adapters.outbound.pikepdf import FileMetadataReader
+from papiq.adapters.outbound.pillow import PillowImageNormaliser
 from papiq.adapters.outbound.regex import RegexPatternMatcher
 from papiq.adapters.outbound.s3 import S3ObjectStore
 from papiq.adapters.outbound.sklearn import SklearnClassifier
@@ -65,7 +68,9 @@ from papiq.core.ports import (
     DocumentParser,
     Embeddings,
     EventBus,
+    ImageNormaliser,
     LanguageModel,
+    LogoFetcher,
     MetadataReader,
     ObjectStore,
     Ocr,
@@ -96,9 +101,9 @@ from papiq.core.services.classification.signals import (
 )
 from papiq.core.services.classifier import ClassifierPolicy, ClassifierService
 from papiq.core.services.documents import DocumentService
-from papiq.core.services.drawers import DrawerService
 from papiq.core.services.imports import ImportedFieldsNode, ImportedJudgeNode, ImportedSignal
 from papiq.core.services.indexing import IndexingPolicy, IndexingService
+from papiq.core.services.logos import LogoService
 from papiq.core.services.maintenance import MaintenanceService
 from papiq.core.services.master_data import MasterDataService
 from papiq.core.services.nodes import OcrNode, PagesNode, ParseNode
@@ -109,6 +114,7 @@ from papiq.core.services.rules.changes import ChangeRules
 from papiq.core.services.rules.nodes import ApplyRulesNode, FileNode
 from papiq.core.services.rules.retroactive import RuleApplicationService
 from papiq.core.services.search import SearchPolicy, SearchService
+from papiq.core.services.spaces import SpaceService
 from papiq.core.services.users import UserService
 from papiq.core.services.webhooks import (
     WebhookDeliveryService,
@@ -251,7 +257,13 @@ PAGE_RENDERERS: dict[str, Factory[PageRenderer]] = {"pdfium": lambda _: PdfiumPa
 TEXT_LOCATORS: dict[str, Factory[TextLocator]] = {"pdfium": lambda _: PdfiumTextLocator()}
 CODE_READERS: dict[str, Factory[CodeReader]] = {"zxing": lambda _: ZxingCodeReader()}
 METADATA_READERS: dict[str, Factory[MetadataReader]] = {"pikepdf": lambda _: FileMetadataReader()}
+IMAGE_NORMALISERS: dict[str, Factory[ImageNormaliser]] = {
+    "pillow": lambda _: PillowImageNormaliser()
+}
 CLASSIFIERS: dict[str, Factory[Classifier]] = {"scikit-learn": lambda _: SklearnClassifier()}
+LOGO_FETCHERS: dict[str, Factory[LogoFetcher]] = {
+    "httpx2": lambda _: HttpLogoFetcher(user_agent=f"Papiq/{__version__}")
+}
 
 
 def redirect_uri(settings: Settings) -> str:
@@ -300,6 +312,7 @@ class Container:
     locator: TextLocator
     codes: CodeReader
     metadata: MetadataReader
+    images: ImageNormaliser
     password_hasher: PasswordHasher
     cipher: SecretCipher
     webhook_sender: WebhookSender
@@ -311,6 +324,8 @@ class Container:
     language_model: LanguageModel | None
     embeddings: Embeddings | None
     classifier: Classifier | None
+    # With `PAPIQ_LOGO_FETCH`: Papiq asks the websites of contacts for their logos.
+    logo_fetcher: LogoFetcher | None = None
     closers: tuple[Closer, ...] = field(default=(), repr=False)
 
     async def aclose(self) -> None:
@@ -350,6 +365,7 @@ def build_container(settings: Settings) -> Container:
         locator=_select("locator", "pdfium", TEXT_LOCATORS, settings),
         codes=_select("codes", "zxing", CODE_READERS, settings),
         metadata=_select("metadata", "pikepdf", METADATA_READERS, settings),
+        images=_select("images", "pillow", IMAGE_NORMALISERS, settings),
         password_hasher=Argon2PasswordHasher(),
         cipher=secret_cipher(settings),
         webhook_sender=HttpWebhookSender(user_agent=f"Papiq/{__version__}"),
@@ -376,6 +392,11 @@ def build_container(settings: Settings) -> Container:
             None
             if settings.classifier == "none"
             else _select("classifier", settings.classifier, CLASSIFIERS, settings)
+        ),
+        logo_fetcher=(
+            _select("logo_fetcher", "httpx2", LOGO_FETCHERS, settings)
+            if settings.logo_fetch
+            else None
         ),
         closers=tuple(closers),
     )
@@ -404,6 +425,7 @@ def build_memory_container(clock: Clock | None = None) -> Container:
         locator=FakeTextLocator(),
         codes=FakeCodeReader(),
         metadata=FakeMetadataReader(),
+        images=FakeImageNormaliser(),
         password_hasher=FakePasswordHasher(),
         cipher=FakeCipher(),
         webhook_sender=FakeWebhookSender(),
@@ -427,8 +449,9 @@ class Services:
     auth: AuthService
     oidc: OidcService | None  # with a configured provider
     users: UserService
-    drawers: DrawerService
+    spaces: SpaceService
     master_data: MasterDataService
+    logos: LogoService
     rules: RuleService
     rule_applications: RuleApplicationService
     webhooks: WebhookService
@@ -537,7 +560,12 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
         None
         if container.classifier is None
         else ClassifierService(
-            uow, store, clock, container.classifier, classifier_policy_of(settings)
+            uow,
+            store,
+            clock,
+            container.classifier,
+            classifier_policy_of(settings),
+            fetch_logos=container.logo_fetcher is not None,
         )
     )
     index, embeddings = container.search_index, container.embeddings
@@ -602,10 +630,16 @@ def build_services(container: Container, settings: Settings | None = None) -> Se
             )
         ),
         users=UserService(uow, clock, container.password_hasher),
-        drawers=DrawerService(uow, clock),
+        spaces=SpaceService(uow, clock),
         master_data=MasterDataService(
-            uow, clock, container.templates, index_renames=index is not None
+            uow,
+            clock,
+            container.templates,
+            index_renames=index is not None,
+            store=store,
+            fetch_logos=container.logo_fetcher is not None,
         ),
+        logos=LogoService(uow, clock, store, container.images, container.logo_fetcher),
         rules=RuleService(uow, clock, container.templates),
         webhooks=WebhookService(uow, clock, container.cipher, webhook_policy_of(settings)),
         webhook_delivery=WebhookDeliveryService(

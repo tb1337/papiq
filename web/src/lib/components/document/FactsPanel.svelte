@@ -5,6 +5,7 @@
 	import ScanQrCode from '@lucide/svelte/icons/scan-qr-code';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import UserCheck from '@lucide/svelte/icons/user-check';
+	import { untrack } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { api } from '#lib/api/client.ts';
 	import { unwrap } from '#lib/api/call.ts';
@@ -30,15 +31,18 @@
 	import type { Lookup } from '#lib/masterdata.svelte.ts';
 	import { masterDataDialogs } from '#lib/masterdata-dialog.svelte.ts';
 	import { m } from '#lib/paraglide/messages.js';
+	import { pathLabel, tagOptions } from '#lib/tags.ts';
 	import { cn } from '#lib/utils.ts';
 
 	// The facts beside the text: what supports the document's contact, what speaks of other
-	// contacts, the identifiers of no contact (admins attach them), and the codes on the pages.
-	// Hovering or focusing an entry marks it in the text; a click keeps the mark.
+	// contacts, the identifiers of no contact (admins attach them, with a topic of the contact,
+	// the document's by default), and the codes on the pages. Hovering or focusing an entry
+	// marks it in the text; a click keeps the mark.
 	let {
 		facts,
 		documentId,
 		lookup,
+		topicId = null,
 		admin,
 		onmark,
 		onshowcode,
@@ -47,6 +51,8 @@
 		facts: Facts;
 		documentId: string;
 		lookup: Lookup | null;
+		/** The document's topic: an identifier attached points to it, if the contact has it. */
+		topicId?: string | null;
 		/** Admins attach identifiers (they are master data). */
 		admin: boolean;
 		/** The spans to mark in the text, none to mark nothing; `reveal` after a click. */
@@ -65,6 +71,7 @@
 	let attaching = $state<string | null>(null);
 	let target = $state<'document' | 'other'>('document');
 	let other = $state('');
+	let attachTopic = $state('');
 	let busy = $state(false);
 	// A click keeps a mark: the text scrolls to it (also when the entry was marked already).
 	let reveal = false;
@@ -76,6 +83,26 @@
 		contacts.find((contact) => contact.id === id)?.name ?? '…';
 	const documentContact = $derived(facts.contact_id ? contactName(facts.contact_id) : null);
 	const active = $derived(hover ?? pinned);
+	// The topics of the contact an identifier goes to; the document's topic first of all.
+	const attachContact = $derived(target === 'document' ? facts.contact_id : other);
+	const attachTopics = $derived.by(() => {
+		const enabled = contacts.find((contact) => contact.id === attachContact)?.topic_ids ?? [];
+		return tagOptions(lookup?.tags ?? [], 'topic').filter((option) =>
+			enabled.includes(option.value)
+		);
+	});
+	$effect(() => {
+		const options = attachTopics;
+		untrack(() => {
+			if (options.some((option) => option.value === attachTopic)) return;
+			const own = options.some((option) => option.value === topicId);
+			attachTopic = own && topicId ? topicId : '';
+		});
+	});
+	const topicName = (id: string | null | undefined) => {
+		const tag = lookup?.tags.find((entry) => entry.id === id);
+		return tag ? pathLabel(tag) : null;
+	};
 
 	const entryId = (entry: Entry) =>
 		'kind' in entry ? `id:${identifierKey(entry)}` : `name:${entry.contact_id}`;
@@ -110,6 +137,7 @@
 		attaching = attaching === id ? null : id;
 		target = facts.contact_id ? 'document' : 'other';
 		other = '';
+		attachTopic = topicId ?? '';
 	}
 
 	async function attach(item: FoundIdentifier) {
@@ -120,7 +148,11 @@
 			await unwrap(
 				api.POST('/api/v1/contacts/{id}/identifiers', {
 					params: { path: { id: contact } },
-					body: { kind: item.kind, value: item.value }
+					body: {
+						kind: item.kind,
+						value: item.value,
+						...(attachTopic ? { topic_id: attachTopic } : {})
+					}
 				})
 			);
 			toast.success(
@@ -176,6 +208,11 @@
 				<span class={cn('text-sm break-words', identifier && 'font-mono text-[13px]')}>
 					{identifier ? shown(identifier) : named?.name}
 				</span>
+				{#if identifier?.topic_id && topicName(identifier.topic_id)}
+					<span class="text-xs text-muted-foreground">
+						{m.facts_topic({ topic: topicName(identifier.topic_id) ?? '' })}
+					</span>
+				{/if}
 				{#if contactLabel || entry.in_code}
 					<span class="text-xs text-muted-foreground">
 						{[
@@ -252,6 +289,16 @@
 							...contacts.map((contact) => ({ value: contact.id, label: contact.name }))
 						]}
 					/>
+				{/if}
+				{#if attachTopics.length > 0}
+					<label class="flex flex-col gap-1 text-sm">
+						<span class="text-xs text-muted-foreground">{m.facts_attach_topic()}</span>
+						<NativeSelect
+							bind:value={attachTopic}
+							aria-label={m.facts_attach_topic()}
+							options={[{ value: '', label: m.topic_none() }, ...attachTopics]}
+						/>
+					</label>
 				{/if}
 				<span class="text-xs text-muted-foreground">{m.facts_attach_hint()}</span>
 				<div class="flex justify-end gap-2">

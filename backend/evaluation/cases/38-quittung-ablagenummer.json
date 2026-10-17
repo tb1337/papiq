@@ -1,0 +1,42 @@
+{
+  "description": "Receipt with the filing number stamped on the paper copy. The field is set by hand: the model is never asked for it, and it is not scored. That a required one keeps the document yellow until a person enters it is the rules node's check, which the evaluation does not run. Trained, the classifier names another type: yellow.",
+  "expected": {
+    "lane": "green",
+    "contact": "Elektro Krause GmbH",
+    "document_type": "Quittung",
+    "tags": [
+      "Handwerker"
+    ],
+    "document_date": "2026-09-12",
+    "fields": {
+      "Ablagenummer": "4711"
+    },
+    "lanes": {
+      "trained": "yellow"
+    }
+  },
+  "fake": {
+    "classification": {
+      "contact": {
+        "value": "Elektro Krause GmbH",
+        "evidence": "Elektro Krause GmbH"
+      },
+      "document_type": "Quittung",
+      "new_document_type": null,
+      "tags": [
+        "Handwerker"
+      ],
+      "new_tags": [],
+      "document_date": {
+        "value": "2026-09-12",
+        "evidence": "Musterstadt, 12.09.2026"
+      }
+    },
+    "fields": {
+      "Ablagenummer": {
+        "value": "4711",
+        "evidence": "Abgelegt unter 4711"
+      }
+    }
+  }
+}

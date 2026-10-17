@@ -1,4 +1,4 @@
-"""What a Paperless document becomes in Papiq: owner, drawer and the metadata that goes with
+"""What a Paperless document becomes in Papiq: owner, space and the metadata that goes with
 the upload, in terms of Papiq's ids. Used by the migration (to upload) and by the check (to
 compare)."""
 
@@ -54,8 +54,8 @@ class Prepared:
     notes: list[str] = field(default_factory=list)
     access: Access | None = None
 
-    def drawer_key(self) -> str | None:
-        """The key of the drawer this document needs; None: the owner's default drawer."""
+    def space_key(self) -> str | None:
+        """The key of the space this document needs; None: the owner's default space."""
         if not self.shares:
             return None
         return self.owner + "|" + ";".join(f"{user}:{level}" for user, level in self.shares)

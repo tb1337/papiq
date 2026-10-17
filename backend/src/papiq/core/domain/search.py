@@ -12,18 +12,20 @@ from papiq.core.domain.ids import (
     ContactId,
     DocumentId,
     DocumentTypeId,
-    DrawerId,
     FieldId,
+    SpaceId,
     TagId,
     UserId,
 )
 from papiq.core.domain.pipeline import Lane
 
 PROCESSING = "processing"
-LAYOUT = 2
-"""The shape of what the index holds of a document. An entry of an older layout is written
-anew by the reconciliation (2: the ids of the fields with a value, and the title's sort key)."""
 """The lane value of a document that has none yet."""
+LAYOUT = 5
+"""The shape of what the index holds of a document. An entry of an older layout is written
+anew by the reconciliation (2: the ids of the fields with a value, and the title's sort key;
+3: `space_id` instead of `drawer_id`; 4: tags with their ancestors, and the groups of the
+contact and the type; 5: the topic with its ancestors)."""
 
 
 def lane_value(lane: Lane | None) -> str:
@@ -43,6 +45,10 @@ class EmbeddingStamp:
 class IndexDocument:
     """A document as the index holds it. Names are indexed for the search, ids for the filters.
 
+    Tags and the topic come with their ancestors, and the groups of the document's contact and
+    type with theirs (`tag_tree`): a document is found by a tag or a topic above the one it
+    carries, by name and by id.
+
     `vectors` holds one vector per section of the text (all of one length); `embedding` says
     how they were made and is required with them. `vectors=None` keeps the vectors (and their
     stamp) that the index already holds for the document: for an update after which the text,
@@ -52,7 +58,7 @@ class IndexDocument:
     id: DocumentId
     version: int
     owner_id: UserId
-    drawer_id: DrawerId
+    space_id: SpaceId
     lane: Lane | None
     title: str
     filename: str
@@ -63,6 +69,12 @@ class IndexDocument:
     document_type: str | None = None
     tag_ids: tuple[TagId, ...] = ()
     tags: tuple[str, ...] = ()
+    contact_group_ids: tuple[TagId, ...] = ()
+    contact_groups: tuple[str, ...] = ()
+    document_type_group_ids: tuple[TagId, ...] = ()
+    document_type_groups: tuple[str, ...] = ()
+    topic_ids: tuple[TagId, ...] = ()  # the topic and those above it
+    topics: tuple[str, ...] = ()
     fields: tuple[str, ...] = ()
     field_ids: tuple[FieldId, ...] = ()  # the fields with a value, for the filter
     document_date: date | None = None
@@ -102,19 +114,19 @@ class IndexState:
 
 @dataclass(frozen=True)
 class Visibility:
-    """Who is searching and which drawers they can read from: the drawers they own and those
+    """Who is searching and which spaces they can read from: the spaces they own and those
     shared with them. Own documents are visible in every lane; other users' documents only when
-    green and in one of `drawers` (the user's reach, `permissions.in_reach`). `everything`: every
+    green and in one of `spaces` (the user's reach, `permissions.in_reach`). `everything`: every
     document, for an admin who asks for all users' documents."""
 
     user: UserId
-    drawers: frozenset[DrawerId]
+    spaces: frozenset[SpaceId]
     everything: bool = False
 
     def allows(self, document: IndexDocument) -> bool:
         if self.everything or document.owner_id == self.user:
             return True
-        return document.lane is Lane.GREEN and document.drawer_id in self.drawers
+        return document.lane is Lane.GREEN and document.space_id in self.spaces
 
 
 @dataclass(frozen=True)

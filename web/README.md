@@ -24,7 +24,7 @@ pnpm e2e             # Playwright smoke test against a running API (local only)
 The smoke tests (`tests/e2e`) run against the API serving the built UI. `smoke.spec.ts` creates a
 user through the admin of the environment, signs in with password and TOTP, navigates, reloads and
 signs out. `areas.spec.ts` signs in as that admin (without a second factor), opens every area
-without a console error (a CSP violation is one) and creates and removes a contact, a drawer, a
+without a console error (a CSP violation is one) and creates and removes a contact, a space, a
 webhook and an API token:
 
 ```sh
@@ -64,7 +64,8 @@ place of the editor (`tests/setup.ts`); `codemirror.test.ts` runs the real one.
 
 `/ui/documents` lists the documents and, with words in `?q=`, searches them
 (`/documents/search`, with snippets), with the same filters (`lib/filters.ts`: contact, type,
-tag, drawer, lane, a field with a value); there is no search page of its own. The field in the
+tags, contact and type groups, topics, space, lane, a field with a value; tags, groups and topics
+as chips, several topics meaning one of them); there is no search page of its own. The field in the
 header leads there; on narrow screens its icon opens the view with the field focused
 (`#search`). `?sort=` holds the sort: a search by relevance, a list by the newest document date
 unless chosen otherwise; the last choice of each, and grid or list (grid by default), stay in
@@ -72,6 +73,38 @@ this browser (`lib/listing.ts`). An admin's choice to include all users is a set
 user menu (`lib/scope.svelte.ts`), kept in this browser too and shown at the avatar; documents,
 search, the inbox with its counter, rules and the counts at the master data follow it. Every
 `localStorage` access is guarded: without storage the defaults hold.
+
+## Header
+
+The app's header holds the menu, the wordmark, the search, language, theme and the account menu
+(`AppShell`). On a phone (below `sm`) language and theme are groups of the account menu instead
+(`LanguageChoices`, `ThemeChoices`, which the header's own menus use too); the sign-in page keeps
+both menus at every width.
+
+## Master data
+
+`/ui/admin/master-data` (admins) has four tabs in `?tab=`: contacts, document types, tags,
+fields; an unknown one is the first. Each has a search in this browser (`lib/master-search.ts`:
+contacts also by aliases and identifiers) and its button to add. The Tags tab holds every kind
+of tag (`TagsPanel`, `lib/tag-kinds.ts`): a filter by kind in `?kind=`, one section per kind
+with its tree, the collapsed sections remembered in this browser, and per tag its usage as a
+link (documents; a contact group's contacts and a type group's types, which the contact and type
+lists filter by `?group=` and `?topic=`). A new tag without a kind asks for it first.
+
+On a phone (below `sm`, `lib/phone.svelte.ts`) a whole row opens the editor (`MasterRow`), and
+the editors fill the screen with a bar on top (`EditorShell`); wider, the editors are dialogs
+whose footer stays while the body scrolls. The contact editor puts the logo beside the name on a
+phone, uploading and fetching below them (`ContactLogoEditor` with `beside`). Deleting is in the editors. Groups and topics are
+picked in a sheet or dialog over the editor (`TagPicker`); there, in the document's tag input
+and in its topic field, an admin's search that finds no tag of the kind named so offers to
+create one at once or with details in a second dialog (`lib/tag-create.ts`,
+`masterDataDialogs.createTag`).
+
+Icons come from Lucide in the own build, each its own file loaded when it is shown. Chips and
+type icons draw the 170 offered first from a small map (`lib/icons/curated-modules.ts`, which a
+test keeps equal to `curated.ts`); the map of all 1,866 (about 43 KB gzip) loads only with the
+icon picker's panel (`IconPickerPanel`, with the search and its words) or for an icon beyond
+those (`lib/icons/load.ts`).
 
 ## Document view
 

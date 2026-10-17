@@ -14,10 +14,15 @@ import type {
 	Problem,
 	Trigger
 } from '#lib/rules/model.ts';
+import { isTagField } from '#lib/rules/model.ts';
+import { pathLabel } from '#lib/tags.ts';
 
 const CONDITION_FIELDS: Record<Exclude<ConditionField, 'field'>, () => string> = {
 	contact: m.field_contact,
+	contact_group: m.rule_field_contact_group,
 	document_type: m.field_document_type,
+	document_type_group: m.rule_field_document_type_group,
+	topic: m.field_topic,
 	tags: m.field_tags,
 	channel: m.rule_field_channel,
 	text: m.rule_field_text,
@@ -40,9 +45,10 @@ export const CHANNEL_LABELS: Record<Channel, () => string> = {
 };
 
 export const ACTION_LABELS: Record<ActionType, () => string> = {
-	set_drawer: m.rule_action_set_drawer,
+	set_space: m.rule_action_set_space,
 	set_contact: m.rule_action_set_contact,
 	set_document_type: m.rule_action_set_document_type,
+	set_topic: m.rule_action_set_topic,
 	set_title: m.rule_action_set_title,
 	add_tags: m.rule_action_add_tags,
 	remove_tags: m.rule_action_remove_tags,
@@ -87,7 +93,7 @@ export function operatorLabel(
 	type: FieldType | null = null
 ): string {
 	let special: Partial<Record<Operator, () => string>> = {};
-	if (field === 'tags') special = TAG_OPERATORS;
+	if (isTagField(field)) special = TAG_OPERATORS;
 	else if (field === 'document_date' || type === 'date') special = DATE_OPERATORS;
 	else if (type === 'number' || type === 'amount') special = NUMBER_OPERATORS;
 	else if (type === 'period') special = PERIOD_OPERATORS;
@@ -143,7 +149,7 @@ export function describeCondition(condition: ConditionNode, lookup: Lookup | nul
 	const text = values.map((value) => describeConditionValue(condition, value, lookup)).join(', ');
 	const quoted =
 		condition.field === 'text' || condition.op === 'contains' || condition.op === 'matches';
-	const shown = quoted && condition.field !== 'tags' ? m.rule_quoted({ text }) : text;
+	const shown = quoted && !isTagField(condition.field) ? m.rule_quoted({ text }) : text;
 	const caseNote = condition.caseSensitive ? ` (${m.rule_case_sensitive()})` : '';
 	return `${subject} ${op} ${shown}${caseNote}`;
 }
@@ -156,7 +162,7 @@ function describeConditionValue(
 	if (typeof value === 'string') {
 		if (condition.field === 'contact') return nameOf(value, lookup?.contacts ?? []);
 		if (condition.field === 'document_type') return nameOf(value, lookup?.documentTypes ?? []);
-		if (condition.field === 'tags') return nameOf(value, lookup?.tags ?? []);
+		if (isTagField(condition.field) || condition.field === 'topic') return tagName(value, lookup);
 		if (condition.field === 'channel') return CHANNEL_LABELS[value as Channel]?.() ?? value;
 		if (condition.field === 'text') return value;
 		if (condition.op === 'contains' || condition.op === 'matches') return value;
@@ -185,21 +191,29 @@ export function actionTemplate(
 	return null;
 }
 
+/** A tag by its path ("Insurance › Health"); unknown ones as such. */
+function tagName(id: string, lookup: Lookup | null): string {
+	const tag = lookup?.tags.find((entry) => entry.id === id);
+	return tag ? pathLabel(tag) : nameOf(id, []);
+}
+
 /** An action as the user reads it: "Add tags: Tax, Bills". */
 export function describeAction(action: ActionNode | ApiAction, lookup: Lookup | null): string {
 	const label = ACTION_LABELS[action.type]();
 	switch (action.type) {
-		case 'set_drawer':
-			return `${label}: ${nameOf(action.drawer_id, lookup?.drawers ?? [])}`;
+		case 'set_space':
+			return `${label}: ${nameOf(action.space_id, lookup?.spaces ?? [])}`;
 		case 'set_contact':
 			return `${label}: ${nameOf(action.contact_id, lookup?.contacts ?? [])}`;
 		case 'set_document_type':
 			return `${label}: ${nameOf(action.document_type_id, lookup?.documentTypes ?? [])}`;
+		case 'set_topic':
+			return `${label}: ${tagName(action.topic_id, lookup)}`;
 		case 'set_title':
 			return `${label}: ${m.rule_quoted({ text: action.template })}`;
 		case 'add_tags':
 		case 'remove_tags':
-			return `${label}: ${action.tag_ids.map((id) => nameOf(id, lookup?.tags ?? [])).join(', ')}`;
+			return `${label}: ${action.tag_ids.map((id) => tagName(id, lookup)).join(', ')}`;
 		case 'set_field': {
 			const field = fieldOf(action.field_id, lookup);
 			return `${label}: ${field?.name ?? m.rule_unknown()} = ${describeValue(action.value, null)}`;

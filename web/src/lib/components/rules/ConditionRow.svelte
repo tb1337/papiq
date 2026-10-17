@@ -11,9 +11,11 @@
 	import type { Lookup } from '#lib/masterdata.svelte.ts';
 	import { m } from '#lib/paraglide/messages.js';
 	import { CHANNEL_LABELS, fieldLabel, operatorLabel } from '#lib/rules/describe.ts';
+	import { tagOptions } from '#lib/tags.ts';
 	import {
 		CHANNELS,
 		CONDITION_FIELDS,
+		TAG_FIELDS,
 		changeField,
 		changeConditionField,
 		changeOperator,
@@ -66,7 +68,11 @@
 			case 'document_type':
 				return lookup.documentTypes.map((entry) => ({ value: entry.id, label: entry.name }));
 			case 'tags':
-				return lookup.tags.map((entry) => ({ value: entry.id, label: entry.name }));
+			case 'contact_group':
+			case 'document_type_group':
+				return tagOptions(lookup.tags, TAG_FIELDS[condition.field]);
+			case 'topic':
+				return tagOptions(lookup.tags, 'topic');
 			case 'channel':
 				return CHANNELS.map((channel) => ({ value: channel, label: CHANNEL_LABELS[channel]() }));
 			case 'field':

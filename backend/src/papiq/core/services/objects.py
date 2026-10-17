@@ -2,7 +2,7 @@
 
 from papiq.core.domain.documents import Sha256
 from papiq.core.domain.errors import NotFoundError
-from papiq.core.domain.ids import DocumentId
+from papiq.core.domain.ids import ContactId, DocumentId
 from papiq.core.domain.pipeline import Node
 from papiq.core.ports.object_store import ObjectStore
 
@@ -66,6 +66,11 @@ async def load_text(store: ObjectStore, document: DocumentId) -> bytes:
 def exchanges_key(document: DocumentId, node: Node) -> str:
     """What `node` sent to the language model and got back, every run (`domain.exchanges`)."""
     return f"documents/{document}/exchanges/{node.value}.json"
+
+
+def logo_key(contact: ContactId) -> str:
+    """The logo of a contact (WebP, `ports.images.LOGO_SIZE`), uploaded or fetched."""
+    return f"contacts/{contact}/logo.webp"
 
 
 def classifier_key(number: int) -> str:

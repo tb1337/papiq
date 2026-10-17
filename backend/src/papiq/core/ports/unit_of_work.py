@@ -17,11 +17,11 @@ from papiq.core.ports.repository import (
     DocumentIdentifierRepository,
     DocumentRepository,
     DocumentTypeRepository,
-    DrawerRepository,
     FieldDefinitionRepository,
     ProcessingLog,
     RuleApplicationRepository,
     RuleRepository,
+    SpaceRepository,
     TagRepository,
     UserRepository,
     WebhookRepository,
@@ -49,7 +49,7 @@ class UnitOfWork(Protocol):
     @property
     def users(self) -> UserRepository: ...
     @property
-    def drawers(self) -> DrawerRepository: ...
+    def spaces(self) -> SpaceRepository: ...
     @property
     def contacts(self) -> ContactRepository: ...
     @property

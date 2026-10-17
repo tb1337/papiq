@@ -13,11 +13,11 @@ import pytest
 from papiq.adapters.inbound.rest import PREFIX
 from papiq.composition.container import build_memory_container, build_services
 from papiq.core.domain.documents import Sha256
-from papiq.core.domain.drawers import ShareLevel
 from papiq.core.domain.errors import UnprocessableDocumentError
 from papiq.core.domain.exchanges import ModelCall, RunExchange, exchanges_to_json
 from papiq.core.domain.ids import DocumentId
 from papiq.core.domain.pipeline import Node
+from papiq.core.domain.spaces import ShareLevel
 from papiq.core.services.objects import exchanges_key, original_key
 from tests.api import auth, issue_token
 from tests.builders import PASSWORD
@@ -186,7 +186,7 @@ async def test_fields_count_against_the_limit(api: Api) -> None:
             400,
             "multipart",
         ),
-        ({"files": pdf(), "data": {"drawer_id": "no-uuid"}}, 422, "drawer_id"),
+        ({"files": pdf(), "data": {"space_id": "no-uuid"}}, 422, "space_id"),
     ],
 )
 async def test_malformed_uploads(
@@ -199,20 +199,21 @@ async def test_malformed_uploads(
     assert detail in response.json()["detail"]
 
 
-async def test_upload_into_a_drawer(api: Api) -> None:
+async def test_upload_into_a_space(api: Api) -> None:
     owner, writer, reader = await api.user(), await api.user(), await api.user()
-    drawers = api.services  # drawer service lives in the services, not in the API (M4)
-    shared = await drawers.drawers.create(owner.id, "Household")
-    await drawers.drawers.share(owner.id, shared.id, writer.id, ShareLevel.READ_WRITE)
-    await drawers.drawers.share(owner.id, shared.id, reader.id, ShareLevel.READ)
-    data = {"drawer_id": str(shared.id)}
+    spaces = api.services  # space service lives in the services, not in the API (M4)
+    shared = await spaces.spaces.create(owner.id, "Household")
+    await spaces.spaces.share(owner.id, shared.id, writer.id, ShareLevel.READ_WRITE)
+    await spaces.spaces.share(owner.id, shared.id, reader.id, ShareLevel.READ)
+    data = {"space_id": str(shared.id)}
 
     accepted = await api.client.post(DOCUMENTS, files=pdf(), data=data, headers=auth(writer))
     assert accepted.status_code == 202
     status = await api.client.get(accepted.json()["status_url"], headers=auth(writer))
-    assert status.json()["drawer_id"] == str(shared.id)
+    assert status.json()["space_id"] == str(shared.id)
     denied = await api.client.post(DOCUMENTS, files=pdf(), data=data, headers=auth(reader))
     assert denied.status_code == 403
+    assert denied.json()["space_id"] == str(shared.id)
     stranger = await api.user()
     hidden = await api.client.post(DOCUMENTS, files=pdf(), data=data, headers=auth(stranger))
     assert hidden.status_code == 404
@@ -261,10 +262,10 @@ async def test_the_original_is_stored_by_its_hash(api: Api) -> None:
 
 async def test_others_see_a_document_only_through_a_share_once_green(api: Api) -> None:
     owner, reader, stranger = await api.user(), await api.user(), await api.user()
-    shared = await api.services.drawers.create(owner.id, "Shared")
-    await api.services.drawers.share(owner.id, shared.id, reader.id, ShareLevel.READ)
+    shared = await api.services.spaces.create(owner.id, "Shared")
+    await api.services.spaces.share(owner.id, shared.id, reader.id, ShareLevel.READ)
     response = await api.client.post(
-        DOCUMENTS, files=pdf(), data={"drawer_id": str(shared.id)}, headers=auth(owner)
+        DOCUMENTS, files=pdf(), data={"space_id": str(shared.id)}, headers=auth(owner)
     )
     url = response.json()["status_url"]
     assert (await api.client.get(url, headers=auth(reader))).status_code == 404  # processing
@@ -432,10 +433,10 @@ async def test_reprocess_validates_the_step(api: Api) -> None:
 
 async def test_only_the_owner_controls_processing(api: Api) -> None:
     owner, writer = await api.user(), await api.user()
-    shared = await api.services.drawers.create(owner.id, "Shared")
-    await api.services.drawers.share(owner.id, shared.id, writer.id, ShareLevel.READ_WRITE)
+    shared = await api.services.spaces.create(owner.id, "Shared")
+    await api.services.spaces.share(owner.id, shared.id, writer.id, ShareLevel.READ_WRITE)
     response = await api.client.post(
-        DOCUMENTS, files=pdf(), data={"drawer_id": str(shared.id)}, headers=auth(owner)
+        DOCUMENTS, files=pdf(), data={"space_id": str(shared.id)}, headers=auth(owner)
     )
     url = response.json()["status_url"]
     await api.drain()

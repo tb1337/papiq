@@ -28,7 +28,7 @@ const PARALLEL = 3;
 
 export class Uploads {
 	items = $state<Upload[]>([]);
-	#queue: { upload: Upload; file: File; drawerId: string | null }[] = [];
+	#queue: { upload: Upload; file: File; spaceId: string | null }[] = [];
 	#running = 0;
 	#next = 1;
 	// The latest request per item: an answer overtaken by a later one is dropped.
@@ -61,7 +61,7 @@ export class Uploads {
 		});
 	}
 
-	add(files: readonly File[], drawerId: string | null): void {
+	add(files: readonly File[], spaceId: string | null): void {
 		this.#listen();
 		for (const file of files) {
 			const upload: Upload = {
@@ -75,7 +75,7 @@ export class Uploads {
 			};
 			this.items.push(upload);
 			// The pushed item is a proxy; keep working on that one so the page sees the changes.
-			this.#queue.push({ upload: this.items[this.items.length - 1], file, drawerId });
+			this.#queue.push({ upload: this.items[this.items.length - 1], file, spaceId });
 		}
 		this.#pump();
 	}
@@ -105,18 +105,18 @@ export class Uploads {
 		while (this.#running < PARALLEL && this.#queue.length > 0) {
 			const job = this.#queue.shift()!;
 			this.#running++;
-			void this.#send(job.upload, job.file, job.drawerId).finally(() => {
+			void this.#send(job.upload, job.file, job.spaceId).finally(() => {
 				this.#running--;
 				this.#pump();
 			});
 		}
 	}
 
-	async #send(upload: Upload, file: File, drawerId: string | null): Promise<void> {
+	async #send(upload: Upload, file: File, spaceId: string | null): Promise<void> {
 		upload.state = 'uploading';
 		const form = new FormData();
 		form.append('file', file);
-		if (drawerId) form.append('drawer_id', drawerId);
+		if (spaceId) form.append('space_id', spaceId);
 		try {
 			const { data, error, response } = await api.POST('/api/v1/documents', {
 				// The generated type wants a string for the file; the form carries the binary.

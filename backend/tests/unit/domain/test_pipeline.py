@@ -40,7 +40,7 @@ def status(document: Document) -> ProcessingStatus:
 
 
 def received() -> Document:
-    return builders.document(builders.user(), builders.drawer(builders.user()))
+    return builders.document(builders.user(), builders.space(builders.user()))
 
 
 def test_the_graph_is_in_topological_order_with_one_source_and_one_sink() -> None:
@@ -335,8 +335,8 @@ def test_confirmation_resumes_only_after_classification(resume_at: Node) -> None
 
 def test_only_documents_in_the_inbox_are_confirmed() -> None:
     owner = builders.user()
-    processing = builders.document(owner, builders.drawer(owner))
-    green = builders.run_pipeline(builders.document(owner, builders.drawer(owner)))
+    processing = builders.document(owner, builders.space(owner))
+    green = builders.run_pipeline(builders.document(owner, builders.space(owner)))
     for document in (processing, green):
         with pytest.raises(InvalidTransitionError, match="not waiting for confirmation"):
             document.confirm(Node.APPLY_RULES, NOW)

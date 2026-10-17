@@ -5,12 +5,12 @@ import {
 	canEdit,
 	canListAllUsers,
 	canManage,
-	canManageDrawer,
+	canManageSpace,
 	canManageWebhook,
 	canMove,
-	drawersFor,
-	drawersWritableBy,
-	writableDrawers
+	spacesFor,
+	spacesWritableBy,
+	writableSpaces
 } from './permissions.ts';
 
 const owner = { id: 'u1', role: 'user' as const };
@@ -53,15 +53,15 @@ describe('document rights', () => {
 	});
 });
 
-describe('drawers, webhooks, lists', () => {
-	const drawer = { owner_id: 'u1' };
+describe('spaces, webhooks, lists', () => {
+	const space = { owner_id: 'u1' };
 
-	it('lets the owner and admins manage a drawer or a webhook', () => {
-		for (const check of [canManageDrawer, canManageWebhook]) {
-			expect(check(drawer, owner)).toBe(true);
-			expect(check(drawer, admin)).toBe(true);
-			expect(check(drawer, other)).toBe(false);
-			expect(check(drawer, null)).toBe(false);
+	it('lets the owner and admins manage a space or a webhook', () => {
+		for (const check of [canManageSpace, canManageWebhook]) {
+			expect(check(space, owner)).toBe(true);
+			expect(check(space, admin)).toBe(true);
+			expect(check(space, other)).toBe(false);
+			expect(check(space, null)).toBe(false);
 		}
 	});
 
@@ -96,52 +96,52 @@ describe('rules', () => {
 	});
 });
 
-describe('writableDrawers', () => {
-	const drawers = [
+describe('writableSpaces', () => {
+	const spaces = [
 		{ id: 'a', owner_id: 'u1', access: 'read_write' },
 		{ id: 'b', owner_id: 'u9', access: 'read' },
 		{ id: 'c', owner_id: 'u9', access: 'read_write' }
 	];
 
-	it('keeps own and write-shared drawers', () => {
-		expect(writableDrawers(drawers, owner).map((drawer) => drawer.id)).toEqual(['a', 'c']);
+	it('keeps own and write-shared spaces', () => {
+		expect(writableSpaces(spaces, owner).map((space) => space.id)).toEqual(['a', 'c']);
 	});
 
 	it('gives an admin all of them', () => {
-		expect(writableDrawers(drawers, admin)).toHaveLength(3);
+		expect(writableSpaces(spaces, admin)).toHaveLength(3);
 	});
 });
 
-describe('drawersWritableBy', () => {
-	const drawers = [
+describe('spacesWritableBy', () => {
+	const spaces = [
 		{ id: 'a', owner_id: 'u1', shares: null },
 		{ id: 'b', owner_id: 'u9', shares: [{ user_id: 'u1', level: 'read' }] },
 		{ id: 'c', owner_id: 'u9', shares: [{ user_id: 'u1', level: 'read_write' }] },
 		{ id: 'd', owner_id: 'u9', shares: [] }
 	];
 
-	it('keeps the drawers the given user owns or may write to by share', () => {
-		expect(drawersWritableBy(drawers, owner).map((drawer) => drawer.id)).toEqual(['a', 'c']);
+	it('keeps the spaces the given user owns or may write to by share', () => {
+		expect(spacesWritableBy(spaces, owner).map((space) => space.id)).toEqual(['a', 'c']);
 	});
 
-	it('keeps every drawer for an admin and none for nobody', () => {
-		expect(drawersWritableBy(drawers, { id: 'u1', role: 'admin' })).toHaveLength(4);
-		expect(drawersWritableBy(drawers, null)).toEqual([]);
-		expect(drawersWritableBy(drawers, { id: 'u1', role: 'admin', active: false })).toEqual([]);
+	it('keeps every space for an admin and none for nobody', () => {
+		expect(spacesWritableBy(spaces, { id: 'u1', role: 'admin' })).toHaveLength(4);
+		expect(spacesWritableBy(spaces, null)).toEqual([]);
+		expect(spacesWritableBy(spaces, { id: 'u1', role: 'admin', active: false })).toEqual([]);
 	});
 });
 
-describe('drawersFor', () => {
-	const drawers = [
+describe('spacesFor', () => {
+	const spaces = [
 		{ id: 'a', owner_id: 'u1', access: 'read_write', shares: null },
 		{ id: 'b', owner_id: 'u2', access: 'read', shares: [] },
 		{ id: 'c', owner_id: 'u3', access: 'read', shares: null }
 	];
 
 	it("offers the caller their own choice, and an admin acting for a user that user's", () => {
-		expect(drawersFor(drawers, owner, owner).map((drawer) => drawer.id)).toEqual(['a']);
-		expect(drawersFor(drawers, admin, admin)).toHaveLength(3);
-		expect(drawersFor(drawers, other, admin).map((drawer) => drawer.id)).toEqual(['b']);
-		expect(drawersFor(drawers, null, admin)).toEqual([]);
+		expect(spacesFor(spaces, owner, owner).map((space) => space.id)).toEqual(['a']);
+		expect(spacesFor(spaces, admin, admin)).toHaveLength(3);
+		expect(spacesFor(spaces, other, admin).map((space) => space.id)).toEqual(['b']);
+		expect(spacesFor(spaces, null, admin)).toEqual([]);
 	});
 });
